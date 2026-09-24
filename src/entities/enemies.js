@@ -4,7 +4,9 @@ import { playSound } from '../vfx_audio/audio.js';
 // FIXED: Removed the toxic circular dependency on main.js!
 import { spawnFloatingText, createImpact, showToast } from '../vfx_audio/effects.js';
 import { triggerTutorial } from '../systems/tutorial.js';
-import { takeDamage } from './player.js';
+import { takeDamage, registerPerfectGhostStep } from './player.js';
+import { addScore, killScore } from '../systems/score.js';
+import { setMusicIntensity } from '../vfx_audio/audio.js';
 
 // MENACE (target-priority: consequence of ignoring). A lingering Bruiser/Zoner gets
 // worse the longer it lives, so you're pushed to prioritise it — the cost is on
@@ -106,6 +108,7 @@ export function updateEnemies() {
                         if (en.lane === st.player.lane) {
                             if (st.player.state === 'ghost_step') {
                                 spawnFloatingText(st.player.x, st.player.y - 50, "EVADED", "#888888");
+                                registerPerfectGhostStep();
                                 if (st.progressionMods.ghostCounter && st.player.slipBuff === 0) { st.player.slipBuff = 1; playSound('perfect_slip'); spawnFloatingText(st.player.x, st.player.y - 80, "GHOST COUNTER!", "#ffffff"); }
                             } else {
                                 let zDmg = 25; if (st.isInstinct) zDmg = Math.floor(zDmg * 0.5); takeDamage(zDmg, true, en);
@@ -127,6 +130,12 @@ export function updateEnemies() {
             // so nothing regresses there.
             if (Math.abs(en.x - st.player.x) < 130) {
                 if (en.attackCooldown <= perfectThresh) st.laneFlash[en.lane] = 2; else if (en.attackCooldown <= goodThresh + 6) st.laneFlash[en.lane] = Math.max(st.laneFlash[en.lane], 1);
+            }
+            // v16 BOSS TELEGRAPH: a boss's lane goes red for its WHOLE telegraph
+            // (BOSS_OFFENSE.telegraphLead), not just the last few frames — the
+            // "incoming" read starts the moment the windup starts.
+            if (en.isBoss && en.telegraphed && !(en.recoverTimer > 0) && Math.abs(en.x - st.player.x) < 140 && en.attackCooldown > perfectThresh) {
+                st.laneFlash[en.lane] = Math.max(st.laneFlash[en.lane], 1);
             }
             if (en.lane === st.player.lane && Math.abs(en.x - st.player.x) < 130 && en.attackCooldown > 0) {
                 if (en.attackCooldown <= perfectThresh) st.player.dangerLevel = Math.max(st.player.dangerLevel, 2); else if (en.attackCooldown <= goodThresh) st.player.dangerLevel = Math.max(st.player.dangerLevel, 1);
@@ -195,6 +204,7 @@ export function updateEnemies() {
                     // lands, is what makes Ghost Step's "emergency evade" real.
                     if (st.player.state === 'ghost_step' && st.player.ghostStepTimer > 4 && isAtPlayer && en.isActiveThreat) {
                         spawnFloatingText(st.player.x, st.player.y - 50, "GHOST STEP", "#888888");
+                        if (!en.tutorialType) registerPerfectGhostStep();
                         if (st.progressionMods.ghostCounter && st.player.slipBuff === 0) { st.player.slipBuff = 1; playSound('perfect_slip'); spawnFloatingText(st.player.x, st.player.y - 80, "GHOST COUNTER!", "#ffffff"); }
                         if (en.tutorialType === 'ghost_step') { en.hp = 0; }
                         en.attackCooldown = en.maxCooldown;
@@ -258,6 +268,13 @@ export function updateEnemies() {
 
     for (let i = st.enemies.length - 1; i >= 0; i--) {
         const en = st.enemies[i];
+        // v16: a boss can't simply drop — the killing blow opens its KO Finisher
+        // (systems/finisher.js), which sets koDone when it's played out.
+        if (en.hp <= 0 && en.isBoss && !en.koDone) {
+            en.hp = 1;
+            if (!en.pendingFinisher && !st.finisher) en.pendingFinisher = 'ko';
+            continue;
+        }
         if (en.hp <= 0) {
             st.statTotalKills++;
             let comboMult = 1.0 + Math.min(0.3, Math.floor(st.combo / 2) * 0.1); 
@@ -267,6 +284,8 @@ export function updateEnemies() {
                 st.bossActive = false; st.stageClearing = true; st.bossDefeatedThisStage = true; st.statBossKills++; st.purifyTimer = 100; st.health = st.maxHealth;
                 st.instinctMeter = Math.min(100, st.instinctMeter + (50 * (1 + st.progressionMods.instinctGainBonusMult) * flowMult)); 
                 playSound('perfect_slip'); st.exp += Math.floor(15 * comboMult * (1 + st.progressionMods.expGainBonusMult) * flowMult);
+                addScore(CONSTANTS.SCORE.bossKo * Math.min(5, CONSTANTS.getArcIndex(st.currentStage)), en.x + en.w / 2, en.y - 200, { big: true });
+                setMusicIntensity(0);
             } else {
                 let instGain = 0; let hpGain = 0; let baseExp = 1;
                 if (en.type === 'grunt') { instGain = 2; baseExp = 1; }
@@ -278,6 +297,7 @@ export function updateEnemies() {
                 st.instinctMeter = Math.min(100, st.instinctMeter + (instGain * (1 + st.progressionMods.instinctGainBonusMult) * flowMult)); 
                 if (hpGain > 0) st.health = Math.min(st.maxHealth, st.health + hpGain);
                 st.exp += Math.floor(baseExp * comboMult * (1 + st.progressionMods.expGainBonusMult) * flowMult);
+                if (!en.tutorialType) addScore(killScore(en.type), en.x + en.w / 2, en.y - 130);
             }
             if (en.tutorialType) st.tutorialDelay = 60; 
             st.enemies.splice(i, 1);

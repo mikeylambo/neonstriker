@@ -1,10 +1,46 @@
 export const CONSTANTS = {
     LANE_Y: [0.35, 0.55, 0.75], // Top, Mid, Bottom visual spacing
     
+    // --- ARC STRUCTURE (single source of truth for stage flow) ---
+    // Each arc is an ordered list of LEVEL KEYS (1-6 = authored levels, 7 = boss
+    // chamber). The level key — not the raw stage number — is what every per-level
+    // table reads: wave packets, stage names, palettes, taglines. Arc 1 is
+    // compressed (playtest: "pacing feels off in Arc 1") to four fights + an earlier
+    // boss; Arcs 2+ keep the full seven. Every system resolves stage -> {arc, level}
+    // through locateStage(), so no caller does its own `% 7` math — that's exactly
+    // how the old wave/palette counters drifted out of phase with the arc cycle.
+    ARC_LEVEL_KEYS: {
+        1: [1, 2, 3, 6, 7]
+    },
+    DEFAULT_ARC_LEVEL_KEYS: [1, 2, 3, 4, 5, 6, 7],
+    BOSS_LEVEL_KEY: 7,
+
+    arcLevelKeys: (arc) => CONSTANTS.ARC_LEVEL_KEYS[arc] || CONSTANTS.DEFAULT_ARC_LEVEL_KEYS,
+    arcLength: (arc) => CONSTANTS.arcLevelKeys(arc).length,
+    locateStage: (stage) => {
+        let s = Math.max(1, Math.floor(stage) || 1), arc = 1;
+        while (s > CONSTANTS.arcLength(arc)) { s -= CONSTANTS.arcLength(arc); arc++; }
+        return { arc, ordinal: s, levelKey: CONSTANTS.arcLevelKeys(arc)[s - 1] };
+    },
+    firstStageOfArc: (arc) => {
+        let stage = 1;
+        for (let a = 1; a < arc; a++) stage += CONSTANTS.arcLength(a);
+        return stage;
+    },
+    bossStageOfArc: (arc) => CONSTANTS.firstStageOfArc(arc) + CONSTANTS.arcLength(arc) - 1,
+
     // --- ARC MATH HELPERS ---
-    getArcIndex: (stage) => Math.floor((stage - 1) / 7) + 1,
-    getLevelInArc: (stage) => ((stage - 1) % 7) + 1,
-    isBossStage: (stage) => (((stage - 1) % 7) + 1) === 7,
+    getArcIndex: (stage) => CONSTANTS.locateStage(stage).arc,
+    // Returns the LEVEL KEY (1-7) for content lookups, not the ordinal position.
+    getLevelInArc: (stage) => CONSTANTS.locateStage(stage).levelKey,
+    isBossStage: (stage) => CONSTANTS.locateStage(stage).levelKey === CONSTANTS.BOSS_LEVEL_KEY,
+    // The stage number this fight WOULD have had under the original uniform
+    // 7-per-arc layout. Enemy/boss HP scaling reads this so compressing Arc 1 does
+    // not quietly make every later arc easier (Arc 2+ scale exactly as before).
+    difficultyStage: (stage) => {
+        const { arc, levelKey } = CONSTANTS.locateStage(stage);
+        return (arc - 1) * 7 + levelKey;
+    },
     // SINGLE SOURCE OF TRUTH for slip windows. This used to be duplicated with
     // slightly different hardcoded numbers in player.js (the real gameplay check),
     // enemies.js (the red/white telegraph + danger-ring visuals), and draw.js (the
@@ -158,16 +194,131 @@ export const CONSTANTS = {
     //   GLASS PROTOCOL - high variance: you deal +30%, but you also take +30%.
     // Every stage's affix is picked from this list via the seeded RNG, so a Daily
     // Challenge serves the same modifier order to every player (see rng.js).
+    // v16 WAGERS: modifiers are no longer imposed. Before a stage, the arena OFFERS
+    // one risk modifier; accept it and every point you score that stage is multiplied
+    // by its `scoreMult`, decline and the stage runs clean. Only entries with a
+    // `scoreMult` are ever offered — SURGE and ADRENALINE are pure boons, and a boon
+    // that also pays extra score is a free lunch, not a wager (kept in data for reuse).
     AFFIXES: [
         { name: 'NONE', desc: 'System stable. No anomalies detected.', mods: {} },
         { name: 'SURGE', desc: 'Instinct gain increased by 50%.', mods: { instinctGainMult: 1.5 } },
-        { name: 'FAST CROWD', desc: 'Ranks arrive denser and faster — Assassins swell the crowd.', mods: { packetDelayMult: 0.7, speedMult: 1.12, gruntSub: 'assassin', gruntSubEvery: 2 } },
-        { name: 'IRON WALL', desc: 'The ranks harden. More Gold Armor — break it with Cross [S].', mods: { gruntSub: 'shield', gruntSubEvery: 2 } },
-        { name: 'HEAVY HANDS', desc: 'Bruisers hit harder and press in numbers. Keep your footwork.', mods: { bruiserDamageMult: 1.4, gruntSub: 'bruiser', gruntSubEvery: 4 } },
+        { name: 'FAST CROWD', desc: 'Ranks arrive denser and faster — Assassins swell the crowd.', scoreMult: 1.5, mods: { packetDelayMult: 0.7, speedMult: 1.12, gruntSub: 'assassin', gruntSubEvery: 2 } },
+        { name: 'IRON WALL', desc: 'The ranks harden. More Gold Armor — break it with Cross [S].', scoreMult: 1.3, mods: { gruntSub: 'shield', gruntSubEvery: 2 } },
+        { name: 'HEAVY HANDS', desc: 'Bruisers hit harder and press in numbers. Keep your footwork.', scoreMult: 1.4, mods: { bruiserDamageMult: 1.4, gruntSub: 'bruiser', gruntSubEvery: 4 } },
         { name: 'ADRENALINE', desc: 'Every Perfect Slip mends a sliver of health.', mods: { perfectSlipHeal: 4 } },
-        { name: 'GLASS PROTOCOL', desc: 'You deal 30% more — and take 30% more. No margin for a miss.', mods: { playerDamageDealtMult: 1.3, playerDamageTakenMult: 1.3 } }
+        { name: 'GLASS PROTOCOL', desc: 'You deal 30% more — and take 30% more. No margin for a miss.', scoreMult: 1.75, mods: { playerDamageDealtMult: 1.3, playerDamageTakenMult: 1.3 } }
     ],
+    wagerPool: () => CONSTANTS.AFFIXES.filter(a => a.scoreMult && a.scoreMult > 1),
+    WAGERS: {
+        firstStage: 2 // stage 1 is the tutorial/onboarding fight — never wagered
+    },
+
+    // Per-level stage-card taglines (keyed by LEVEL KEY). The arc theme line ("Learn
+    // the language of lane-boxing.") used to be the subtitle of EVERY stage in its
+    // arc — playtest: it "doesn't need to keep surfacing". Arc themes now appear on
+    // an arc's chapter card, Arc 1's only once per save, and stages use these.
+    STAGE_TAGLINES: {
+        1: 'Fundamentals. Find the rhythm.',
+        2: 'Lane awareness. Watch every rail.',
+        3: 'Target priority. Choose who falls first.',
+        4: 'The flowing river. Keep moving.',
+        5: 'Crack the formation.',
+        6: 'The composure exam.',
+        7: 'The duel.'
+    },
+
+    // --- LIVE SCORE (v16) ---
+    // Score is earned live and shown on the HUD, so it can actually be played for.
+    // Every award is multiplied by the combo multiplier (and an accepted wager).
+    SCORE: {
+        comboStep: 5,            // every 5 combo...
+        comboMultStep: 0.25,     // ...adds +0.25x
+        maxComboMult: 4.0,
+        hit: { jab: 10, jab3: 20, hook: 30, cross: 40, guard: 5 },
+        counterHitMult: 2,
+        punishBonus: 60,         // landing a hit inside a boss's OPEN window
+        perfectSlip: 150,
+        goodSlip: 25,
+        perfectGhostStep: 100,
+        kill: { grunt: 50, shield: 90, assassin: 90, zoner: 110, bruiser: 180 },
+        finisherHit: 400,
+        finisherPerfect: 200,
+        finisherClean: 1500,     // bonus for landing every prompt of a finisher
+        bossKo: 3000,            // x arc index
+        stageClear: 500,         // flat, NOT combo-multiplied (wager still applies)
+        // Letter rank thresholds (score). Calibrated against the headless bot sim
+        // (tests/v16.mjs "SCORE CALIBRATION"): a stage-4 death lands ~8-12k (C), a
+        // clean Arc 1 clear ~45k (B), deep Arc 2-3 runs 150k+ (S). S also needs reads.
+        rank: { S: 150000, A: 50000, B: 15000 }
+    },
+
+    // --- BOSS STAGGER + FINISHER (v16) ---
+    // Raw hits deal full damage. Crossing 66% and 33% HP staggers the boss into an
+    // authored Finisher; the killing blow opens a final KO Finisher. Prompts are on a
+    // fixed beat grid — mashing reads as TOO EARLY and ends the stagger (no other
+    // penalty). Every sequence starts from the MID lane; UP/DOWN prompts are authored
+    // so the lane path never leaves the ring (validated in tests/harness.mjs).
+    FINISHER: {
+        thresholds: [0.66, 0.33],
+        beatFrames: 36,          // ~100 BPM at 60fps
+        leadBeats: 1,            // a prompt appears one beat before it lands
+        windowEarly: 12,         // frames before the beat a press still counts
+        windowLate: 9,           // frames after the beat before it's a miss
+        perfectWindow: 4,
+        introFrames: 42,
+        outroFrames: 34,
+        breakDamageFrac: 0.14,   // total of a fully-landed 66%/33% finisher, of max HP
+        zoom: 1.24,
+        sequences: {
+            neon_enforcer: {
+                break1: ['jab', 'jab', 'cross', 'hook'],
+                break2: ['jab', 'cross', 'down', 'hook', 'cross'],
+                ko:     ['hook', 'cross', 'up', 'jab', 'down', 'cross']
+            },
+            phantom_boxer: {
+                break1: ['up', 'jab', 'down', 'cross'],
+                break2: ['down', 'hook', 'up', 'up', 'cross'],
+                ko:     ['up', 'jab', 'down', 'down', 'hook', 'cross']
+            },
+            static_monk: {
+                break1: ['down', 'up', 'cross', 'jab'],
+                break2: ['up', 'hook', 'down', 'down', 'cross'],
+                ko:     ['jab', 'down', 'up', 'up', 'hook', 'cross']
+            }
+        }
+    },
+
+    // --- BOSS OFFENSE AUDIT (v16) ---
+    // Every boss attack gets (1) a telegraph — sound + a filling windup meter over the
+    // boss + a red lane warning — at least `minTelegraphLead` frames before impact,
+    // and (2) a readable punish window after it resolves: the boss visibly slumps
+    // OPEN, can't attack or move, takes bonus damage, and its anti-mash defenses
+    // (armor recoil, Phantom Shift) are OFF. Losses come from missed reads.
+    BOSS_OFFENSE: {
+        telegraphLead: 30,
+        minTelegraphLead: 22,
+        punishFrames: { jab: 28, bash: 52, feint: 34 },
+        minPunishFrames: 18,
+        punishDamageMult: 1.25,
+        desperationCooldownMult: 0.8
+    },
     STAGE_NAMES: ["Shattered Cathedral", "Glass Reliquary", "Ashen Cloister", "Midnight Causeway", "Abyss Rail", "Throne of Static", "Boss Chamber"],
+
+    // --- ARENA PALETTES (keyed by LEVEL KEY; boss chamber shares Throne's) ---
+    // Stored as RGB triples so stage transitions can MORPH one arena into the next
+    // instead of hard-cutting (see render/atmosphere.js).
+    PALETTES: {
+        1: { top: [2, 2, 5],    mid: [5, 5, 10],   bot: [10, 10, 20],  accent: [0, 255, 255, 0.02], shard: [0, 255, 255, 0.05] },
+        2: { top: [0, 26, 26],  mid: [0, 43, 51],  bot: [0, 64, 77],   accent: [0, 255, 255, 0.04], shard: [0, 255, 255, 0.09] },
+        3: { top: [26, 5, 5],   mid: [43, 10, 10], bot: [77, 16, 16],  accent: [255, 50, 50, 0.03], shard: [255, 50, 50, 0.06] },
+        4: { top: [20, 0, 38],  mid: [32, 0, 59],  bot: [61, 0, 77],   accent: [255, 0, 255, 0.03], shard: [255, 0, 255, 0.08] },
+        5: { top: [0, 0, 0],    mid: [2, 5, 2],    bot: [5, 16, 5],    accent: [0, 255, 0, 0.02],   shard: [0, 255, 0, 0.04] },
+        6: { top: [26, 26, 26], mid: [51, 51, 51], bot: [77, 77, 77],  accent: [255, 255, 255, 0.05], shard: [255, 255, 255, 0.15] }
+    },
+    paletteKeyForStage: (stage) => {
+        const k = CONSTANTS.getLevelInArc(stage);
+        return k === CONSTANTS.BOSS_LEVEL_KEY ? 6 : k;
+    },
 
     // --- MENACE (target-priority: consequence of ignoring) ---
     // Some enemies get WORSE the longer they live, so target selection matters — you

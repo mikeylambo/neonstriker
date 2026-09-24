@@ -1,5 +1,6 @@
 import { gameState as st } from '../state.js';
 import { $ } from '../engine_core.js';
+import { comboMultiplier } from '../systems/score.js';
 
 export const HUD = { 
     get combo() { return $('combo-ui'); },
@@ -29,6 +30,26 @@ export const HUD = {
 };
 
 export function updateHUD() {
+    // v16 LIVE SCORE: the number rolls toward the real score so gains read as motion.
+    const target = Math.round(st.score || 0);
+    if (st.displayScore !== target) {
+        const diff = target - st.displayScore;
+        st.displayScore = Math.abs(diff) < 4 ? target : st.displayScore + Math.ceil(diff * 0.2);
+    }
+    if (st.lastHUD.score !== st.displayScore) {
+        const el = $('score-ui'); if (el) el.innerText = st.displayScore.toLocaleString();
+        st.lastHUD.score = st.displayScore;
+    }
+    const cm = comboMultiplier(st.combo);
+    const key = `${cm}|${st.wagerMult}`;
+    if (st.lastHUD.wager !== key) {
+        const m = $('score-mult');
+        if (m) { m.innerText = `×${cm.toFixed(2)} COMBO`; m.classList.toggle('hot', cm > 1); }
+        const w = $('wager-badge');
+        if (w) { w.innerText = st.wagerMult > 1 ? `×${st.wagerMult} WAGER` : ''; w.style.display = st.wagerMult > 1 ? 'inline-block' : 'none'; }
+        st.lastHUD.wager = key;
+    }
+
     if (st.lastHUD.combo !== st.combo) { 
         HUD.combo.innerText = st.combo; st.lastHUD.combo = st.combo; 
     }

@@ -9,7 +9,7 @@
 import { gameState as st } from '../state.js';
 import { CONSTANTS } from '../constants.js';
 import { random } from './rng.js';
-import { takeDamage } from '../entities/player.js';
+import { takeDamage, registerPerfectGhostStep } from '../entities/player.js';
 import { spawnFloatingText } from '../vfx_audio/effects.js';
 import { playSound } from '../vfx_audio/audio.js';
 
@@ -30,7 +30,7 @@ export function spawnHazard(laneOverride) {
 export function maybeScheduleHazard() {
     const H = CONSTANTS.HAZARDS;
     if (st.hazardCooldown > 0) { st.hazardCooldown--; return; }
-    if (st.screen !== 'playing' || st.bossActive || st.stageClearing || st.bossIntroTimer > 0 || st.currentStage % 7 === 0) return;
+    if (st.screen !== 'playing' || st.bossActive || st.stageClearing || st.bossIntroTimer > 0 || CONSTANTS.isBossStage(st.currentStage)) return;
     if (st.hazards.length > 0) return;                       // never two stacked
     const arc = Math.min(CONSTANTS.getArcIndex(st.currentStage), 5);
     const cap = (H.maxPerStageByArc || {})[arc] || 0;
@@ -60,6 +60,7 @@ export function updateHazards() {
                     takeDamage(st.isInstinct ? Math.floor(H.damage * 0.5) : H.damage, true, null);
                     spawnFloatingText(st.player.x, st.player.y - 60, 'HAZARD!', '#ff8800');
                 } else {
+                    if (evading && st.player.lane === hz.lane) registerPerfectGhostStep();
                     spawnFloatingText(st.width * 0.5, st.height * CONSTANTS.LANE_Y[hz.lane] - 40, evading && st.player.lane === hz.lane ? 'EVADED' : 'CLEARED', '#ffaa00');
                 }
             }

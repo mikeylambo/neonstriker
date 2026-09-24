@@ -4,6 +4,10 @@ import { UPGRADE_POOL } from '../../data/upgrades.js';
 import { SequenceManager } from '../sequences.js';
 import { showToast } from '../../vfx_audio/effects.js';
 import { random } from '../rng.js';
+import { rollWagerOffer, clearWager } from '../wagers.js';
+import { addScore } from '../score.js';
+import { reducedMotion, profileFlag, setProfileFlag } from '../settings.js';
+import { playSound } from '../../vfx_audio/audio.js';
 
 function applyEffect(st, effect) {
     switch (effect.op) {
@@ -77,6 +81,9 @@ function applyEffect(st, effect) {
 
 export function applyUpgrade(st, upgrade) {
     if (!upgrade || !upgrade.effects) return;
+    // Only an option that's actually on the table can be taken — guards against a
+    // click and a key (or pad) both landing on the same draft in one frame.
+    if (!st.currentDraftOptions.some(o => o.id === upgrade.id)) return;
 
     for (const effect of upgrade.effects) applyEffect(st, effect);
 
@@ -96,23 +103,74 @@ export function applyUpgrade(st, upgrade) {
 
     if (st.pendingUpgrades > 0) st.pendingUpgrades -= 1;
     st.currentDraftOptions = [];
+    let upgradeScreen = document.getElementById('upgrade-screen');
+    if (upgradeScreen) upgradeScreen.style.display = 'none';
 
-    if (st.pendingUpgrades > 0) {
-        // FIXED: Using the global window object to 100% bypass circular module import crashes!
-        if (window.engineTriggerUpgradeDraft) {
-            window.engineTriggerUpgradeDraft();
+    const proceed = () => {
+        if (st.pendingUpgrades > 0) {
+            // FIXED: Using the global window object to 100% bypass circular module import crashes!
+            if (window.engineTriggerUpgradeDraft) window.engineTriggerUpgradeDraft();
+        } else {
+            st.screen = 'playing';
         }
-    } else {
-        st.screen = 'playing';
-        let upgradeScreen = document.getElementById('upgrade-screen');
-        if (upgradeScreen) upgradeScreen.style.display = 'none';
+    };
+
+    // v16 IDENTITY MOMENT: every pick gets a short, skippable equip vignette
+    // before play (or the next draft) resumes. See systems/vignette.js.
+    if (window.enginePlayUpgradeVignette) window.enginePlayUpgradeVignette(upgrade, proceed);
+    else proceed();
+}
+
+const ARC_COLORS = { 1: '#22d3ee', 2: '#34d399', 3: '#f87171', 4: '#c084fc', 5: '#facc15' };
+const ARC_TINTS = {
+    1: 'rgba(34, 211, 238, 0.18)', 2: 'rgba(52, 211, 153, 0.18)', 3: 'rgba(248, 113, 113, 0.18)',
+    4: 'rgba(192, 132, 252, 0.18)', 5: 'rgba(250, 204, 21, 0.18)'
+};
+
+export function stageHudText(stage) {
+    const arc = Math.min(CONSTANTS.getArcIndex(stage), 5);
+    const law = CONSTANTS.ARC_LAWS[arc] || CONSTANTS.ARC_LAWS[5];
+    const data = CONSTANTS.ARC_STAGE_TABLES[arc]?.[CONSTANTS.getLevelInArc(stage)] || { stageName: "UNKNOWN DEPTHS" };
+    return { text: `${law.shortName}: ${data.stageName}`, color: ARC_COLORS[arc] || '#ec4899' };
+}
+
+export function refreshStageHud() {
+    const stageUI = document.getElementById('stage-ui');
+    const affixUI = document.getElementById('affix-ui');
+    const hud = stageHudText(st.currentStage);
+    if (stageUI) {
+        stageUI.innerText = hud.text;
+        stageUI.style.color = hud.color;
+        // Re-trigger the pulse animation even if it's already mid-run.
+        stageUI.classList.remove('stage-pulse');
+        void stageUI.offsetWidth;
+        stageUI.classList.add('stage-pulse');
     }
+    if (affixUI) affixUI.innerText = st.wagerMult > 1 && st.currentAffix ? `WAGER: ${st.currentAffix.name} x${st.wagerMult}` : '';
+}
+
+// The Arc 1 theme ("Learn the language of lane-boxing.") surfaces ONCE per save
+// (playtest: it "doesn't need to keep surfacing"); after that the stage's own
+// tagline takes its place. Returns the subtitle for the run-opening card.
+export function openingSubtitle() {
+    if (!profileFlag('seenArc1Theme')) {
+        setProfileFlag('seenArc1Theme');
+        return CONSTANTS.ARC_LAWS[1].theme;
+    }
+    return CONSTANTS.STAGE_TAGLINES[1];
 }
 
 export function advanceStage() {
+    const prevStage = st.currentStage;
+    // Stage-clear bonus for the fight just won (wager applies, combo doesn't).
+    const clearPts = addScore(CONSTANTS.SCORE.stageClear, undefined, undefined, { noCombo: true });
+    if (clearPts > 0) showToast(`STAGE CLEAR +${clearPts.toLocaleString()}`, '#facc15');
+
     st.currentStage++;
     st.bossDefeatedThisStage = false;
-    st.currentAffix = CONSTANTS.AFFIXES[Math.floor(random() * CONSTANTS.AFFIXES.length)];
+    // v16 WAGERS: no modifier is active until the player accepts one.
+    clearWager();
+    st.wagerOffer = rollWagerOffer(st.currentStage);
     
     st.stageClearing = false; 
     st.bossActive = false; 
@@ -142,6 +200,12 @@ export function advanceStage() {
     let safeArcIndex = Math.min(arcIndex, 5);
     let law = CONSTANTS.ARC_LAWS[safeArcIndex] || CONSTANTS.ARC_LAWS[5];
 
+    // STAGE TRANSITION palette: the old arena morphs into the new one during the
+    // light sweep (render/atmosphere.js lerps paletteFrom -> paletteTo).
+    st.paletteFrom = CONSTANTS.paletteKeyForStage(prevStage);
+    st.paletteTo = CONSTANTS.paletteKeyForStage(st.currentStage);
+    st.paletteT = 0;
+
     // LANE TEMPO: selectively make one lane "hot" this stage (faster approach only,
     // telegraph untouched). Signature of Arc 3; never on a boss stage. Seeded -> a
     // Daily plays the same hot lane for everyone, free-play varies run to run.
@@ -167,56 +231,40 @@ export function advanceStage() {
     }
     const LANE_LABEL = ['TOP', 'MID', 'BOTTOM'];
     const hotLaneCard = st.hotLane >= 0
-        ? [{ type: 'text', title: 'LANE SURGE', subtitle: `${LANE_LABEL[st.hotLane]} LANE RUNNING HOT`, duration: 150 }]
+        ? [{ type: 'text', title: 'LANE SURGE', subtitle: `${LANE_LABEL[st.hotLane]} LANE RUNNING HOT`, duration: 120 }]
         : [];
     let stageData = CONSTANTS.ARC_STAGE_TABLES[safeArcIndex]?.[levelInArc] || { stageName: "UNKNOWN DEPTHS" };
     
     let titleText = isBoss ? stageData.stageName : `${law.shortName} — ${stageData.stageName}`;
-    let subtitleText = isBoss ? law.uiText : law.theme;
-
-    let affixName = st.currentAffix.name !== 'NONE' ? `[${st.currentAffix.name}]` : 'SYSTEM STABLE';
-    let affixDesc = st.currentAffix.name !== 'NONE' ? st.currentAffix.desc : 'No anomalies detected.';
-
-    const ARC_COLORS = { 1: '#22d3ee', 2: '#34d399', 3: '#f87171', 4: '#c084fc', 5: '#facc15' };
-    const ARC_TINTS = {
-        1: 'rgba(34, 211, 238, 0.18)', 2: 'rgba(52, 211, 153, 0.18)', 3: 'rgba(248, 113, 113, 0.18)',
-        4: 'rgba(192, 132, 252, 0.18)', 5: 'rgba(250, 204, 21, 0.18)'
-    };
+    // Arc themes live on the arc's chapter card now; stage cards carry the level's
+    // own tagline instead of repeating the arc line every single stage.
+    let subtitleText = isBoss ? law.uiText : CONSTANTS.STAGE_TAGLINES[levelInArc];
 
     // Every stage transition already got a card, but a brand-new arc used to get
     // the exact same treatment as clearing any other stage within it — no
     // distinction between "next fight" and "the game's philosophy just changed."
-    // A new arc now gets its own two-beat chapter card first (arc number, then
-    // arc name + its own Act theme line), colored to that arc, before rolling
-    // into the regular stage/affix card underneath.
-    const isNewArc = levelInArc === 1 && st.currentStage > 1;
+    // A new arc gets its own two-beat chapter card first (arc number, then arc
+    // name + its theme line), colored to that arc, before the stage card.
+    const isNewArc = CONSTANTS.locateStage(st.currentStage).ordinal === 1 && st.currentStage > 1;
     const chapterCardSteps = isNewArc ? [
-        { type: 'tint', color: 'rgba(0, 0, 0, 0.92)', duration: 35 },
+        { type: 'tint', color: 'rgba(0, 0, 0, 0.82)', duration: 20 },
         { type: 'text', title: `ARC ${safeArcIndex}`, subtitle: law.name.toUpperCase(), duration: 85 },
         { type: 'tint', color: ARC_TINTS[safeArcIndex] || 'rgba(236, 72, 153, 0.18)', duration: 10 },
-        { type: 'text', title: law.name.toUpperCase(), subtitle: law.theme, duration: 170 },
-    ] : [
-        { type: 'tint', color: 'rgba(0, 0, 0, 0.9)', duration: 30 },
-    ];
+        { type: 'text', title: law.name.toUpperCase(), subtitle: law.theme, duration: 160 },
+        { type: 'tint', color: 'transparent', duration: 10 },
+    ] : [];
 
+    const rm = reducedMotion();
     SequenceManager.playDynamic([
+        { type: 'walkout', duration: rm ? 24 : 46 },
+        { type: 'call', fn: () => { playSound('sweep'); refreshStageHud(); } },
+        { type: 'sweep', duration: rm ? 24 : 54 },
         ...chapterCardSteps,
-        { type: 'text', title: titleText, subtitle: subtitleText, duration: 140 }, 
-        { type: 'text', title: `STAGE MODIFIER: ${affixName}`, subtitle: affixDesc, duration: 200 },
+        { type: 'text', title: titleText, subtitle: subtitleText, duration: 120 },
+        { type: 'wager' },
         ...hotLaneCard,
-        { type: 'tint', color: 'transparent', duration: 30 },
+        { type: 'walkin', duration: rm ? 24 : 44 },
+        { type: 'call', fn: refreshStageHud },
         { type: 'resume' }
     ]);
-    
-    const stageUI = document.getElementById('stage-ui');
-    const affixUI = document.getElementById('affix-ui');
-    if (stageUI) {
-        stageUI.innerText = `${law.shortName}: ${stageData.stageName}`;
-        stageUI.style.color = ARC_COLORS[safeArcIndex] || '#ec4899';
-        // Re-trigger the pulse animation even if it's already mid-run.
-        stageUI.classList.remove('stage-pulse');
-        void stageUI.offsetWidth;
-        stageUI.classList.add('stage-pulse');
-    }
-    if (affixUI) affixUI.innerText = st.currentAffix.name !== 'NONE' ? affixName : '';
 }

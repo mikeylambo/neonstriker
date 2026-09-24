@@ -114,3 +114,24 @@ export function buildDraft(st, pool) {
 
     return chosen;
 }
+// v16 PACING TEASE: in Arc 1 no Fusion can be earned yet (they need two trees at
+// level 2), so the player never learns they exist until much later. Every Arc 1
+// draft now shows ONE locked Fusion card beside the real options — never
+// selectable — naming what it does and exactly what it takes to unlock.
+// Picks the not-yet-owned Fusion the current build is closest to.
+const TREE_SHORT = { speed: 'SPD', power: 'PWR', technique: 'TEC' };
+export function buildFusionTease(st, pool, arcIndex) {
+    if (arcIndex !== 1) return null;
+    if ((st.currentDraftOptions || []).some(o => o.kind === 'fusion')) return null;
+    let best = null;
+    for (const f of pool.fusions) {
+        if (st.acquiredUpgradeIds.includes(f.id)) continue;
+        const need = (f.reqs && f.reqs.orbTreeAtLeast) || {};
+        let missing = 0;
+        for (const [tree, lvl] of Object.entries(need)) missing += Math.max(0, lvl - (st.orbCounts[tree] || 0));
+        if (!best || missing < best.missing) best = { fusion: f, missing, need };
+    }
+    if (!best) return null;
+    const reqText = Object.entries(best.need).map(([t, l]) => `${TREE_SHORT[t] || t} ${Math.min(st.orbCounts[t] || 0, l)}/${l}`).join(' · ');
+    return { ...best.fusion, locked: true, reqText };
+}

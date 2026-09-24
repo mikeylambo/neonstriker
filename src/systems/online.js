@@ -33,7 +33,7 @@ export async function submitScore(run) {
     const body = {
         game: GAME,
         name: String(run.name || 'STRIKER').slice(0, 16),
-        score: Math.max(0, Math.min(1000000, Math.round(run.score || 0))),
+        score: Math.max(0, Math.min(50000000, Math.round(run.score || 0))),
         grade: ['C', 'B', 'A', 'S'].includes(run.grade) ? run.grade : 'C',
         stage: Math.max(1, Math.min(999, Math.round(run.stage || 1))),
         daily: !!run.daily,

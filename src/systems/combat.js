@@ -4,6 +4,9 @@ import { playSound } from '../vfx_audio/audio.js';
 import { spawnFloatingText, createImpact, doFlash, createShatter, triggerShockwave, createVacuum } from '../vfx_audio/effects.js';
 import { takeDamage } from '../entities/player.js';
 import { random } from './rng.js';
+import { isBossOpen } from './boss_rules.js';
+import { gateBossDamage } from './finisher.js';
+import { addScore, hitScore } from './score.js';
 
 export function checkHit(type) {
     let isJab = type.startsWith('jab') || type === 'guard_jab';
@@ -67,7 +70,21 @@ export function checkHit(type) {
 
             if (buffActive) dmg *= 2; 
             
-            if (en.type === 'shield' && type === 'cross') { en.type = 'grunt'; en.color = '#ff0055'; dmg *= 1.5; }
+            if (en.type === 'shield' && type === 'cross') { en.type = 'grunt'; if (!en.isBoss) en.color = '#ff0055'; dmg *= 1.5; } // a boss keeps its own colour when its guard breaks
+
+            // v16 PUNISH WINDOW: a boss that just attacked is OPEN — hits land harder,
+            // and its anti-mash defenses (armor recoil, Phantom Shift) stand down.
+            // Hitting it while it's NOT open is what those defenses exist to punish.
+            const bossOpen = en.isBoss && isBossOpen(en);
+            if (bossOpen) {
+                dmg = Math.round(dmg * CONSTANTS.BOSS_OFFENSE.punishDamageMult);
+                addScore(CONSTANTS.SCORE.punishBonus, en.x + jX(), en.y - 170 + jY(), { silent: true });
+                if (!en.punishShown) {
+                    en.punishShown = true;
+                    spawnFloatingText(en.x + jX(), en.y - 150 + jY(), "PUNISH!", "#22d3ee");
+                    playSound('punish');
+                }
+            }
 
             let trueReadActive = false;
             if (en.isBoss && (en.exposedTimer || 0) > 0 && (type === 'cross' || type === 'hook' || buffActive)) {
@@ -87,7 +104,7 @@ export function checkHit(type) {
             }
 
             if (en.isBoss) {
-                if (en.name === 'PHANTOM BOXER') {
+                if (en.name === 'PHANTOM BOXER' && !bossOpen) {
                     en.bossMashCount = (en.bossMashCount || 0) + 1; en.mashDecay = 60;
                     if (en.shiftWarning > 0) {
                         if (trueReadActive) { en.shiftWarning = 0; en.shiftCooldown = 150; en.bossMashCount = 0; } 
@@ -121,7 +138,7 @@ export function checkHit(type) {
                 // ARC MUTATION (retaliationTimingVariant, was authored, never read): at
                 // Arc 4-5 the Enforcer starts punishing jab-spam a phase early, before
                 // its armor even breaks — it's learned the lesson sooner.
-                let enforcerArmored = en.name === 'NEON ENFORCER' && (en.phase === 2 || (en.arcMods && en.arcMods.retaliationTimingVariant));
+                let enforcerArmored = !bossOpen && en.name === 'NEON ENFORCER' && (en.phase === 2 || (en.arcMods && en.arcMods.retaliationTimingVariant));
                 if (enforcerArmored) {
                     if (isJab && !trueReadActive && !isGuardPunch) {
                         // ARC MUTATION (armoredRetaliationChain): higher arcs chain the
@@ -131,6 +148,11 @@ export function checkHit(type) {
                         dmg = Math.floor(dmg * 0.25); takeDamage(2 * chain, false, en); st.statRecoilTaken++; spawnFloatingText(st.player.x + jX(), st.player.y - 50 + jY(), "RECOIL!", "#ff0000"); return false; 
                     }
                 }
+
+                // v16: stagger thresholds (66% / 33%) and the KO blow clamp the hit
+                // here and queue an authored Finisher (systems/finisher.js). Gated
+                // BEFORE the phase checks below so they see the damage that lands.
+                dmg = gateBossDamage(en, dmg);
 
                 if (en.hp - dmg <= en.maxHp * 0.25 && !en.desperation) {
                     en.desperation = true; spawnFloatingText(en.x + jX(), en.y - 120 + jY(), "DESPERATION!", "#ff0000"); st.shake += 15;
@@ -233,6 +255,7 @@ export function checkHit(type) {
 
     if (hitSomething) {
         if (!isGuardPunch) { st.combo++; if (st.combo > st.statMaxCombo) st.statMaxCombo = st.combo; }
+        addScore(hitScore(type) * (buffActive ? CONSTANTS.SCORE.counterHitMult : 1), st.player.x + reach * 0.6, st.player.y - 110);
         if (buffActive) spawnFloatingText(st.player.x + reach/2 + jX(), st.player.y - 80 + jY(), "COUNTER HIT!", "#ffffff");
 
         // APEX (Flow State): any clean hit landing extends the streak.

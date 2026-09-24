@@ -45,11 +45,13 @@ export function applyFormations(defs, arcIndex) {
 }
 
 // ==========================================
-// ARC 1: POETIC WAVE CHOREOGRAPHY (BOXING & SPACING)
+// BASE WAVE CHOREOGRAPHY (BOXING & SPACING) — the hand-authored source of truth.
+// Arcs 2-5 are DERIVED from this table (see deriveArc below). Arc 1 plays a
+// compressed cut of it (ARC1_LEVELS further down).
 // FIXED: Vastly increased delay timings (d) in Levels 1-3 to fan out the enemies. 
 // Provides enough space to successfully combat all 3 individually without forced evasion early on.
 // ==========================================
-const ARC1_LEVELS = {
+const ARC_BASE_LEVELS = {
     1: { // SHATTERED CATHEDRAL (Fundamentals)
         speedMult: 1.00,
         packets: [
@@ -192,17 +194,42 @@ function deriveArc(baseLevels, transforms, breatherCut, speedBump) {
     return out;
 }
 
-const ARC2_LEVELS = deriveArc(ARC1_LEVELS, [ruleEcho], 12, 1.03);
-const ARC3_LEVELS = deriveArc(ARC1_LEVELS, [rulePincerAndBruiser], 16, 1.05);
-const ARC4_LEVELS = deriveArc(ARC1_LEVELS, [ruleReadOverGuard], 20, 1.04);
-const ARC5_LEVELS = deriveArc(ARC1_LEVELS, [ruleEcho, rulePincerAndBruiser, ruleReadOverGuard], 24, 1.08);
+const ARC2_LEVELS = deriveArc(ARC_BASE_LEVELS, [ruleEcho], 12, 1.03);
+const ARC3_LEVELS = deriveArc(ARC_BASE_LEVELS, [rulePincerAndBruiser], 16, 1.05);
+const ARC4_LEVELS = deriveArc(ARC_BASE_LEVELS, [ruleReadOverGuard], 20, 1.04);
+const ARC5_LEVELS = deriveArc(ARC_BASE_LEVELS, [ruleEcho, rulePincerAndBruiser, ruleReadOverGuard], 24, 1.08);
 
-const ARC_WAVE_TABLES = { 1: ARC1_LEVELS, 2: ARC2_LEVELS, 3: ARC3_LEVELS, 4: ARC4_LEVELS, 5: ARC5_LEVELS };
+// ==========================================
+// ARC 1 — COMPRESSED CUT (v16 pacing pass)
+// Playtest: "pacing feels off in Arc 1… I didn't really feel compelled to push
+// further." Arc 1 now runs levels 1, 2, 3, 6 then the boss (CONSTANTS.ARC_LEVEL_KEYS)
+// and each level keeps only its strongest 3-4 packets with tighter breathers. The
+// cut levels (Causeway, Abyss Rail) still arrive in Arc 2+ via derivation.
+// ==========================================
+function compressLevel(level, keep, breather = 45) {
+    const packets = keep.map((pi, i) => {
+        const pkt = level.packets[pi];
+        const enemies = cloneEnemyDefs(pkt);
+        const marker = markerOf(pkt);
+        const last = i === keep.length - 1;
+        return [...enemies, { b: last ? marker.b : Math.min(marker.b, breather), th: marker.th ?? 1 }];
+    });
+    return { speedMult: level.speedMult, packets };
+}
+const ARC1_LEVELS = {
+    ...ARC_BASE_LEVELS,
+    1: compressLevel(ARC_BASE_LEVELS[1], [0, 2, 3]),     // grunts -> first armor -> mixed
+    2: compressLevel(ARC_BASE_LEVELS[2], [0, 2, 3]),     // assassin lead -> screened -> finale
+    3: compressLevel(ARC_BASE_LEVELS[3], [0, 1, 4]),     // zoner -> bruiser -> finale
+    6: compressLevel(ARC_BASE_LEVELS[6], [0, 1, 3, 5])   // the composure exam, trimmed
+};
+
+export const ARC_WAVE_TABLES = { 1: ARC1_LEVELS, 2: ARC2_LEVELS, 3: ARC3_LEVELS, 4: ARC4_LEVELS, 5: ARC5_LEVELS };
 
 export function spawnEnemy() {
     if (st.stageClearing || st.bossActive || st.bossIntroTimer > 0 || st.screen !== 'playing' || st.purifyTimer > 0) return; 
 
-    if (st.currentStage % 7 === 0) {
+    if (CONSTANTS.isBossStage(st.currentStage)) {
         if (!st.bossActive && !st.stageClearing) {
             st.stageClearing = true;
             st.purifyTimer = 90; 
@@ -228,6 +255,11 @@ export function spawnEnemy() {
         }
         if (st.enemies.some(e => e.tutorialType)) return;
     }
+
+    // v16 PACING: an earned Evolution is drafted the moment the field is clear —
+    // the next packet waits for it instead of racing the breather timer (drafts
+    // used to be skipped whenever the last kill landed under 30 frames of breather).
+    if (st.pendingUpgrades > 0 && st.enemies.length === 0) return;
 
     if (st.waveThreshold === undefined || st.wavesCleared === 0) st.waveThreshold = 0;
 
@@ -306,7 +338,7 @@ export function spawnEnemy() {
                 else if (type === 'zoner') { color = '#00ff00'; hp = 40; speed = 1.5; cooldown = 100; }
                 else if (type === 'assassin') { color = '#aa00ff'; hp = 30; speed = 4.5; cooldown = 35; }
 
-                hp = Math.floor(hp * (1 + (st.currentStage - 1) * 0.10) * gm.packetDensityMult);
+                hp = Math.floor(hp * (1 + (CONSTANTS.difficultyStage(st.currentStage) - 1) * 0.10) * gm.packetDensityMult);
                 if (type === 'shield' || type === 'bruiser') cooldown = Math.max(20, Math.round(cooldown * gm.enemyRecoveryMult));
                 speed *= st.stageSpeedMult;
                 // LANE TEMPO: a hot lane closes the approach faster (telegraph untouched).

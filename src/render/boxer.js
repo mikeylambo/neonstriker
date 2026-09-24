@@ -46,7 +46,12 @@ export function drawBoxer(ctx, entity, isPlayer, opacity = 1, isTrail = false) {
     let sL = 0; if (entity.stun > 0) sL = -15 * d; lX += sL;
     
     let lg1X, lg2X; 
-    if (isPlayer) { lg1X = 15 * d; lg2X = -10 * d; } 
+    if (isPlayer && entity.walking) {
+        // v16 stage transitions: a real walk cycle for the walk-out / walk-in.
+        const wc = Math.sin(t * 0.018) * 16;
+        lg1X = wc * d; lg2X = -wc * d; bn += Math.abs(Math.sin(t * 0.018)) * -3;
+    }
+    else if (isPlayer) { lg1X = 15 * d; lg2X = -10 * d; } 
     else { 
         let wP = 0; 
         if (entity.stun <= 0 && entity.attackCooldown >= 15 && (!entity.isBoss || entity.currentMove !== 'feint')) wP = entity.x * 0.08; 
@@ -118,6 +123,9 @@ export function drawBoxer(ctx, entity, isPlayer, opacity = 1, isTrail = false) {
         else if (entity.punchType === 'hook') { ldX += 40 * ex * d; ldY -= 30 * ex; rrX -= 10 * d; }
     } else if (isPlayer && entity.state === 'guarding') {
         ldX = sX + 10 * d; ldY = nY - 15; rrX = sX + 15 * d; rrY = nY - 5;
+    } else if (!isPlayer && entity.isBoss && entity.stun <= 0 && (entity.recoverTimer > 0 || entity.currentMove === 'recharge')) {
+        // v16 PUNISH WINDOW pose: guard dropped, arms hanging — visibly OPEN.
+        ldX = sX + 12 * d; ldY = nY + 38; rrX = sX - 6 * d; rrY = nY + 34;
     } else if (!isPlayer && entity.stun <= 0) {
         if (entity.justAttacked > 0) {
             if (entity.currentMove === 'bash' || entity.type === 'shield' || entity.type === 'bruiser') { rrX += 60 * d; sX += 10 * d; } 
@@ -141,6 +149,23 @@ export function drawBoxer(ctx, entity, isPlayer, opacity = 1, isTrail = false) {
     if (isPlayer && entity.punchType === 'hook' && entity.state === 'punching') ctx.quadraticCurveTo(sX + 30 * d, nY - 20, ldX, ldY); else ctx.lineTo(ldX, ldY);
     ctx.stroke(); ctx.fillStyle = dC; dc(ldX, ldY, gS, true, false);
     
+    // v16 IDENTITY MOMENT: gloves ignite in the upgrade's tree colour.
+    if (entity.gloveGlow) {
+        const heat = entity.gloveHeat === undefined ? 1 : entity.gloveHeat;
+        const fl = 1 + Math.sin(t * 0.04) * 0.12;
+        ctx.save();
+        ctx.shadowColor = entity.gloveGlow; ctx.shadowBlur = 28 * heat;
+        ctx.fillStyle = entity.gloveGlow;
+        ctx.globalAlpha = opacity * heat;
+        dc(ldX, ldY, (gS + 3) * fl, true, false); dc(rrX, rrY, (gS + 3) * fl, true, false);
+        ctx.globalAlpha = opacity * heat * 0.45;
+        dc(ldX, ldY, (gS + 9) * fl, true, false); dc(rrX, rrY, (gS + 9) * fl, true, false);
+        ctx.fillStyle = '#ffffff'; ctx.globalAlpha = opacity * heat * 0.9;
+        dc(ldX, ldY, gS * 0.45, true, false); dc(rrX, rrY, gS * 0.45, true, false);
+        ctx.restore();
+        entity.glovePositions = [[ldX, ldY], [rrX, rrY]];
+    }
+
     if (isPlayer && !isTrail && isCounterReady) {
         let cP = Math.sin(Date.now() * 0.02) * 2;
         ctx.save(); ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2;

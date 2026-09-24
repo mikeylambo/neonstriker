@@ -1,9 +1,11 @@
 import { gameState as st } from '../state.js';
 import { CONSTANTS } from '../constants.js';
 import { ctx } from '../engine_core.js';
-import { drawAtmosphere } from './atmosphere.js';
+import { drawAtmosphere, drawLightSweep } from './atmosphere.js';
 import { drawBoxer } from './boxer.js';
 import { SequenceManager } from '../systems/sequences.js';
+import { shakeScale } from '../systems/settings.js';
+import { drawScorePops, drawBossTells, drawBossHud, drawFinisherDim, drawFinisherUI, drawVignette } from './overlays.js';
 
 const dl = (x1, y1, x2, y2) => { ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); };
 
@@ -12,8 +14,17 @@ export function draw() {
     ctx.clearRect(0, 0, st.width, st.height); 
     ctx.save();
     
-    if (st.shake > 1) {
-        ctx.translate((Math.random() - 0.5) * st.shake, (Math.random() - 0.5) * st.shake);
+    const shake = st.shake * shakeScale();
+    if (shake > 1) {
+        ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+    }
+
+    // v16 FINISHER CAMERA: push in on the exchange (skipped under reduced motion —
+    // finisher.js holds finisherZoom at 1 then).
+    const zoom = st.finisher ? (st.finisherZoom || 1) : 1;
+    if (zoom !== 1 && st.finisher && st.finisher.boss) {
+        const fx = (st.player.x + st.finisher.boss.x) / 2 + 20, fy = st.player.y - 70;
+        ctx.translate(fx, fy); ctx.scale(zoom, zoom); ctx.translate(-fx, -fy);
     }
     
     if (st.bossIntroTimer > 0) { 
@@ -22,6 +33,7 @@ export function draw() {
     }
 
     drawAtmosphere();
+    drawLightSweep();
     
     let pLY = st.height * CONSTANTS.LANE_Y[st.player.lane];
     let pG = ctx.createLinearGradient(st.player.x - 150, 0, st.player.x + 150, 0);
@@ -126,6 +138,8 @@ export function draw() {
     });
     ctx.globalAlpha = 1.0;
 
+    drawFinisherDim(ctx);
+
     st.player.trails.forEach(t => { 
         let ghost = { lane: t.lane, x: t.x, y: t.y, w: 50, h: 110, state: t.state, punchType: t.punchType, hitFrame: t.hitFrame, slipBuff: t.slipBuff, color: '#00ffff' }; 
         drawBoxer(ctx, ghost, true, t.opacity, true); 
@@ -196,19 +210,11 @@ export function draw() {
             ctx.globalAlpha = 1.0;
         }
 
-        // Flashing Golden Danger Bar behind Boss Name!
-        if (en.isBoss) {
-            let nameY = en.y - en.h - 35;
-            let flashAlpha = 0.4 + Math.sin(Date.now() * 0.01) * 0.4;
-            ctx.fillStyle = `rgba(255, 170, 0, ${flashAlpha * 0.4})`;
-            ctx.fillRect(en.x - 30, nameY - 15, en.w + 60, 22);
-            ctx.fillStyle = `rgba(255, 170, 0, ${flashAlpha})`;
-            ctx.fillRect(en.x - 30, nameY + 5, en.w + 60, 2);
+        drawBossTells(ctx, en);
 
-            ctx.fillStyle = '#fff'; ctx.font = 'bold 16px Orbitron'; ctx.textAlign = 'center'; 
-            ctx.fillText(en.name, en.x + en.w/2, nameY);
-            ctx.textAlign = 'left';
-        }
+        // v16: the boss's name now lives on its HP bar (render/overlays.js
+        // drawBossHud); the floating name + flashing bar above its head is gone so
+        // the windup meter and OPEN tag have clean space.
     });
 
     drawBoxer(ctx, st.player, true);
@@ -222,6 +228,7 @@ export function draw() {
         ctx.textAlign = 'left'; 
     });
     ctx.globalAlpha = 1;
+    drawScorePops(ctx);
 
     if (st.bossIntroTimer > 0) {
         ctx.fillStyle = '#000'; ctx.fillRect(0, st.height/2 - 80, st.width, 160);
@@ -231,7 +238,11 @@ export function draw() {
         ctx.textAlign = 'left';
     }
 
-    SequenceManager.draw(ctx, st.width, st.height);
-    
     ctx.restore();
+
+    // ---- screen-space overlays (never zoomed or shaken) ----
+    if (st.screen !== 'start') drawBossHud(ctx);
+    drawFinisherUI(ctx);
+    SequenceManager.draw(ctx, st.width, st.height);
+    drawVignette(ctx);
 }

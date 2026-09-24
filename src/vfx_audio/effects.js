@@ -1,5 +1,6 @@
 import { gameState as st } from '../state.js';
 import { playSound } from './audio.js';
+import { flashScale } from '../systems/settings.js';
 
 export function spawnFloatingText(x, y, text, color) { 
     st.floatingTexts.push({ x: x, y: y, text: text, color: color, life: 1.0, velocity: -1.5 }); 
@@ -28,8 +29,19 @@ export function triggerShockwave(x, y, color) {
 }
 
 export function doFlash(amt) { 
+    const scaled = amt * flashScale();
+    if (scaled <= 0.001) return;
     const sf = document.getElementById('screen-flash');
-    if(sf) { sf.style.opacity = amt; setTimeout(() => { sf.style.opacity = 0; }, 60); }
+    if(sf) { sf.style.opacity = scaled; setTimeout(() => { sf.style.opacity = 0; }, 60); }
+}
+
+// v16 LIVE SCORE: floating "+120" pops at the point of impact. Kept in their own
+// list (not floatingTexts) so they render smaller/brighter and never push toasts
+// around in the cascade logic above.
+export function spawnScorePop(x, y, pts, big = false) {
+    if (!st.scorePops) st.scorePops = [];
+    if (st.scorePops.length > 24) st.scorePops.shift();
+    st.scorePops.push({ x: x + (Math.random() * 30 - 15), y, text: `+${pts.toLocaleString()}`, life: 1.0, big });
 }
 
 export function createImpact(x, y, color) { 
@@ -68,6 +80,12 @@ export function updateParticlesAndTrails() {
         if (st.floatingTexts[i].life <= 0) st.floatingTexts.splice(i, 1); 
     }
     
+    if (st.scorePops) for (let i = st.scorePops.length - 1; i >= 0; i--) {
+        st.scorePops[i].y -= st.scorePops[i].big ? 0.9 : 1.3;
+        st.scorePops[i].life -= st.scorePops[i].big ? 0.014 : 0.025;
+        if (st.scorePops[i].life <= 0) st.scorePops.splice(i, 1);
+    }
+
     for (let i = st.shockwaves.length - 1; i >= 0; i--) {
         st.shockwaves[i].radius += 15;
         st.shockwaves[i].alpha -= 0.05;

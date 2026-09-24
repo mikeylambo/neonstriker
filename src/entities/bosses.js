@@ -2,8 +2,11 @@ import { gameState as st } from '../state.js';
 import { CONSTANTS } from '../constants.js';
 import { playSound } from '../vfx_audio/audio.js';
 import { createImpact, spawnFloatingText, doFlash, triggerShockwave, createShatter } from '../vfx_audio/effects.js';
-import { takeDamage } from './player.js';
+import { takeDamage, registerPerfectGhostStep } from './player.js';
 import { random } from '../systems/rng.js';
+import { setMusicIntensity } from '../vfx_audio/audio.js';
+import { telegraphLead, beginPunishWindow, clampCycle } from '../systems/boss_rules.js';
+import { checkBossThresholds, startFinisher } from '../systems/finisher.js';
 
 const BOSS_ROSTER = [
     {
@@ -45,7 +48,7 @@ const BOSS_ROSTER = [
 // Uses the same stat/scaling shape as a normal wave Grunt so it reads as a familiar
 // threat, and enters off the right edge so it's always slippable/beatable on arrival.
 function spawnMonkAdd() {
-    let hp = Math.floor(45 * (1 + (st.currentStage - 1) * 0.10));
+    let hp = Math.floor(45 * (1 + (CONSTANTS.difficultyStage(st.currentStage) - 1) * 0.10));
     let lane = Math.floor(random() * 3);
     st.enemies.push({
         x: st.width + 60, lane, y: st.height * CONSTANTS.LANE_Y[lane],
@@ -62,8 +65,11 @@ export function spawnBoss() {
     st.bossIntroTimer = 120; 
     st.shake = 15; 
     playSound('bash_tell');
+    setMusicIntensity(1);
     
-    let baseHp = 300 + (st.currentStage * 100); 
+    // HP scales off the stage's DIFFICULTY position (the old uniform 7-per-arc
+    // layout), so moving Arc 1's boss earlier doesn't shift every later boss.
+    let baseHp = 300 + (CONSTANTS.difficultyStage(st.currentStage) * 100); 
 
     const rawArcIndex = CONSTANTS.getArcIndex(st.currentStage);
     const bossIndex = (rawArcIndex - 1) % BOSS_ROSTER.length;
@@ -114,6 +120,9 @@ export function spawnBoss() {
         enraged: false,
         targetLanes: [],
         decoyTimer: 0, decoyLane: -1, decoyRolledThisCycle: false,
+        // v16 offense audit + finisher bookkeeping
+        telegraphed: false, recoverTimer: 0, recoverMax: 0, punishShown: false, feintSwitched: false,
+        finisherStage: 0, pendingFinisher: null, koDone: false,
         arcMods: arcMods // Assigned directly to the entity!
     });
 }
@@ -126,6 +135,7 @@ function resolveBossStrike(en, rawDmg, isHeavy) {
 
     if (st.player.state === 'ghost_step') {
         spawnFloatingText(st.player.x, st.player.y - 50, "GHOST STEP", "#888888");
+        registerPerfectGhostStep();
         if (st.progressionMods.ghostCounter && st.player.slipBuff === 0) {
             st.player.slipBuff = 1; playSound('perfect_slip');
             spawnFloatingText(st.player.x, st.player.y - 80, "GHOST COUNTER!", "#ffffff");
@@ -136,45 +146,70 @@ function resolveBossStrike(en, rawDmg, isHeavy) {
     takeDamage(dmg, isHeavy, en);
 }
 
+// Desperation used to double-decrement the cooldown on even-numbered runs only,
+// which could step straight over an `=== N` telegraph frame (the attack landed
+// with no tell). It now shortens the CYCLE instead; telegraphs are untouched.
+function nextCycle(en, frames) {
+    const mult = en.desperation ? CONSTANTS.BOSS_OFFENSE.desperationCooldownMult : 1;
+    return clampCycle(frames * mult);
+}
+
+// Shared telegraph gate for melee bosses. Out of range, a wound-up attack is
+// re-wound (never stored up to land the instant you step back in untold).
+function meleeTelegraph(en, inRange, onTell) {
+    const lead = telegraphLead(en);
+    if (!inRange) {
+        if (en.attackCooldown <= lead) { en.attackCooldown = lead + 6; en.telegraphed = false; }
+        return;
+    }
+    if (!en.telegraphed && en.attackCooldown <= lead) {
+        en.telegraphed = true;
+        en.telegraphAt = en.attackCooldown; // read by the harness: frames of warning given
+        onTell();
+    }
+}
+
 function handleNeonEnforcer(en) {
+    if (en.recoverTimer > 0) { en.recoverTimer--; return; } // OPEN — punish it
     en.attackCooldown--;
-    if (en.desperation && st.runCount % 2 === 0) en.attackCooldown -= 1; 
 
     // Moves relentlessly forward unless executing a plant-move
     if (en.currentMove !== 'bash' && en.x > st.player.x + 100) {
         en.x -= (en.speed * 0.5 * en.arcMods.walkDownMult);
     }
 
-    if (Math.abs(en.x - st.player.x) < 140 && en.stun <= 0) {
-        if (en.attackCooldown === Math.floor(22 * en.arcMods.punishWindowMult)) {
-            playSound('bash_tell');
-            if (en.currentMove === 'bash') createImpact(en.x, en.y - 60, '#ffaa00');
-        }
+    const inRange = Math.abs(en.x - st.player.x) < 140 && en.stun <= 0;
+    meleeTelegraph(en, inRange, () => {
+        playSound(en.currentMove === 'bash' ? 'bash_tell' : 'jab_tell');
+        if (en.currentMove === 'bash') createImpact(en.x, en.y - 60, '#ffaa00');
+    });
 
-        if (en.attackCooldown <= 0) {
-            en.justAttacked = 5; 
-            resolveBossStrike(en, en.currentMove === 'bash' ? 30 : 12, en.currentMove === 'bash');
-            if (en.enraged) {
-                en.currentMove = 'bash';
-                en.enraged = false;
+    if (inRange && en.attackCooldown <= 0) {
+        en.justAttacked = 5; 
+        const struck = en.currentMove;
+        resolveBossStrike(en, struck === 'bash' ? 30 : 12, struck === 'bash');
+        if (en.enraged) {
+            en.currentMove = 'bash';
+            en.enraged = false;
+            en.maxCooldown = nextCycle(en, 55);
+        } else {
+            let roll = random();
+            if (en.phase === 1) {
+                en.currentMove = roll > 0.6 ? 'bash' : 'jab'; 
+                en.maxCooldown = nextCycle(en, en.currentMove === 'bash' ? 70 : 45);
             } else {
-                let roll = random();
-                if (en.phase === 1) {
-                    en.currentMove = roll > 0.6 ? 'bash' : 'jab'; 
-                    en.maxCooldown = (en.currentMove === 'bash' ? 70 : 45);
-                } else {
-                    en.currentMove = roll > 0.5 ? 'bash' : 'jab';
-                    en.maxCooldown = (en.currentMove === 'bash' ? 55 : 35);
-                }
+                en.currentMove = roll > 0.5 ? 'bash' : 'jab';
+                en.maxCooldown = nextCycle(en, en.currentMove === 'bash' ? 55 : 35);
             }
-            en.attackCooldown = en.maxCooldown;
         }
+        en.attackCooldown = en.maxCooldown;
+        beginPunishWindow(en, struck);
     }
 }
 
 function handlePhantomBoxer(en) {
+    if (en.recoverTimer > 0) { en.recoverTimer--; return; } // OPEN — punish it
     en.attackCooldown--;
-    if (en.desperation && st.runCount % 2 === 0) en.attackCooldown -= 1; 
 
     if (en.x > st.player.x + 100) {
         en.x -= en.speed;
@@ -185,11 +220,13 @@ function handlePhantomBoxer(en) {
     // Delivers on Arc 4's own copy ("tells become less literal") using data that
     // was already sitting in constants.js unused.
     if (en.arcMods.fakeLaneFlash && !en.decoyRolledThisCycle && Math.abs(en.x - st.player.x) < 140 &&
-        en.attackCooldown === Math.floor(28 * en.arcMods.punishWindowMult) && random() < 0.45) {
+        en.attackCooldown <= Math.floor(28 * en.arcMods.punishWindowMult)) {
         en.decoyRolledThisCycle = true;
-        const otherLanes = [0, 1, 2].filter(l => l !== en.lane);
-        en.decoyLane = otherLanes[Math.floor(random() * otherLanes.length)];
-        en.decoyTimer = 16;
+        if (random() < 0.45) {
+            const otherLanes = [0, 1, 2].filter(l => l !== en.lane);
+            en.decoyLane = otherLanes[Math.floor(random() * otherLanes.length)];
+            en.decoyTimer = 16;
+        }
     }
     if (en.decoyTimer > 0) {
         en.decoyTimer--;
@@ -207,12 +244,16 @@ function handlePhantomBoxer(en) {
         }
     }
 
-    if (Math.abs(en.x - st.player.x) < 140 && en.stun <= 0) {
-        if (en.attackCooldown === Math.floor(22 * en.arcMods.punishWindowMult)) {
-            playSound(en.currentMove === 'feint' ? 'feint_tell' : 'jab_tell');
-        }
+    const inRange = Math.abs(en.x - st.player.x) < 140 && en.stun <= 0;
+    meleeTelegraph(en, inRange, () => {
+        playSound(en.currentMove === 'feint' ? 'feint_tell' : 'jab_tell');
+    });
 
-        if (en.currentMove === 'feint' && en.attackCooldown === Math.floor(12 * en.arcMods.punishWindowMult)) {
+    if (inRange) {
+        // The feint's lane-snap now happens a readable beat before impact (was 12
+        // frames — 9 at Arc 5 — which left almost nothing to react to).
+        if (en.currentMove === 'feint' && !en.feintSwitched && en.attackCooldown <= Math.max(14, Math.floor(16 * en.arcMods.punishWindowMult))) {
+            en.feintSwitched = true;
             en.lane = st.player.lane; 
             en.y = st.height * CONSTANTS.LANE_Y[en.lane];
             createImpact(en.x, en.y - 60, '#aa00ff');
@@ -220,47 +261,52 @@ function handlePhantomBoxer(en) {
 
         if (en.attackCooldown <= 0) {
             en.justAttacked = 5; 
+            const struck = en.currentMove;
             resolveBossStrike(en, 15, false);
-            en.decoyRolledThisCycle = false; en.decoyTimer = 0;
+            en.decoyRolledThisCycle = false; en.decoyTimer = 0; en.feintSwitched = false;
             let roll = random();
             if (en.phase === 1) {
                 en.currentMove = roll > 0.5 ? 'feint' : 'jab'; 
-                en.maxCooldown = (en.currentMove === 'feint' ? 45 : 30);
+                en.maxCooldown = nextCycle(en, en.currentMove === 'feint' ? 45 : 30);
             } else {
                 if (en.lastMove === 'feint') en.currentMove = 'jab'; 
                 else en.currentMove = roll > 0.2 ? 'feint' : 'jab';
-                en.maxCooldown = (en.currentMove === 'feint' ? 35 : 20);
+                en.maxCooldown = nextCycle(en, en.currentMove === 'feint' ? 35 : 26);
             }
             en.lastMove = en.currentMove; 
             en.attackCooldown = en.maxCooldown;
+            beginPunishWindow(en, struck === 'feint' ? 'feint' : 'jab');
         }
     }
 }
 
 function handleStaticMonk(en) {
     en.attackCooldown--;
-    if (en.desperation && st.runCount % 2 === 0) en.attackCooldown -= 1; 
 
     if (en.currentMove === 'recharge') {
+        // OPEN for the whole recharge: it hovers right in front of you.
         en.x = st.player.x + 100;
         if (en.attackCooldown <= 0) {
             en.currentMove = 'laser';
             en.x = st.width - 150;
-            en.attackCooldown = 100;
+            en.attackCooldown = nextCycle(en, 100);
+            en.telegraphed = false;
             playSound('ghost_step');
             createShatter(en.x, en.y - 60, '#00ff00');
         }
     } else {
         en.x = (st.width - 150) + Math.sin(Date.now() * 0.002) * 50;
 
-        if (en.attackCooldown === 80) {
+        if (!en.telegraphed && en.attackCooldown <= 80) {
+            en.telegraphed = true;
+            en.telegraphAt = en.attackCooldown;
             playSound('zoner_tell');
             en.targetLanes = [st.player.lane];
             let adjacentLane = st.player.lane === 1 ? (random() > 0.5 ? 0 : 2) : 1; 
             en.targetLanes.push(adjacentLane);
         }
 
-        if (en.attackCooldown <= 80 && en.attackCooldown > 0 && en.targetLanes.length > 0) {
+        if (en.attackCooldown > 0 && en.targetLanes.length > 0) {
             en.targetLanes.forEach(laneIndex => {
                 st.laneFlash[laneIndex] = en.attackCooldown <= 15 ? 2 : 1;
                 if (st.player.lane === laneIndex) {
@@ -288,13 +334,14 @@ function handleStaticMonk(en) {
                         createImpact(en.x - (i * 150), st.height * CONSTANTS.LANE_Y[laneIndex], '#00ff00');
                     }
                     if (st.player.lane === laneIndex) {
-                        if (st.player.state === 'ghost_step') spawnFloatingText(st.player.x, st.player.y - 50, "EVADED", "#888888");
+                        if (st.player.state === 'ghost_step') { spawnFloatingText(st.player.x, st.player.y - 50, "EVADED", "#888888"); registerPerfectGhostStep(); }
                         else takeDamage(st.isInstinct ? 15 : 30, true, en);
                     }
                 });
             }
             
             en.targetLanes = [];
+            en.telegraphed = false;
             en.bossMashCount++;
 
             // ARC MUTATION (patternChainLength, was authored, never read): volleys per
@@ -308,9 +355,10 @@ function handleStaticMonk(en) {
                 en.lane = st.player.lane;
                 en.y = st.height * CONSTANTS.LANE_Y[en.lane];
                 en.x = st.player.x + 100;
+                en.punishShown = false;
                 playSound('ghost_step');
                 createImpact(en.x, en.y - 60, '#00ff00');
-                spawnFloatingText(en.x, en.y - 120, "RECHARGING!", "#00ff00");
+                spawnFloatingText(en.x, en.y - 120, "RECHARGING — OPEN!", "#00ff00");
                 // ARC MUTATION (summonSupportPressure, Arc 3+): the recharge is no
                 // longer a free breather — one Grunt add walks in so the opening has
                 // a cost. Capped at one live add so it stays pressure, not a swarm.
@@ -319,8 +367,8 @@ function handleStaticMonk(en) {
                 }
             } else {
                 // ARC MUTATION (followupPattern, Arc 2+): a tighter beat between volleys
-                // (88 vs 100). Kept above 80 so the telegraph at attackCooldown===80
-                // always still fires — the rhythm hardens, the read stays honest.
+                // (88 vs 100). Kept above 80 so the telegraph at attackCooldown<=80
+                // always gives its full warning — the rhythm hardens, the read stays honest.
                 en.attackCooldown = en.arcMods.followupPattern ? 88 : 100;
                 let otherLanes = [0, 1, 2].filter(l => l !== en.lane);
                 en.lane = otherLanes[Math.floor(random() * otherLanes.length)];
@@ -331,10 +379,17 @@ function handleStaticMonk(en) {
 }
 
 export function updateBosses() {
-    st.enemies.forEach(en => {
-        if (!en.isBoss || en.stun > 0 || st.bossIntroTimer > 0) return;
+    for (const en of st.enemies) {
+        if (!en.isBoss) continue;
+        checkBossThresholds(en); // safety net for non-punch damage
+        if (en.pendingFinisher && !st.finisher) {
+            const kind = en.pendingFinisher; en.pendingFinisher = null;
+            startFinisher(en, kind);
+            return; // the finisher owns the rest of this frame
+        }
+        if (en.stun > 0 || st.bossIntroTimer > 0) continue;
         if (en.controller === 'neon_enforcer') handleNeonEnforcer(en);
         else if (en.controller === 'phantom_boxer') handlePhantomBoxer(en);
         else if (en.controller === 'static_monk') handleStaticMonk(en);
-    });
+    }
 }

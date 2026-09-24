@@ -152,8 +152,10 @@ function simMonkBursts(stage, frames) {
 // Stage 21 = arc 3 boss? arc=(21-1)/7+1=3 -> bossIndex=(3-1)%3=2 -> static_monk. patternChainLength arc3=2 -> burst 3.
 // Stage 35 = arc 5 boss -> bossIndex=(5-1)%3=1 -> phantom. Need a static_monk arc-5-ish: bossIndex 2 => arc where (arc-1)%3==2 => arc 3 or 6. Arc 6 clamps mods to arc5.
 // Arc 6 boss stage = (6-1)*7+7 = 42. getArcIndex(42)=6 -> bossIndex (6-1)%3=2 -> static_monk, mods clamp to 5 (patternChainLength 3 -> burst 4).
-const burstsArc3 = simMonkBursts(21, 2000);
-const burstsArc6 = simMonkBursts(42, 2000);
+// v16: stage numbers come from the arc-structure helpers (Arc 1 is compressed, so
+// "stage 21" no longer means "Arc 3 boss"). Arc 3 & Arc 6 bosses are the Monk.
+const burstsArc3 = simMonkBursts(CONSTANTS.bossStageOfArc(3), 2000);
+const burstsArc6 = simMonkBursts(CONSTANTS.bossStageOfArc(6), 2000);
 ok('static monk fires bursts (arc3)', burstsArc3 && burstsArc3.length >= 2, JSON.stringify(burstsArc3));
 ok('arc3 burst length = 3 (1+patternChainLength 2)', burstsArc3 && burstsArc3.every(b => b === 3), JSON.stringify(burstsArc3));
 ok('arc6 burst length = 4 (1+patternChainLength 3)', burstsArc6 && burstsArc6.every(b => b === 4), JSON.stringify(burstsArc6));
@@ -216,11 +218,12 @@ let advThrew = null;
 seedRng(2026);
 const affixesSeen = new Set();
 try {
-    for (let i = 0; i < 45; i++) { advanceStage(); if (st.currentAffix) affixesSeen.add(st.currentAffix.name); }
+    // v16: modifiers are OFFERED as wagers now — the rotation lives in wagerOffer.
+    for (let i = 0; i < 45; i++) { advanceStage(); if (st.wagerOffer) affixesSeen.add(st.wagerOffer.name); }
 } catch (e) { advThrew = e && e.message; }
 ok('advanceStage: 45 stages without throwing', advThrew === null, advThrew || '');
 ok('advanceStage: clamps past arc 5 (reaches stage 46)', st.currentStage >= 46, `stage ${st.currentStage}`);
-ok('advanceStage: affix rotation surfaces >=4 distinct modifiers', affixesSeen.size >= 4, [...affixesSeen].join(','));
+ok('advanceStage: wager rotation surfaces all 4 risk modifiers', affixesSeen.size >= 4, [...affixesSeen].join(','));
 
 // ============ 8. FORMATIONS (systemic squads: variable + arc-ramped + deterministic) ============
 function coverageRate(defs, arc, trials) {
@@ -272,18 +275,19 @@ spawnEnemy();
 st.laneTempo = [1, 1, 1];
 
 function hotLaneAt(stageBefore, seed) { seedRng(seed); st.currentStage = stageBefore; st.bossActive = false; advanceStage(); return st.hotLane; }
-let bossHot = false; for (let s = 1; s <= 60; s++) if (hotLaneAt(6, s) >= 0) bossHot = true;   // ->7 boss
+let bossHot = false; for (let a = 1; a <= 5; a++) for (let s = 1; s <= 30; s++) if (hotLaneAt(CONSTANTS.bossStageOfArc(a) - 1, s) >= 0) bossHot = true;
 ok('lane tempo: a boss stage is never hot', !bossHot);
 let arc1Hot = false; for (let s = 1; s <= 60; s++) if (hotLaneAt(1, s) >= 0) arc1Hot = true;   // ->2 arc1
 ok('lane tempo: Arc 1 is never hot (teach the read)', !arc1Hot);
-let arc3n = 0; const T = 400; for (let s = 1; s <= T; s++) if (hotLaneAt(14, s) >= 0) arc3n++;  // ->15 arc3
+const ARC3_MID = CONSTANTS.firstStageOfArc(3); // advancing from here lands mid-Arc 3
+let arc3n = 0; const T = 400; for (let s = 1; s <= T; s++) if (hotLaneAt(ARC3_MID, s) >= 0) arc3n++;
 const arc3rate = arc3n / T;
 ok('lane tempo: Arc 3 runs hot often (its signature)', arc3rate > 0.45 && arc3rate < 0.75, `rate ${arc3rate.toFixed(2)}`);
 ok('lane tempo: Arc 3 is NOT always hot (selective)', arc3rate < 1.0, `rate ${arc3rate.toFixed(2)}`);
-ok('lane tempo: deterministic per seed (Daily-safe)', hotLaneAt(14, 31337) === hotLaneAt(14, 31337));
+ok('lane tempo: deterministic per seed (Daily-safe)', hotLaneAt(ARC3_MID, 31337) === hotLaneAt(ARC3_MID, 31337));
 {
     // when hot, exactly one lane is boosted, to the configured multiplier
-    let found = null; for (let s = 1; s <= 80 && !found; s++) { if (hotLaneAt(14, s) >= 0) found = { lane: st.hotLane, tempo: st.laneTempo.slice() }; }
+    let found = null; for (let s = 1; s <= 80 && !found; s++) { if (hotLaneAt(ARC3_MID, s) >= 0) found = { lane: st.hotLane, tempo: st.laneTempo.slice() }; }
     const hotCount = found ? found.tempo.filter(v => v > 1).length : -1;
     ok('lane tempo: exactly one lane hot, at hotMult', !!found && hotCount === 1 && found.tempo[found.lane] === CONSTANTS.LANE_TEMPO.hotMult, JSON.stringify(found));
 }
@@ -349,10 +353,11 @@ function hazardScheduled(stage, seed) {
 }
 let a1 = 0; for (let s = 1; s <= 100; s++) if (hazardScheduled(3, s)) a1++;   // stage3 = Arc 1
 eq('hazard: Arc 1 never schedules', a1, 0);
-let a4 = 0; for (let s = 1; s <= 200; s++) if (hazardScheduled(24, s)) a4++;  // stage24 = Arc 4
+const ARC4_STAGE = CONSTANTS.firstStageOfArc(4) + 2, ARC5_STAGE = CONSTANTS.firstStageOfArc(5) + 2;
+let a4 = 0; for (let s = 1; s <= 200; s++) if (hazardScheduled(ARC4_STAGE, s)) a4++;
 ok('hazard: Arc 4 schedules sometimes (but not always)', a4 > 0 && a4 < 200, `${a4}/200`);
-eq('hazard: never on a boss stage', hazardScheduled(7, 5) || hazardScheduled(7, 9) || hazardScheduled(7, 13), false);
-eq('hazard: respects cooldown (no roll while cooling)', (() => { st.hazards = []; st.currentStage = 24; st.screen = 'playing'; st.bossActive = false; st.stageClearing = false; st.bossIntroTimer = 0; st.hazardCooldown = 50; hazMod.maybeScheduleHazard(); return st.hazards.length; })(), 0);
+eq('hazard: never on a boss stage', [4, 5].some(a => [5, 9, 13, 21, 34].some(sd => hazardScheduled(CONSTANTS.bossStageOfArc(a), sd))), false);
+eq('hazard: respects cooldown (no roll while cooling)', (() => { st.hazards = []; st.currentStage = ARC4_STAGE; st.screen = 'playing'; st.bossActive = false; st.stageClearing = false; st.bossIntroTimer = 0; st.hazardCooldown = 50; hazMod.maybeScheduleHazard(); return st.hazards.length; })(), 0);
 
 // ================================================================
 // R14 — hazard frequency cap, shared surprise budget, submission gate
@@ -379,19 +384,19 @@ function hazardsOverStage(stage, seed, frames = 3600) {
 
 // The headline fix: the old build averaged ~6-7 hazards per Arc 4/5 stage.
 let maxA4 = 0, maxA5 = 0;
-for (let s = 0; s < 40; s++) maxA4 = Math.max(maxA4, hazardsOverStage(24, 700 + s));
-for (let s = 0; s < 40; s++) maxA5 = Math.max(maxA5, hazardsOverStage(31, 700 + s));
+for (let s = 0; s < 40; s++) maxA4 = Math.max(maxA4, hazardsOverStage(ARC4_STAGE, 700 + s));
+for (let s = 0; s < 40; s++) maxA5 = Math.max(maxA5, hazardsOverStage(ARC5_STAGE, 700 + s));
 ok('R14 hazard: Arc 4 never exceeds its per-stage cap', maxA4 <= CONSTANTS.HAZARDS.maxPerStageByArc[4], `max ${maxA4}`);
 ok('R14 hazard: Arc 5 never exceeds its per-stage cap', maxA5 <= CONSTANTS.HAZARDS.maxPerStageByArc[5], `max ${maxA5}`);
 ok('R14 hazard: Arc 5 still fires sometimes (not disabled)', (() => {
-    for (let s = 0; s < 40; s++) if (hazardsOverStage(31, 900 + s) > 0) return true;
+    for (let s = 0; s < 40; s++) if (hazardsOverStage(ARC5_STAGE, 900 + s) > 0) return true;
     return false;
 })(), 'never fired in 40 seeds');
 
 // Never two live at once.
 ok('R14 hazard: never two hazards live simultaneously', (() => {
     seedRng(31337);
-    st.screen = 'playing'; st.currentStage = 31; st.bossActive = false; st.stageClearing = false; st.bossIntroTimer = 0;
+    st.screen = 'playing'; st.currentStage = ARC5_STAGE; st.bossActive = false; st.stageClearing = false; st.bossIntroTimer = 0;
     st.hazards = []; st.hazardCooldown = 0; st.hazardsThisStage = 0; st.surpriseBudget = 99;
     st.player.lane = 1; st.player.state = 'idle'; st.health = 100000;
     for (let f = 0; f < 5000; f++) {
@@ -403,7 +408,7 @@ ok('R14 hazard: never two hazards live simultaneously', (() => {
 
 // Budget: a spent budget blocks hazards entirely.
 eq('R14 budget: zero budget blocks hazard scheduling', (() => {
-    st.hazards = []; st.currentStage = 31; st.screen = 'playing'; st.bossActive = false;
+    st.hazards = []; st.currentStage = ARC5_STAGE; st.screen = 'playing'; st.bossActive = false;
     st.stageClearing = false; st.bossIntroTimer = 0; st.hazardCooldown = 0;
     st.hazardsThisStage = 0; st.surpriseBudget = 0;
     for (let i = 0; i < 50; i++) { seedRng(i); st.hazardCooldown = 0; hazMod.maybeScheduleHazard(); }
@@ -415,7 +420,7 @@ ok('R14 budget: hot lane costs budget (advanceStage)', (() => {
     let sawHotSpend = false;
     for (let s = 0; s < 60; s++) {
         seedRng(2000 + s);
-        st.currentStage = 16; st.bossDefeatedThisStage = false; st.player.state = 'idle';
+        st.currentStage = ARC3_MID + 1; st.bossDefeatedThisStage = false; st.player.state = 'idle';
         st.health = 100; st.maxHealth = 100; st.enemies = [];
         advanceStage(); // -> stage 17 (Arc 3, hottest arc)
         const budget = (CONSTANTS.SURPRISE.budgetByArc || {})[3] || 0;
@@ -429,7 +434,7 @@ ok('R14 budget: hot lane costs budget (advanceStage)', (() => {
 
 // Boss stages get no surprise budget at all.
 eq('R14 budget: boss stage gets zero budget', (() => {
-    seedRng(77); st.currentStage = 6; st.bossDefeatedThisStage = false;
+    seedRng(77); st.currentStage = CONSTANTS.bossStageOfArc(1) - 1; st.bossDefeatedThisStage = false;
     st.player.state = 'idle'; st.health = 100; st.enemies = [];
     advanceStage(); // -> stage 7, a boss stage
     return st.surpriseBudget;

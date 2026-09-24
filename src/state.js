@@ -84,6 +84,21 @@ export const gameState = {
     // FIXED: Hardcoded fallback to prevent Temporal Dead Zone crashes during module imports
     currentAffix: { name: 'NONE', desc: 'System stable. No anomalies detected.' },
 
+    // v16 LIVE SCORE + WAGERS
+    score: 0,
+    displayScore: 0,
+    scorePops: [],
+    wagerMult: 1,
+    wagerOffer: null,       // affix currently being offered pre-stage (null = none)
+    // v16 BOSS FINISHER / UPGRADE VIGNETTE / STAGE TRANSITION state
+    finisher: null,
+    finisherZoom: 1,
+    vignette: null,
+    paletteFrom: 1, paletteTo: 1, paletteT: 1,
+    lightSweep: -1,
+    draftHold: 0,
+    firstEvolutionGranted: false,
+
     statMaxCombo: 0, 
     statTotalSlips: 0, 
     statTotalKills: 0, 
@@ -92,6 +107,9 @@ export const gameState = {
     statBossBreaks: 0, 
     statRecoilTaken: 0, 
     statDespDamage: 0,
+    statGhostSteps: 0,
+    statFinisherHits: 0,
+    statFinishersClean: 0,
 
     tutorialEnabled: true,
     seenTutorials: { shield: false, slip: false, guard: false, instinct: false, counter: false, ghost_step: false, bruiser_id: false, assassin_id: false, footwork_tip: false },

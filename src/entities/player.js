@@ -4,6 +4,8 @@ import { playSound } from '../vfx_audio/audio.js';
 import { createVacuum, triggerShockwave, doFlash, spawnFloatingText, createImpact, createShatter } from '../vfx_audio/effects.js';
 import { HUD } from '../ui/ui.js';
 import { checkHit } from '../systems/combat.js';
+import { addScore } from '../systems/score.js';
+import { flashScale } from '../systems/settings.js';
 
 export function resetPlayerObj() { 
     return { lane: 1, x: 180, y: 0, w: 50, h: 110, state: 'idle', punchTimer: 0, punchType: null, hitFrame: 0, didHit: false, slipCooldown: 0, slipBuff: 0, color: '#00ffff', trails: [], trailTimer: 0, recoveryTimer: 0, moveCancelReady: false, jabStep: 0, comboWindow: 0, inputBuffer: null, inputBufferTimer: 0, movementBuffer: null, movementBufferTimer: 0, ghostStepTimer: 0, ghostStepCooldown: 0, ghostStepCharges: 1, dangerLevel: 0, hitStun: 0, lastPunchLanded: null, dempseyActive: false, guardReadTimer: 0, flowStreak: 0 }; 
@@ -38,8 +40,12 @@ function executeMovementInput(code) {
             st.player.ghostStepCharges--;
             st.player.state = 'ghost_step'; 
             st.player.ghostStepTimer = 18; 
+            st.player.ghostPerfected = false;
             if (st.player.ghostStepCharges <= 0) st.player.ghostStepCooldown = Math.max(10, Math.floor(60 * st.progressionMods.ghostStepCooldownMult)); 
-            st.combo = 0; resetJabString(); playSound('ghost_step');
+            // v16: Ghost Step no longer touches the combo (playtest: "Ghost Step erases
+            // combo" read as a bug — it's a defensive read, same family as a slip). The
+            // jab STRING still restarts; the combo counter does not.
+            resetJabString(); playSound('ghost_step');
             for(let i=0; i<8; i++) { st.particles.push({ x: st.player.x + Math.random() * 30, y: st.player.y - 30 - Math.random() * 60, vx: -10 - Math.random() * 15, vy: 0, life: 0.6, color: '#666666', type: 'dash_line' }); }
         }
     } 
@@ -52,6 +58,22 @@ function executeMovementInput(code) {
             else { st.player.lane = oldLane; }
         }
     }
+}
+
+// v16: a Ghost Step that actually evades a live attack is a PERFECT Ghost Step —
+// +1 combo, score, and it feeds Flow State like a Perfect Slip. Counted once per
+// dash even if one dash slips several attacks. Called from every evade site
+// (melee, zoner beam, boss strikes, Monk lasers, lane hazards).
+export function registerPerfectGhostStep() {
+    const p = st.player;
+    if (!p || p.ghostPerfected) return false;
+    p.ghostPerfected = true;
+    st.combo++; if (st.combo > st.statMaxCombo) st.statMaxCombo = st.combo;
+    st.statGhostSteps = (st.statGhostSteps || 0) + 1;
+    p.flowStreak = (p.flowStreak || 0) + 1;
+    addScore(CONSTANTS.SCORE.perfectGhostStep, p.x + 40, p.y - 120);
+    spawnFloatingText(p.x, p.y - 95, "PERFECT GHOST +1", "#e5e7eb");
+    return true;
 }
 
 export function checkPerfectSlip(oldLane) {
@@ -114,6 +136,7 @@ export function triggerPerfectSlip(bossSlipped, slipQuality) {
         if (slipHeal > 0) st.health = Math.min(st.maxHealth, st.health + slipHeal);
 
         st.shake = 10; doFlash(0.2); playSound('perfect_slip'); st.statTotalSlips++;
+        addScore(CONSTANTS.SCORE.perfectSlip, st.player.x + 40, st.player.y - 120);
         st.exp += Math.floor(2 * (1 + st.progressionMods.expGainBonusMult) * flowMult); // reads are the core loop; pay them
         st.player.slipBuff = (st.orbCounts.technique >= 2) ? 2 : 1; 
         spawnFloatingText(st.player.x, st.player.y - 80, "COUNTER READY!", "#ffffff"); 
@@ -124,6 +147,7 @@ export function triggerPerfectSlip(bossSlipped, slipQuality) {
         if (HUD.slipPopup) { HUD.slipPopup.innerText = "GOOD SLIP"; HUD.slipPopup.style.color = "#ff8ad8"; HUD.slipPopup.style.textShadow = "0 0 10px #ff00ff"; }
         if (!st.isInstinct) { st.instinctMeter = Math.min(100, st.instinctMeter + (5 * st.stats.techMult)); }
         st.shake = 3; playSound('slip');
+        addScore(CONSTANTS.SCORE.goodSlip, st.player.x + 40, st.player.y - 120);
     }
     if (HUD.slipPopup) { HUD.slipPopup.style.opacity = 1; setTimeout(() => { if (HUD.slipPopup) HUD.slipPopup.style.opacity = 0; }, 500); }
 }
@@ -202,7 +226,7 @@ export function takeDamage(amt, isHeavy, en) {
     playSound('hit');
     
     let sf = document.getElementById('screen-flash'); 
-    if (sf) { sf.style.background = 'red'; sf.style.opacity = 0.4; setTimeout(() => { if (sf) { sf.style.background = 'white'; sf.style.opacity = 0; } }, 150); }
+    if (sf && flashScale() > 0.01) { sf.style.background = 'red'; sf.style.opacity = 0.4 * flashScale(); setTimeout(() => { if (sf) { sf.style.background = 'white'; sf.style.opacity = 0; } }, 150); }
     if (HUD.health) { HUD.health.classList.add('text-red-500', 'scale-125'); setTimeout(() => HUD.health.classList.remove('text-red-500', 'scale-125'), 200); }
     if (st.enemies.some(e => e.isBoss && e.desperation)) st.statDespDamage++;
 }

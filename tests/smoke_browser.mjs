@@ -104,6 +104,40 @@ if (startBtn) {
     ok('no runtime errors during play', errors.length === 0, errors.slice(0, 3).join(' | '));
 }
 
+// ---- v16 DOM wiring ----
+{
+    const d = win.document;
+    ok('v16: live score HUD present', !!d.getElementById('score-ui') && !!d.getElementById('score-mult'));
+    ok('v16: results screen has no "ROUTE" line', !/ROUTE/.test(d.getElementById('gameover-screen').textContent));
+    ok('v16: results has rank + PB delta', !!d.getElementById('stat-grade') && !!d.getElementById('pb-delta'));
+    // Pause -> tabs (clear any tutorial modal first — Escape is ignored under one)
+    console.log('  (screen before pause: tutorial modal ' + (d.getElementById('tutorial-screen').style.display === 'flex' ? 'UP' : 'down') + ')');
+    for (let i = 0; i < 6 && d.getElementById('tutorial-screen').style.display === 'flex'; i++) { win.dismissTutorial(); frame(2); }
+    win.dispatchEvent(new win.KeyboardEvent('keydown', { code: 'Escape' }));
+    frame(1);
+    const paused = d.getElementById('pause-screen').style.display === 'flex';
+    ok('v16: Escape opens the pause menu', paused, d.getElementById('pause-screen').style.display);
+    ['loadout', 'settings', 'resume'].forEach(t => {
+        win.engineSetPauseTab(t);
+        ok(`v16: pause tab "${t}" shows its panel`, d.getElementById(`ppanel-${t}`).style.display === 'block');
+    });
+    win.engineSetPauseTab('loadout');
+    ok('v16: loadout renders', d.getElementById('loadout-body').innerHTML.includes('Evolution Trees'));
+    win.engineSetPauseTab('settings');
+    ok('v16: settings render 7 rows', d.querySelectorAll('#settings-body .set-row').length === 7);
+    win.engineSetSetting('reducedMotion', true);
+    ok('v16: reduced motion toggles the body class', d.body.classList.contains('reduced-motion'));
+    if (storageWorks) {
+        const saved = JSON.parse(win.localStorage.getItem('neon_strike_settings_v1') || '{}');
+        ok('v16: settings persist to localStorage', saved.reducedMotion === true);
+    }
+    win.engineSetSetting('reducedMotion', false);
+    win.dispatchEvent(new win.KeyboardEvent('keydown', { code: 'Escape' }));
+    ok('v16: Escape resumes', d.getElementById('pause-screen').style.display === 'none');
+    ok('v16: survives 300 more frames after pause round-trip', frame(300));
+    ok('v16: no runtime errors', errors.length === 0, errors.slice(0, 3).join(' | '));
+}
+
 if (!storageWorks) console.log('  (persistence assertions skipped — jsdom blocks localStorage on file://; covered by the http pass)');
 console.log(`\nSMOKE[${MODE}]: ${passed} passed, ${failed} failed`);
 if (server) server.close();

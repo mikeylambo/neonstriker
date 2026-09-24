@@ -3,10 +3,47 @@
   var CONSTANTS = {
     LANE_Y: [0.35, 0.55, 0.75],
     // Top, Mid, Bottom visual spacing
+    // --- ARC STRUCTURE (single source of truth for stage flow) ---
+    // Each arc is an ordered list of LEVEL KEYS (1-6 = authored levels, 7 = boss
+    // chamber). The level key — not the raw stage number — is what every per-level
+    // table reads: wave packets, stage names, palettes, taglines. Arc 1 is
+    // compressed (playtest: "pacing feels off in Arc 1") to four fights + an earlier
+    // boss; Arcs 2+ keep the full seven. Every system resolves stage -> {arc, level}
+    // through locateStage(), so no caller does its own `% 7` math — that's exactly
+    // how the old wave/palette counters drifted out of phase with the arc cycle.
+    ARC_LEVEL_KEYS: {
+      1: [1, 2, 3, 6, 7]
+    },
+    DEFAULT_ARC_LEVEL_KEYS: [1, 2, 3, 4, 5, 6, 7],
+    BOSS_LEVEL_KEY: 7,
+    arcLevelKeys: (arc) => CONSTANTS.ARC_LEVEL_KEYS[arc] || CONSTANTS.DEFAULT_ARC_LEVEL_KEYS,
+    arcLength: (arc) => CONSTANTS.arcLevelKeys(arc).length,
+    locateStage: (stage) => {
+      let s = Math.max(1, Math.floor(stage) || 1), arc = 1;
+      while (s > CONSTANTS.arcLength(arc)) {
+        s -= CONSTANTS.arcLength(arc);
+        arc++;
+      }
+      return { arc, ordinal: s, levelKey: CONSTANTS.arcLevelKeys(arc)[s - 1] };
+    },
+    firstStageOfArc: (arc) => {
+      let stage = 1;
+      for (let a = 1; a < arc; a++) stage += CONSTANTS.arcLength(a);
+      return stage;
+    },
+    bossStageOfArc: (arc) => CONSTANTS.firstStageOfArc(arc) + CONSTANTS.arcLength(arc) - 1,
     // --- ARC MATH HELPERS ---
-    getArcIndex: (stage) => Math.floor((stage - 1) / 7) + 1,
-    getLevelInArc: (stage) => (stage - 1) % 7 + 1,
-    isBossStage: (stage) => (stage - 1) % 7 + 1 === 7,
+    getArcIndex: (stage) => CONSTANTS.locateStage(stage).arc,
+    // Returns the LEVEL KEY (1-7) for content lookups, not the ordinal position.
+    getLevelInArc: (stage) => CONSTANTS.locateStage(stage).levelKey,
+    isBossStage: (stage) => CONSTANTS.locateStage(stage).levelKey === CONSTANTS.BOSS_LEVEL_KEY,
+    // The stage number this fight WOULD have had under the original uniform
+    // 7-per-arc layout. Enemy/boss HP scaling reads this so compressing Arc 1 does
+    // not quietly make every later arc easier (Arc 2+ scale exactly as before).
+    difficultyStage: (stage) => {
+      const { arc, levelKey } = CONSTANTS.locateStage(stage);
+      return (arc - 1) * 7 + levelKey;
+    },
     // SINGLE SOURCE OF TRUTH for slip windows. This used to be duplicated with
     // slightly different hardcoded numbers in player.js (the real gameplay check),
     // enemies.js (the red/white telegraph + danger-ring visuals), and draw.js (the
@@ -163,16 +200,138 @@
     //   GLASS PROTOCOL - high variance: you deal +30%, but you also take +30%.
     // Every stage's affix is picked from this list via the seeded RNG, so a Daily
     // Challenge serves the same modifier order to every player (see rng.js).
+    // v16 WAGERS: modifiers are no longer imposed. Before a stage, the arena OFFERS
+    // one risk modifier; accept it and every point you score that stage is multiplied
+    // by its `scoreMult`, decline and the stage runs clean. Only entries with a
+    // `scoreMult` are ever offered — SURGE and ADRENALINE are pure boons, and a boon
+    // that also pays extra score is a free lunch, not a wager (kept in data for reuse).
     AFFIXES: [
       { name: "NONE", desc: "System stable. No anomalies detected.", mods: {} },
       { name: "SURGE", desc: "Instinct gain increased by 50%.", mods: { instinctGainMult: 1.5 } },
-      { name: "FAST CROWD", desc: "Ranks arrive denser and faster \u2014 Assassins swell the crowd.", mods: { packetDelayMult: 0.7, speedMult: 1.12, gruntSub: "assassin", gruntSubEvery: 2 } },
-      { name: "IRON WALL", desc: "The ranks harden. More Gold Armor \u2014 break it with Cross [S].", mods: { gruntSub: "shield", gruntSubEvery: 2 } },
-      { name: "HEAVY HANDS", desc: "Bruisers hit harder and press in numbers. Keep your footwork.", mods: { bruiserDamageMult: 1.4, gruntSub: "bruiser", gruntSubEvery: 4 } },
+      { name: "FAST CROWD", desc: "Ranks arrive denser and faster \u2014 Assassins swell the crowd.", scoreMult: 1.5, mods: { packetDelayMult: 0.7, speedMult: 1.12, gruntSub: "assassin", gruntSubEvery: 2 } },
+      { name: "IRON WALL", desc: "The ranks harden. More Gold Armor \u2014 break it with Cross [S].", scoreMult: 1.3, mods: { gruntSub: "shield", gruntSubEvery: 2 } },
+      { name: "HEAVY HANDS", desc: "Bruisers hit harder and press in numbers. Keep your footwork.", scoreMult: 1.4, mods: { bruiserDamageMult: 1.4, gruntSub: "bruiser", gruntSubEvery: 4 } },
       { name: "ADRENALINE", desc: "Every Perfect Slip mends a sliver of health.", mods: { perfectSlipHeal: 4 } },
-      { name: "GLASS PROTOCOL", desc: "You deal 30% more \u2014 and take 30% more. No margin for a miss.", mods: { playerDamageDealtMult: 1.3, playerDamageTakenMult: 1.3 } }
+      { name: "GLASS PROTOCOL", desc: "You deal 30% more \u2014 and take 30% more. No margin for a miss.", scoreMult: 1.75, mods: { playerDamageDealtMult: 1.3, playerDamageTakenMult: 1.3 } }
     ],
+    wagerPool: () => CONSTANTS.AFFIXES.filter((a) => a.scoreMult && a.scoreMult > 1),
+    WAGERS: {
+      firstStage: 2
+      // stage 1 is the tutorial/onboarding fight — never wagered
+    },
+    // Per-level stage-card taglines (keyed by LEVEL KEY). The arc theme line ("Learn
+    // the language of lane-boxing.") used to be the subtitle of EVERY stage in its
+    // arc — playtest: it "doesn't need to keep surfacing". Arc themes now appear on
+    // an arc's chapter card, Arc 1's only once per save, and stages use these.
+    STAGE_TAGLINES: {
+      1: "Fundamentals. Find the rhythm.",
+      2: "Lane awareness. Watch every rail.",
+      3: "Target priority. Choose who falls first.",
+      4: "The flowing river. Keep moving.",
+      5: "Crack the formation.",
+      6: "The composure exam.",
+      7: "The duel."
+    },
+    // --- LIVE SCORE (v16) ---
+    // Score is earned live and shown on the HUD, so it can actually be played for.
+    // Every award is multiplied by the combo multiplier (and an accepted wager).
+    SCORE: {
+      comboStep: 5,
+      // every 5 combo...
+      comboMultStep: 0.25,
+      // ...adds +0.25x
+      maxComboMult: 4,
+      hit: { jab: 10, jab3: 20, hook: 30, cross: 40, guard: 5 },
+      counterHitMult: 2,
+      punishBonus: 60,
+      // landing a hit inside a boss's OPEN window
+      perfectSlip: 150,
+      goodSlip: 25,
+      perfectGhostStep: 100,
+      kill: { grunt: 50, shield: 90, assassin: 90, zoner: 110, bruiser: 180 },
+      finisherHit: 400,
+      finisherPerfect: 200,
+      finisherClean: 1500,
+      // bonus for landing every prompt of a finisher
+      bossKo: 3e3,
+      // x arc index
+      stageClear: 500,
+      // flat, NOT combo-multiplied (wager still applies)
+      // Letter rank thresholds (score). Calibrated against the headless bot sim
+      // (tests/v16.mjs "SCORE CALIBRATION"): a stage-4 death lands ~8-12k (C), a
+      // clean Arc 1 clear ~45k (B), deep Arc 2-3 runs 150k+ (S). S also needs reads.
+      rank: { S: 15e4, A: 5e4, B: 15e3 }
+    },
+    // --- BOSS STAGGER + FINISHER (v16) ---
+    // Raw hits deal full damage. Crossing 66% and 33% HP staggers the boss into an
+    // authored Finisher; the killing blow opens a final KO Finisher. Prompts are on a
+    // fixed beat grid — mashing reads as TOO EARLY and ends the stagger (no other
+    // penalty). Every sequence starts from the MID lane; UP/DOWN prompts are authored
+    // so the lane path never leaves the ring (validated in tests/harness.mjs).
+    FINISHER: {
+      thresholds: [0.66, 0.33],
+      beatFrames: 36,
+      // ~100 BPM at 60fps
+      leadBeats: 1,
+      // a prompt appears one beat before it lands
+      windowEarly: 12,
+      // frames before the beat a press still counts
+      windowLate: 9,
+      // frames after the beat before it's a miss
+      perfectWindow: 4,
+      introFrames: 42,
+      outroFrames: 34,
+      breakDamageFrac: 0.14,
+      // total of a fully-landed 66%/33% finisher, of max HP
+      zoom: 1.24,
+      sequences: {
+        neon_enforcer: {
+          break1: ["jab", "jab", "cross", "hook"],
+          break2: ["jab", "cross", "down", "hook", "cross"],
+          ko: ["hook", "cross", "up", "jab", "down", "cross"]
+        },
+        phantom_boxer: {
+          break1: ["up", "jab", "down", "cross"],
+          break2: ["down", "hook", "up", "up", "cross"],
+          ko: ["up", "jab", "down", "down", "hook", "cross"]
+        },
+        static_monk: {
+          break1: ["down", "up", "cross", "jab"],
+          break2: ["up", "hook", "down", "down", "cross"],
+          ko: ["jab", "down", "up", "up", "hook", "cross"]
+        }
+      }
+    },
+    // --- BOSS OFFENSE AUDIT (v16) ---
+    // Every boss attack gets (1) a telegraph — sound + a filling windup meter over the
+    // boss + a red lane warning — at least `minTelegraphLead` frames before impact,
+    // and (2) a readable punish window after it resolves: the boss visibly slumps
+    // OPEN, can't attack or move, takes bonus damage, and its anti-mash defenses
+    // (armor recoil, Phantom Shift) are OFF. Losses come from missed reads.
+    BOSS_OFFENSE: {
+      telegraphLead: 30,
+      minTelegraphLead: 22,
+      punishFrames: { jab: 28, bash: 52, feint: 34 },
+      minPunishFrames: 18,
+      punishDamageMult: 1.25,
+      desperationCooldownMult: 0.8
+    },
     STAGE_NAMES: ["Shattered Cathedral", "Glass Reliquary", "Ashen Cloister", "Midnight Causeway", "Abyss Rail", "Throne of Static", "Boss Chamber"],
+    // --- ARENA PALETTES (keyed by LEVEL KEY; boss chamber shares Throne's) ---
+    // Stored as RGB triples so stage transitions can MORPH one arena into the next
+    // instead of hard-cutting (see render/atmosphere.js).
+    PALETTES: {
+      1: { top: [2, 2, 5], mid: [5, 5, 10], bot: [10, 10, 20], accent: [0, 255, 255, 0.02], shard: [0, 255, 255, 0.05] },
+      2: { top: [0, 26, 26], mid: [0, 43, 51], bot: [0, 64, 77], accent: [0, 255, 255, 0.04], shard: [0, 255, 255, 0.09] },
+      3: { top: [26, 5, 5], mid: [43, 10, 10], bot: [77, 16, 16], accent: [255, 50, 50, 0.03], shard: [255, 50, 50, 0.06] },
+      4: { top: [20, 0, 38], mid: [32, 0, 59], bot: [61, 0, 77], accent: [255, 0, 255, 0.03], shard: [255, 0, 255, 0.08] },
+      5: { top: [0, 0, 0], mid: [2, 5, 2], bot: [5, 16, 5], accent: [0, 255, 0, 0.02], shard: [0, 255, 0, 0.04] },
+      6: { top: [26, 26, 26], mid: [51, 51, 51], bot: [77, 77, 77], accent: [255, 255, 255, 0.05], shard: [255, 255, 255, 0.15] }
+    },
+    paletteKeyForStage: (stage) => {
+      const k = CONSTANTS.getLevelInArc(stage);
+      return k === CONSTANTS.BOSS_LEVEL_KEY ? 6 : k;
+    },
     // --- MENACE (target-priority: consequence of ignoring) ---
     // Some enemies get WORSE the longer they live, so target selection matters — you
     // prioritize them because ignoring them costs you, not because killing them gifts
@@ -330,6 +489,23 @@
     bossDefeatedThisStage: false,
     // FIXED: Hardcoded fallback to prevent Temporal Dead Zone crashes during module imports
     currentAffix: { name: "NONE", desc: "System stable. No anomalies detected." },
+    // v16 LIVE SCORE + WAGERS
+    score: 0,
+    displayScore: 0,
+    scorePops: [],
+    wagerMult: 1,
+    wagerOffer: null,
+    // affix currently being offered pre-stage (null = none)
+    // v16 BOSS FINISHER / UPGRADE VIGNETTE / STAGE TRANSITION state
+    finisher: null,
+    finisherZoom: 1,
+    vignette: null,
+    paletteFrom: 1,
+    paletteTo: 1,
+    paletteT: 1,
+    lightSweep: -1,
+    draftHold: 0,
+    firstEvolutionGranted: false,
     statMaxCombo: 0,
     statTotalSlips: 0,
     statTotalKills: 0,
@@ -338,6 +514,9 @@
     statBossBreaks: 0,
     statRecoilTaken: 0,
     statDespDamage: 0,
+    statGhostSteps: 0,
+    statFinisherHits: 0,
+    statFinishersClean: 0,
     tutorialEnabled: true,
     seenTutorials: { shield: false, slip: false, guard: false, instinct: false, counter: false, ghost_step: false, bruiser_id: false, assassin_id: false, footwork_tip: false },
     tutorialGrace: 0,
@@ -382,6 +561,506 @@
   var $ = (id) => document.getElementById(id);
   var canvas = document.getElementById("gameCanvas");
   var ctx = canvas ? canvas.getContext("2d", { alpha: false }) : null;
+
+  // src/systems/settings.js
+  var SETTINGS_KEY = "neon_strike_settings_v1";
+  var PROFILE_KEY = "neon_strike_profile_v1";
+  var SETTINGS_DEFAULTS = Object.freeze({
+    masterVolume: 0.8,
+    musicVolume: 0.55,
+    sfxVolume: 0.8,
+    screenShake: 1,
+    // 0..1 multiplier
+    flashIntensity: 1,
+    // 0..1 multiplier
+    hitStop: true,
+    reducedMotion: false
+  });
+  var UNIT_KEYS = ["masterVolume", "musicVolume", "sfxVolume", "screenShake", "flashIntensity"];
+  var BOOL_KEYS = ["hitStop", "reducedMotion"];
+  function safeGet(key) {
+    try {
+      const raw = localStorage.getItem(key);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+  function safeSet(key, val) {
+    try {
+      localStorage.setItem(key, JSON.stringify(val));
+    } catch (e) {
+    }
+  }
+  var clamp01 = (v, d) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : d;
+  };
+  function sanitizeSettings(raw) {
+    const out = { ...SETTINGS_DEFAULTS };
+    if (!raw || typeof raw !== "object") return out;
+    for (const k of UNIT_KEYS) if (k in raw) out[k] = clamp01(raw[k], SETTINGS_DEFAULTS[k]);
+    for (const k of BOOL_KEYS) if (k in raw) out[k] = raw[k] === true;
+    return out;
+  }
+  var current = sanitizeSettings(safeGet(SETTINGS_KEY));
+  var listeners = [];
+  function getSettings() {
+    return current;
+  }
+  function setSetting(key, value) {
+    if (!(key in SETTINGS_DEFAULTS)) return current;
+    current = sanitizeSettings({ ...current, [key]: value });
+    safeSet(SETTINGS_KEY, current);
+    applySettingsSideEffects();
+    listeners.forEach((fn) => {
+      try {
+        fn(current);
+      } catch (e) {
+      }
+    });
+    return current;
+  }
+  function onSettingsChange(fn) {
+    listeners.push(fn);
+  }
+  function applySettingsSideEffects() {
+    try {
+      if (typeof document !== "undefined" && document.body && document.body.classList) {
+        if (current.reducedMotion) document.body.classList.add("reduced-motion");
+        else document.body.classList.remove("reduced-motion");
+      }
+    } catch (e) {
+    }
+  }
+  function shakeScale() {
+    return current.reducedMotion ? 0 : current.screenShake;
+  }
+  function flashScale() {
+    return current.flashIntensity * (current.reducedMotion ? 0.5 : 1);
+  }
+  function hitStopEnabled() {
+    return current.hitStop;
+  }
+  function reducedMotion() {
+    return current.reducedMotion;
+  }
+  function loadProfile() {
+    const p = safeGet(PROFILE_KEY) || {};
+    return {
+      flags: p.flags && typeof p.flags === "object" ? p.flags : {},
+      seenUpgrades: Array.isArray(p.seenUpgrades) ? p.seenUpgrades : []
+    };
+  }
+  function profileFlag(name) {
+    return loadProfile().flags[name] === true;
+  }
+  function setProfileFlag(name) {
+    const p = loadProfile();
+    p.flags[name] = true;
+    safeSet(PROFILE_KEY, p);
+  }
+  function hasSeenUpgrade(id) {
+    return loadProfile().seenUpgrades.includes(id);
+  }
+  function markUpgradeSeen(id) {
+    const p = loadProfile();
+    if (!p.seenUpgrades.includes(id)) {
+      p.seenUpgrades.push(id);
+      safeSet(PROFILE_KEY, p);
+    }
+  }
+
+  // src/vfx_audio/audio.js
+  var bus = { master: null, sfx: null, music: null };
+  function applyBusLevels() {
+    if (!bus.master) return;
+    const s = getSettings();
+    const t = gameState.audioCtx.currentTime;
+    try {
+      bus.master.gain.setValueAtTime(gameState.audioMuted ? 0 : s.masterVolume, t);
+      bus.sfx.gain.setValueAtTime(s.sfxVolume, t);
+      bus.music.gain.setValueAtTime(s.musicVolume * music.duck, t);
+    } catch (e) {
+    }
+  }
+  onSettingsChange(applyBusLevels);
+  function initAudio() {
+    if (gameState.audioMuted) return;
+    if (!gameState.audioCtx) {
+      gameState.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      gameState.audioEnabled = true;
+      try {
+        bus.master = gameState.audioCtx.createGain();
+        bus.master.connect(gameState.audioCtx.destination);
+        bus.sfx = gameState.audioCtx.createGain();
+        bus.sfx.connect(bus.master);
+        bus.music = gameState.audioCtx.createGain();
+        bus.music.connect(bus.master);
+      } catch (e) {
+        bus.master = bus.sfx = bus.music = null;
+      }
+      applyBusLevels();
+    }
+    if (gameState.audioCtx.state === "suspended") gameState.audioCtx.resume();
+  }
+  function refreshAudioLevels() {
+    applyBusLevels();
+  }
+  function sfxOut() {
+    return bus.sfx || gameState.audioCtx.destination;
+  }
+  function tone(type, f1, f2, t, v1, v2, delay = 0) {
+    const osc = gameState.audioCtx.createOscillator();
+    const gain = gameState.audioCtx.createGain();
+    const now = gameState.audioCtx.currentTime + delay;
+    osc.connect(gain);
+    gain.connect(sfxOut());
+    osc.type = type;
+    osc.frequency.setValueAtTime(f1, now);
+    osc.frequency.exponentialRampToValueAtTime(Math.max(1, f2), now + t);
+    gain.gain.setValueAtTime(v1, now);
+    gain.gain.exponentialRampToValueAtTime(Math.max(1e-3, v2), now + t);
+    osc.start(now);
+    osc.stop(now + t);
+  }
+  var STINGS = {
+    sting_orb: { root: 440, notes: [0, 7, 12], wave: "triangle", step: 0.06, len: 0.18, vol: 0.12 },
+    sting_mastery: { root: 392, notes: [0, 4, 7, 11, 14], wave: "triangle", step: 0.055, len: 0.22, vol: 0.13 },
+    sting_fusion: { root: 330, notes: [0, 7, 12, 16, 19, 24], wave: "sawtooth", step: 0.05, len: 0.3, vol: 0.09 },
+    sting_overclock: { root: 523, notes: [0, 12], wave: "square", step: 0.07, len: 0.12, vol: 0.06 },
+    stagger: { root: 110, notes: [0, -5, -12], wave: "sawtooth", step: 0.08, len: 0.35, vol: 0.14 },
+    finisher_ko: { root: 220, notes: [0, 7, 12, 19, 24, 31], wave: "square", step: 0.045, len: 0.4, vol: 0.08 }
+  };
+  function playSound(type) {
+    if (!gameState.audioEnabled || gameState.audioMuted || !gameState.audioCtx) return;
+    try {
+      const sting = STINGS[type];
+      if (sting) {
+        sting.notes.forEach((n, i) => {
+          const f = sting.root * Math.pow(2, n / 12);
+          tone(sting.wave, f, f * 0.995, sting.len, sting.vol, 1e-3, i * sting.step);
+        });
+        return;
+      }
+      let t = 0.15, f1 = 100, f2 = 40, v1 = 0.2, v2 = 0.01, sq = "square";
+      if (type === "jab_tell") {
+        sq = "sine";
+        f1 = 1200;
+        f2 = 800;
+        t = 0.05;
+        v1 = 0.1;
+      } else if (type === "bash_tell") {
+        sq = "sawtooth";
+        f1 = 150;
+        f2 = 50;
+        t = 0.3;
+      } else if (type === "feint_tell") {
+        sq = "triangle";
+        f1 = 400;
+        f2 = 1200;
+        t = 0.2;
+        v1 = 0.1;
+        v2 = 0;
+      } else if (type === "slip") {
+        sq = "sine";
+        f1 = 600;
+        f2 = 150;
+        t = 0.1;
+        v1 = 0.05;
+      } else if (type === "perfect_slip") {
+        f1 = 1200;
+        f2 = 300;
+      } else if (type === "ghost_step") {
+        sq = "sawtooth";
+        f1 = 300;
+        f2 = 50;
+        v1 = 0.1;
+      } else if (type === "bounce") {
+        sq = "triangle";
+        f1 = 200;
+        f2 = 100;
+        v1 = 0.1;
+      } else if (type === "laser") {
+        sq = "sawtooth";
+        f1 = 800;
+        f2 = 100;
+        t = 0.3;
+      } else if (type === "shatter") {
+        f1 = 8e3;
+        f2 = 100;
+        t = 0.25;
+        v1 = 0.3;
+      } else if (type === "hit") {
+        f1 = 200;
+        f2 = 50;
+        v1 = 0.3;
+      } else if (type === "beat_tick") {
+        sq = "sine";
+        f1 = 1760;
+        f2 = 1500;
+        t = 0.04;
+        v1 = 0.07;
+      } else if (type === "finisher_hit") {
+        tone("square", 90, 30, 0.28, 0.35, 0.01);
+        tone("sawtooth", 2400, 200, 0.18, 0.12, 1e-3);
+        return;
+      } else if (type === "finisher_miss") {
+        sq = "triangle";
+        f1 = 300;
+        f2 = 90;
+        t = 0.3;
+        v1 = 0.12;
+      } else if (type === "punish") {
+        sq = "triangle";
+        f1 = 900;
+        f2 = 1400;
+        t = 0.08;
+        v1 = 0.08;
+      } else if (type === "wager") {
+        tone("triangle", 660, 660, 0.1, 0.1, 1e-3);
+        tone("triangle", 990, 990, 0.16, 0.1, 1e-3, 0.08);
+        return;
+      } else if (type === "sweep") {
+        sq = "sine";
+        f1 = 220;
+        f2 = 1760;
+        t = 0.6;
+        v1 = 0.05;
+        v2 = 1e-3;
+      }
+      tone(sq, f1, f2, t, v1, v2);
+    } catch (e) {
+    }
+  }
+  var music = { timer: null, nextTime: 0, step: 0, bpm: 116, intensity: 0, duck: 1, noise: null };
+  var BASS = [0, 0, 12, 0, 3, 0, 10, 7];
+  var ARP = [12, 15, 19, 24, 19, 15, 12, 7];
+  function noiseBuffer() {
+    if (music.noise) return music.noise;
+    const ctx3 = gameState.audioCtx, len = Math.floor(ctx3.sampleRate * 0.05);
+    const buf = ctx3.createBuffer(1, len, ctx3.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    music.noise = buf;
+    return buf;
+  }
+  function scheduleStep(time) {
+    const ctx3 = gameState.audioCtx, out = bus.music;
+    const s = music.step % 16;
+    const voice = (type, f1, f2, dur, vol) => {
+      const o = ctx3.createOscillator(), g = ctx3.createGain();
+      o.type = type;
+      o.frequency.setValueAtTime(f1, time);
+      o.frequency.exponentialRampToValueAtTime(Math.max(1, f2), time + dur);
+      g.gain.setValueAtTime(vol, time);
+      g.gain.exponentialRampToValueAtTime(1e-3, time + dur);
+      o.connect(g);
+      g.connect(out);
+      o.start(time);
+      o.stop(time + dur + 0.02);
+    };
+    if (s % 4 === 0) voice("sine", 150, 42, 0.22, 0.5);
+    if (s % 2 === 0) {
+      const f = 55 * Math.pow(2, BASS[s / 2 % BASS.length] / 12);
+      voice("sawtooth", f, f, 0.16, 0.09);
+    }
+    const hat = music.intensity > 0 ? true : s % 4 === 2;
+    if (hat) {
+      const src = ctx3.createBufferSource(), hp = ctx3.createBiquadFilter(), g = ctx3.createGain();
+      src.buffer = noiseBuffer();
+      hp.type = "highpass";
+      hp.frequency.value = 7e3;
+      g.gain.setValueAtTime(s % 4 === 2 ? 0.08 : 0.035, time);
+      g.gain.exponentialRampToValueAtTime(1e-3, time + 0.04);
+      src.connect(hp);
+      hp.connect(g);
+      g.connect(out);
+      src.start(time);
+      src.stop(time + 0.05);
+    }
+    if (music.intensity > 0 && s % 2 === 1) {
+      const f = 220 * Math.pow(2, ARP[(s - 1) / 2 % ARP.length] / 12);
+      voice("square", f, f, 0.08, 0.025);
+    }
+  }
+  function tick() {
+    if (!gameState.audioCtx || !bus.music) return;
+    const ctx3 = gameState.audioCtx, stepDur = 60 / music.bpm / 4;
+    if (music.nextTime < ctx3.currentTime) music.nextTime = ctx3.currentTime + 0.05;
+    while (music.nextTime < ctx3.currentTime + 0.2) {
+      try {
+        scheduleStep(music.nextTime);
+      } catch (e) {
+        stopMusic();
+        return;
+      }
+      music.nextTime += stepDur;
+      music.step++;
+    }
+  }
+  function startMusic() {
+    if (music.timer || !gameState.audioCtx || !bus.music || typeof setInterval !== "function") return;
+    if (typeof gameState.audioCtx.createBuffer !== "function" || typeof gameState.audioCtx.createBiquadFilter !== "function") return;
+    if (typeof gameState.audioCtx.currentTime !== "number" || typeof gameState.audioCtx.sampleRate !== "number") return;
+    music.nextTime = 0;
+    music.step = 0;
+    music.timer = setInterval(tick, 50);
+  }
+  function stopMusic() {
+    if (music.timer) {
+      clearInterval(music.timer);
+      music.timer = null;
+    }
+  }
+  function setMusicIntensity(level) {
+    music.intensity = level ? 1 : 0;
+  }
+  function duckMusic(on) {
+    music.duck = on ? 0.3 : 1;
+    applyBusLevels();
+  }
+
+  // src/vfx_audio/effects.js
+  function spawnFloatingText(x, y, text, color) {
+    gameState.floatingTexts.push({ x, y, text, color, life: 1, velocity: -1.5 });
+  }
+  function showToast(msg, color = "#fff") {
+    let yOffset = 0;
+    gameState.floatingTexts.forEach((ft) => {
+      if (ft.y >= gameState.height * 0.25 - 10 && ft.y <= gameState.height * 0.25 + 100 && ft.life > 0.5) {
+        yOffset += 25;
+      }
+    });
+    spawnFloatingText(gameState.width / 2, gameState.height * 0.25 + yOffset, msg, color);
+    if (gameState.floatingTexts.length > 0) {
+      gameState.floatingTexts[gameState.floatingTexts.length - 1].velocity = -0.5;
+      gameState.floatingTexts[gameState.floatingTexts.length - 1].life = 2;
+    }
+  }
+  function triggerShockwave(x, y, color) {
+    gameState.shockwaves.push({ x, y, radius: 10, maxRadius: 300, color, alpha: 1 });
+  }
+  function doFlash(amt) {
+    const scaled = amt * flashScale();
+    if (scaled <= 1e-3) return;
+    const sf = document.getElementById("screen-flash");
+    if (sf) {
+      sf.style.opacity = scaled;
+      setTimeout(() => {
+        sf.style.opacity = 0;
+      }, 60);
+    }
+  }
+  function spawnScorePop(x, y, pts, big = false) {
+    if (!gameState.scorePops) gameState.scorePops = [];
+    if (gameState.scorePops.length > 24) gameState.scorePops.shift();
+    gameState.scorePops.push({ x: x + (Math.random() * 30 - 15), y, text: `+${pts.toLocaleString()}`, life: 1, big });
+  }
+  function createImpact(x, y, color) {
+    if (gameState.particles.length > 100) return;
+    let count = gameState.particles.length > 80 ? 3 : 5;
+    for (let i = 0; i < count; i++) {
+      gameState.particles.push({ x, y, vx: (Math.random() - 0.5) * 20, vy: (Math.random() - 0.5) * 20, life: 1, color: color || "#fff", type: "spark" });
+    }
+  }
+  function createVacuum(cx, cy) {
+    for (let i = 0; i < 15; i++) {
+      let a = Math.random() * Math.PI * 2;
+      let d = 60 + Math.random() * 40;
+      gameState.particles.push({ x: cx + Math.cos(a) * d, y: cy + Math.sin(a) * d, vx: -Math.cos(a) * 10, vy: -Math.sin(a) * 10, life: 0.5, color: "#ffffff", type: "vacuum" });
+    }
+  }
+  function createShatter(x, y, color) {
+    for (let i = 0; i < 20; i++) {
+      gameState.particles.push({ x, y, vx: (Math.random() - 0.5) * 40, vy: (Math.random() - 0.5) * 40, life: 1.5, color, type: "shard", size: Math.random() * 8 + 3, rot: Math.random() * Math.PI * 2, rotV: (Math.random() - 0.5) * 0.5 });
+    }
+    playSound("shatter");
+  }
+  function updateParticlesAndTrails() {
+    for (let i = gameState.particles.length - 1; i >= 0; i--) {
+      gameState.particles[i].x += gameState.particles[i].vx;
+      gameState.particles[i].y += gameState.particles[i].vy;
+      gameState.particles[i].life -= 0.04;
+      if (gameState.particles[i].life <= 0) gameState.particles.splice(i, 1);
+    }
+    for (let i = gameState.floatingTexts.length - 1; i >= 0; i--) {
+      gameState.floatingTexts[i].y += gameState.floatingTexts[i].velocity;
+      gameState.floatingTexts[i].life -= 0.02;
+      if (gameState.floatingTexts[i].life <= 0) gameState.floatingTexts.splice(i, 1);
+    }
+    if (gameState.scorePops) for (let i = gameState.scorePops.length - 1; i >= 0; i--) {
+      gameState.scorePops[i].y -= gameState.scorePops[i].big ? 0.9 : 1.3;
+      gameState.scorePops[i].life -= gameState.scorePops[i].big ? 0.014 : 0.025;
+      if (gameState.scorePops[i].life <= 0) gameState.scorePops.splice(i, 1);
+    }
+    for (let i = gameState.shockwaves.length - 1; i >= 0; i--) {
+      gameState.shockwaves[i].radius += 15;
+      gameState.shockwaves[i].alpha -= 0.05;
+      if (gameState.shockwaves[i].alpha <= 0) gameState.shockwaves.splice(i, 1);
+    }
+    if (gameState.player && gameState.player.trails) {
+      gameState.player.trails.forEach((t) => {
+        t.opacity -= 0.06;
+      });
+      gameState.player.trails = gameState.player.trails.filter((t) => t.opacity > 0);
+      gameState.player.trailTimer--;
+      if (gameState.player.trailTimer <= 0 && (gameState.isInstinct || gameState.player.state === "ghost_step")) {
+        gameState.player.trails.push({ x: gameState.player.x, y: gameState.player.y, lane: gameState.player.lane, opacity: 0.6, state: gameState.player.state, punchType: gameState.player.punchType, hitFrame: gameState.player.hitFrame, slipBuff: gameState.player.slipBuff, instinct: gameState.isInstinct });
+        gameState.player.trailTimer = 4;
+        if (gameState.player.trails.length > 6) gameState.player.trails.shift();
+      }
+    }
+  }
+
+  // src/systems/score.js
+  var SC = CONSTANTS.SCORE;
+  function comboMultiplier(combo) {
+    const steps = Math.floor(Math.max(0, combo || 0) / SC.comboStep);
+    return Math.min(SC.maxComboMult, 1 + steps * SC.comboMultStep);
+  }
+  function wagerMultiplier() {
+    return gameState.wagerMult || 1;
+  }
+  function currentMultiplier() {
+    return comboMultiplier(gameState.combo) * wagerMultiplier();
+  }
+  function addScore(base, x, y, opts = {}) {
+    if (!base || base <= 0) return 0;
+    const mult = opts.noCombo ? wagerMultiplier() : currentMultiplier();
+    const pts = Math.round(base * mult);
+    gameState.score = (gameState.score || 0) + pts;
+    if (x !== void 0 && y !== void 0 && !opts.silent) spawnScorePop(x, y, pts, !!opts.big);
+    return pts;
+  }
+  function hitScore(punchType) {
+    const H = SC.hit;
+    if (punchType === "jab3") return H.jab3;
+    if (punchType === "jab1" || punchType === "jab2") return H.jab;
+    if (punchType === "hook" || punchType === "check_hook") return H.hook;
+    if (punchType === "cross") return H.cross;
+    return H.guard;
+  }
+  function killScore(type) {
+    return SC.kill[type] || SC.kill.grunt;
+  }
+  function rankForRun({ score, slips = 0, bossKills = 0 }) {
+    const R = SC.rank;
+    let grade = "C";
+    if (score >= R.S) grade = "S";
+    else if (score >= R.A) grade = "A";
+    else if (score >= R.B) grade = "B";
+    const reqSlipsForS = Math.max(1, Math.min(bossKills, 3));
+    if (grade === "S" && slips < reqSlipsForS) grade = "A";
+    if (grade === "A" && slips < 1) grade = "B";
+    return grade;
+  }
+  function pbDeltaText(score, prevBest) {
+    if (prevBest === null || prevBest === void 0) return { text: "FIRST RECORDED RUN", kind: "new" };
+    const d = score - prevBest;
+    if (d > 0) return { text: `+${d.toLocaleString()} OVER YOUR BEST`, kind: "up" };
+    if (d === 0) return { text: "TIED YOUR BEST", kind: "even" };
+    return { text: `${Math.abs(d).toLocaleString()} SHORT OF YOUR BEST`, kind: "down" };
+  }
 
   // src/ui/ui.js
   var HUD = {
@@ -439,6 +1118,31 @@
     }
   };
   function updateHUD() {
+    const target = Math.round(gameState.score || 0);
+    if (gameState.displayScore !== target) {
+      const diff = target - gameState.displayScore;
+      gameState.displayScore = Math.abs(diff) < 4 ? target : gameState.displayScore + Math.ceil(diff * 0.2);
+    }
+    if (gameState.lastHUD.score !== gameState.displayScore) {
+      const el = $("score-ui");
+      if (el) el.innerText = gameState.displayScore.toLocaleString();
+      gameState.lastHUD.score = gameState.displayScore;
+    }
+    const cm = comboMultiplier(gameState.combo);
+    const key = `${cm}|${gameState.wagerMult}`;
+    if (gameState.lastHUD.wager !== key) {
+      const m = $("score-mult");
+      if (m) {
+        m.innerText = `\xD7${cm.toFixed(2)} COMBO`;
+        m.classList.toggle("hot", cm > 1);
+      }
+      const w = $("wager-badge");
+      if (w) {
+        w.innerText = gameState.wagerMult > 1 ? `\xD7${gameState.wagerMult} WAGER` : "";
+        w.style.display = gameState.wagerMult > 1 ? "inline-block" : "none";
+      }
+      gameState.lastHUD.wager = key;
+    }
     if (gameState.lastHUD.combo !== gameState.combo) {
       HUD.combo.innerText = gameState.combo;
       gameState.lastHUD.combo = gameState.combo;
@@ -478,222 +1182,161 @@
     }
   }
 
-  // src/vfx_audio/audio.js
-  function initAudio() {
-    if (gameState.audioMuted) return;
-    if (!gameState.audioCtx) {
-      gameState.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      gameState.audioEnabled = true;
-    }
-    if (gameState.audioCtx.state === "suspended") gameState.audioCtx.resume();
-  }
-  function playSound(type) {
-    if (!gameState.audioEnabled || gameState.audioMuted) return;
-    const osc = gameState.audioCtx.createOscillator();
-    const gain = gameState.audioCtx.createGain();
-    const now = gameState.audioCtx.currentTime;
-    osc.connect(gain);
-    gain.connect(gameState.audioCtx.destination);
-    let t = 0.15, f1 = 100, f2 = 40, v1 = 0.2, v2 = 0.01, sq = "square";
-    if (type === "jab_tell") {
-      sq = "sine";
-      f1 = 1200;
-      f2 = 800;
-      t = 0.05;
-      v1 = 0.1;
-    } else if (type === "bash_tell") {
-      sq = "sawtooth";
-      f1 = 150;
-      f2 = 50;
-      t = 0.3;
-    } else if (type === "feint_tell") {
-      sq = "triangle";
-      f1 = 400;
-      f2 = 1200;
-      t = 0.2;
-      v1 = 0.1;
-      v2 = 0;
-    } else if (type === "slip") {
-      sq = "sine";
-      f1 = 600;
-      f2 = 150;
-      t = 0.1;
-      v1 = 0.05;
-    } else if (type === "perfect_slip") {
-      f1 = 1200;
-      f2 = 300;
-    } else if (type === "ghost_step") {
-      sq = "sawtooth";
-      f1 = 300;
-      f2 = 50;
-      v1 = 0.1;
-    } else if (type === "bounce") {
-      sq = "triangle";
-      f1 = 200;
-      f2 = 100;
-      v1 = 0.1;
-    } else if (type === "laser") {
-      sq = "sawtooth";
-      f1 = 800;
-      f2 = 100;
-      t = 0.3;
-    } else if (type === "shatter") {
-      f1 = 8e3;
-      f2 = 100;
-      t = 0.25;
-      v1 = 0.3;
-    } else if (type === "hit") {
-      f1 = 200;
-      f2 = 50;
-      v1 = 0.3;
-    }
-    osc.type = sq;
-    osc.frequency.setValueAtTime(f1, now);
-    osc.frequency.exponentialRampToValueAtTime(Math.max(1, f2), now + t);
-    gain.gain.setValueAtTime(v1, now);
-    gain.gain.exponentialRampToValueAtTime(Math.max(1e-3, v2), now + t);
-    osc.start(now);
-    osc.stop(now + t);
-  }
-
-  // src/vfx_audio/effects.js
-  function spawnFloatingText(x, y, text, color) {
-    gameState.floatingTexts.push({ x, y, text, color, life: 1, velocity: -1.5 });
-  }
-  function showToast(msg, color = "#fff") {
-    let yOffset = 0;
-    gameState.floatingTexts.forEach((ft) => {
-      if (ft.y >= gameState.height * 0.25 - 10 && ft.y <= gameState.height * 0.25 + 100 && ft.life > 0.5) {
-        yOffset += 25;
-      }
-    });
-    spawnFloatingText(gameState.width / 2, gameState.height * 0.25 + yOffset, msg, color);
-    if (gameState.floatingTexts.length > 0) {
-      gameState.floatingTexts[gameState.floatingTexts.length - 1].velocity = -0.5;
-      gameState.floatingTexts[gameState.floatingTexts.length - 1].life = 2;
-    }
-  }
-  function triggerShockwave(x, y, color) {
-    gameState.shockwaves.push({ x, y, radius: 10, maxRadius: 300, color, alpha: 1 });
-  }
-  function doFlash(amt) {
-    const sf = document.getElementById("screen-flash");
-    if (sf) {
-      sf.style.opacity = amt;
-      setTimeout(() => {
-        sf.style.opacity = 0;
-      }, 60);
-    }
-  }
-  function createImpact(x, y, color) {
-    if (gameState.particles.length > 100) return;
-    let count = gameState.particles.length > 80 ? 3 : 5;
-    for (let i = 0; i < count; i++) {
-      gameState.particles.push({ x, y, vx: (Math.random() - 0.5) * 20, vy: (Math.random() - 0.5) * 20, life: 1, color: color || "#fff", type: "spark" });
-    }
-  }
-  function createVacuum(cx, cy) {
-    for (let i = 0; i < 15; i++) {
-      let a = Math.random() * Math.PI * 2;
-      let d = 60 + Math.random() * 40;
-      gameState.particles.push({ x: cx + Math.cos(a) * d, y: cy + Math.sin(a) * d, vx: -Math.cos(a) * 10, vy: -Math.sin(a) * 10, life: 0.5, color: "#ffffff", type: "vacuum" });
-    }
-  }
-  function createShatter(x, y, color) {
-    for (let i = 0; i < 20; i++) {
-      gameState.particles.push({ x, y, vx: (Math.random() - 0.5) * 40, vy: (Math.random() - 0.5) * 40, life: 1.5, color, type: "shard", size: Math.random() * 8 + 3, rot: Math.random() * Math.PI * 2, rotV: (Math.random() - 0.5) * 0.5 });
-    }
-    playSound("shatter");
-  }
-  function updateParticlesAndTrails() {
-    for (let i = gameState.particles.length - 1; i >= 0; i--) {
-      gameState.particles[i].x += gameState.particles[i].vx;
-      gameState.particles[i].y += gameState.particles[i].vy;
-      gameState.particles[i].life -= 0.04;
-      if (gameState.particles[i].life <= 0) gameState.particles.splice(i, 1);
-    }
-    for (let i = gameState.floatingTexts.length - 1; i >= 0; i--) {
-      gameState.floatingTexts[i].y += gameState.floatingTexts[i].velocity;
-      gameState.floatingTexts[i].life -= 0.02;
-      if (gameState.floatingTexts[i].life <= 0) gameState.floatingTexts.splice(i, 1);
-    }
-    for (let i = gameState.shockwaves.length - 1; i >= 0; i--) {
-      gameState.shockwaves[i].radius += 15;
-      gameState.shockwaves[i].alpha -= 0.05;
-      if (gameState.shockwaves[i].alpha <= 0) gameState.shockwaves.splice(i, 1);
-    }
-    if (gameState.player && gameState.player.trails) {
-      gameState.player.trails.forEach((t) => {
-        t.opacity -= 0.06;
-      });
-      gameState.player.trails = gameState.player.trails.filter((t) => t.opacity > 0);
-      gameState.player.trailTimer--;
-      if (gameState.player.trailTimer <= 0 && (gameState.isInstinct || gameState.player.state === "ghost_step")) {
-        gameState.player.trails.push({ x: gameState.player.x, y: gameState.player.y, lane: gameState.player.lane, opacity: 0.6, state: gameState.player.state, punchType: gameState.player.punchType, hitFrame: gameState.player.hitFrame, slipBuff: gameState.player.slipBuff, instinct: gameState.isInstinct });
-        gameState.player.trailTimer = 4;
-        if (gameState.player.trails.length > 6) gameState.player.trails.shift();
-      }
-    }
-  }
-
   // src/systems/sequences.js
   var Sequences = {
     stage1Intro: [
-      { type: "tint", color: "rgba(0, 0, 0, 0.8)", duration: 30 },
       { type: "text", title: "STAGE 1: SHATTERED CATHEDRAL", duration: 150 },
-      { type: "tint", color: "transparent", duration: 30 },
       { type: "resume" }
     ]
   };
+  var HOME_X = 180;
+  var FADE_FRAMES = 14;
+  function parseColor(c) {
+    if (!c || c === "transparent") return [0, 0, 0, 0];
+    const m = String(c).match(/rgba?\(([^)]+)\)/);
+    if (!m) return [0, 0, 0, 0];
+    const p = m[1].split(",").map((v) => parseFloat(v));
+    return [p[0] || 0, p[1] || 0, p[2] || 0, p[3] === void 0 ? 1 : p[3]];
+  }
+  var colorStr = (c) => `rgba(${Math.round(c[0])}, ${Math.round(c[1])}, ${Math.round(c[2])}, ${c[3].toFixed(3)})`;
   var SequenceManager = {
     active: false,
     currentSequence: null,
     stepIndex: 0,
     timer: 0,
+    stepDuration: 0,
+    waiting: false,
     overlayColor: "transparent",
-    text: { title: "", subtitle: "", alpha: 0 },
+    overlayFrom: [0, 0, 0, 0],
+    overlayTo: [0, 0, 0, 0],
+    overlayNow: [0, 0, 0, 0],
+    fadeT: 1,
+    text: { title: "", subtitle: "", alpha: 0, age: 0 },
+    walkFromX: HOME_X,
     play: function(seqId) {
       if (!Sequences[seqId]) return;
-      this.active = true;
-      this.currentSequence = Sequences[seqId];
-      this.stepIndex = 0;
-      this.startStep();
+      this.playDynamic(Sequences[seqId].slice());
     },
-    // NEW: Trigger custom dynamic cinematic overlays directly!
     playDynamic: function(stepsArray) {
       this.active = true;
+      this.waiting = false;
       this.currentSequence = stepsArray;
       this.stepIndex = 0;
       this.startStep();
     },
+    // Insert steps right after the current one (used by the wager to add its
+    // "accepted" card once the player has chosen).
+    injectNext: function(steps) {
+      if (!this.currentSequence) return;
+      this.currentSequence.splice(this.stepIndex + 1, 0, ...steps);
+    },
+    // Called by the wager UI once the player has chosen.
+    resumeFromWait: function() {
+      if (!this.waiting) return;
+      this.waiting = false;
+      this.stepIndex++;
+      this.startStep();
+    },
     startStep: function() {
-      if (!this.currentSequence || this.stepIndex >= this.currentSequence.length) {
-        this.active = false;
-        return;
-      }
-      let step = this.currentSequence[this.stepIndex];
-      this.timer = step.duration || 0;
-      if (step.type === "tint") {
-        this.overlayColor = step.color;
-      }
-      if (step.type === "text") {
-        this.text = { title: step.title, subtitle: step.subtitle || "", alpha: 1 };
-      }
-      if (step.type === "resume") {
-        this.active = false;
-        this.overlayColor = "transparent";
-        this.text.alpha = 0;
+      for (let guard = 0; guard < 64; guard++) {
+        if (!this.currentSequence || this.stepIndex >= this.currentSequence.length) {
+          this.active = false;
+          return;
+        }
+        const step = this.currentSequence[this.stepIndex];
+        this.timer = step.duration || 0;
+        this.stepDuration = this.timer;
+        if (step.type === "call") {
+          try {
+            step.fn && step.fn();
+          } catch (e) {
+            console.warn(e);
+          }
+          this.stepIndex++;
+          continue;
+        }
+        if (step.type === "wager") {
+          if (gameState.wagerOffer && typeof window !== "undefined" && window.engineShowWager) {
+            this.waiting = true;
+            window.engineShowWager();
+            return;
+          }
+          this.stepIndex++;
+          continue;
+        }
+        if (step.type === "tint") {
+          this.overlayFrom = this.overlayNow.slice();
+          this.overlayTo = parseColor(step.color);
+          this.fadeT = 0;
+          this.overlayColor = step.color;
+        }
+        if (step.type === "text") {
+          this.text = { title: step.title, subtitle: step.subtitle || "", alpha: 1, age: 0 };
+        }
+        if (step.type === "walkout" && gameState.player) {
+          this.walkFromX = gameState.player.x;
+          gameState.player.state = "idle";
+          gameState.player.walking = true;
+        }
+        if (step.type === "walkin" && gameState.player) {
+          gameState.player.x = -80;
+          gameState.player.walking = true;
+          gameState.player.lane = 1;
+          gameState.player.y = gameState.height * CONSTANTS.LANE_Y[1];
+        }
+        if (step.type === "sweep") {
+          gameState.lightSweep = 0;
+          gameState.paletteT = 0;
+        }
+        if (step.type === "resume") {
+          this.active = false;
+          this.overlayColor = "transparent";
+          this.overlayNow = [0, 0, 0, 0];
+          this.overlayTo = [0, 0, 0, 0];
+          this.text.alpha = 0;
+          gameState.lightSweep = -1;
+          gameState.paletteT = 1;
+          if (gameState.player) {
+            gameState.player.walking = false;
+            if (gameState.player.x < 0 || gameState.player.x > gameState.width) gameState.player.x = HOME_X;
+          }
+          return;
+        }
         return;
       }
     },
     update: function() {
-      if (!this.active) return;
+      if (!this.active || this.waiting) return;
+      const step = this.currentSequence && this.currentSequence[this.stepIndex];
+      if (this.fadeT < 1) {
+        this.fadeT = Math.min(1, this.fadeT + 1 / (reducedMotion() ? 6 : FADE_FRAMES));
+        for (let i = 0; i < 4; i++) this.overlayNow[i] = this.overlayFrom[i] + (this.overlayTo[i] - this.overlayFrom[i]) * this.fadeT;
+      }
+      if (step && this.stepDuration > 0) {
+        const k = 1 - this.timer / this.stepDuration;
+        const ease2 = 0.5 - 0.5 * Math.cos(Math.PI * Math.min(1, k));
+        if (step.type === "walkout" && gameState.player) {
+          gameState.player.x = this.walkFromX + (gameState.width + 120 - this.walkFromX) * ease2;
+          gameState.player.y += (gameState.height * CONSTANTS.LANE_Y[1] - gameState.player.y) * 0.1;
+        } else if (step.type === "walkin" && gameState.player) {
+          gameState.player.x = -80 + (HOME_X + 80) * ease2;
+        } else if (step.type === "sweep") {
+          gameState.lightSweep = k;
+          gameState.paletteT = ease2;
+        }
+      }
+      if (step && step.type === "text") this.text.age++;
       if (this.timer > 0) {
         this.timer--;
-        if (this.timer < 30 && this.text.alpha > 0) {
+        if (this.timer < 30 && this.text.alpha > 0 && step && step.type === "text") {
           this.text.alpha = Math.max(0, this.text.alpha - 0.05);
         }
         if (this.timer <= 0) {
+          if (step && step.type === "sweep") {
+            gameState.lightSweep = -1;
+            gameState.paletteT = 1;
+          }
+          if (step && (step.type === "walkout" || step.type === "walkin") && gameState.player) gameState.player.walking = false;
           this.stepIndex++;
           this.startStep();
         }
@@ -701,20 +1344,34 @@
     },
     draw: function(ctx3, w, h) {
       if (!this.active) return;
-      if (this.overlayColor !== "transparent") {
-        ctx3.fillStyle = this.overlayColor;
+      if (this.overlayNow[3] > 2e-3) {
+        ctx3.fillStyle = colorStr(this.overlayNow);
         ctx3.fillRect(0, 0, w, h);
       }
-      if (this.text.alpha > 0) {
+      if (this.text.alpha > 0 && this.text.title) {
+        const a = this.text.alpha;
+        const inT = Math.min(1, this.text.age / 12);
+        const slide = reducedMotion() ? 0 : (1 - inT) * 60;
         ctx3.save();
-        ctx3.fillStyle = `rgba(255, 255, 255, ${this.text.alpha})`;
+        const bandH = this.text.subtitle ? 110 : 80;
+        const bg = ctx3.createLinearGradient(0, 0, w, 0);
+        bg.addColorStop(0, "rgba(0,0,0,0)");
+        bg.addColorStop(0.2, `rgba(0,0,0,${0.72 * a * inT})`);
+        bg.addColorStop(0.8, `rgba(0,0,0,${0.72 * a * inT})`);
+        bg.addColorStop(1, "rgba(0,0,0,0)");
+        ctx3.fillStyle = bg;
+        ctx3.fillRect(0, h / 2 - bandH / 2 - 14, w, bandH);
+        ctx3.fillStyle = `rgba(0, 255, 255, ${0.6 * a * inT})`;
+        ctx3.fillRect(w * 0.2, h / 2 - bandH / 2 - 14, w * 0.6 * inT, 2);
+        ctx3.fillRect(w * 0.8 - w * 0.6 * inT, h / 2 + bandH / 2 - 14, w * 0.6 * inT, 2);
+        ctx3.fillStyle = `rgba(255, 255, 255, ${a * inT})`;
         ctx3.textAlign = "center";
         ctx3.font = "900 italic 40px Orbitron";
-        ctx3.fillText(this.text.title, w / 2, h / 2 - 10);
+        ctx3.fillText(this.text.title, w / 2 + slide, h / 2 - 10);
         if (this.text.subtitle) {
-          ctx3.fillStyle = `rgba(0, 255, 255, ${this.text.alpha})`;
+          ctx3.fillStyle = `rgba(0, 255, 255, ${a * inT})`;
           ctx3.font = "bold 20px Orbitron";
-          ctx3.fillText(this.text.subtitle, w / 2, h / 2 + 30);
+          ctx3.fillText(this.text.subtitle, w / 2 - slide, h / 2 + 30);
         }
         ctx3.restore();
       }
@@ -784,6 +1441,31 @@
   function todayKey(date = /* @__PURE__ */ new Date()) {
     const y = date.getUTCFullYear(), m = String(date.getUTCMonth() + 1).padStart(2, "0"), d = String(date.getUTCDate()).padStart(2, "0");
     return `${y}-${m}-${d}`;
+  }
+
+  // src/systems/wagers.js
+  var NONE = CONSTANTS.AFFIXES[0];
+  function rollWagerOffer(stage) {
+    if (stage < CONSTANTS.WAGERS.firstStage || CONSTANTS.isBossStage(stage)) return null;
+    const pool = CONSTANTS.wagerPool();
+    if (!pool.length) return null;
+    return pool[Math.floor(random() * pool.length)];
+  }
+  function clearWager() {
+    gameState.currentAffix = NONE;
+    gameState.wagerMult = 1;
+  }
+  function acceptWager() {
+    const offer = gameState.wagerOffer;
+    if (!offer) return null;
+    gameState.currentAffix = offer;
+    gameState.wagerMult = offer.scoreMult || 1;
+    gameState.wagerOffer = null;
+    return offer;
+  }
+  function declineWager() {
+    gameState.wagerOffer = null;
+    clearWager();
   }
 
   // src/systems/progression/apply.js
@@ -856,6 +1538,7 @@
   }
   function applyUpgrade(st, upgrade) {
     if (!upgrade || !upgrade.effects) return;
+    if (!st.currentDraftOptions.some((o) => o.id === upgrade.id)) return;
     for (const effect of upgrade.effects) applyEffect(st, effect);
     if (upgrade.kind === "overclock") {
       const screenEl = document.getElementById("upgrade-screen");
@@ -868,21 +1551,62 @@
     }
     if (st.pendingUpgrades > 0) st.pendingUpgrades -= 1;
     st.currentDraftOptions = [];
-    if (st.pendingUpgrades > 0) {
-      if (window.engineTriggerUpgradeDraft) {
-        window.engineTriggerUpgradeDraft();
+    let upgradeScreen = document.getElementById("upgrade-screen");
+    if (upgradeScreen) upgradeScreen.style.display = "none";
+    const proceed = () => {
+      if (st.pendingUpgrades > 0) {
+        if (window.engineTriggerUpgradeDraft) window.engineTriggerUpgradeDraft();
+      } else {
+        st.screen = "playing";
       }
-    } else {
-      st.screen = "playing";
-      let upgradeScreen = document.getElementById("upgrade-screen");
-      if (upgradeScreen) upgradeScreen.style.display = "none";
+    };
+    if (window.enginePlayUpgradeVignette) window.enginePlayUpgradeVignette(upgrade, proceed);
+    else proceed();
+  }
+  var ARC_COLORS = { 1: "#22d3ee", 2: "#34d399", 3: "#f87171", 4: "#c084fc", 5: "#facc15" };
+  var ARC_TINTS = {
+    1: "rgba(34, 211, 238, 0.18)",
+    2: "rgba(52, 211, 153, 0.18)",
+    3: "rgba(248, 113, 113, 0.18)",
+    4: "rgba(192, 132, 252, 0.18)",
+    5: "rgba(250, 204, 21, 0.18)"
+  };
+  function stageHudText(stage) {
+    var _a;
+    const arc = Math.min(CONSTANTS.getArcIndex(stage), 5);
+    const law = CONSTANTS.ARC_LAWS[arc] || CONSTANTS.ARC_LAWS[5];
+    const data = ((_a = CONSTANTS.ARC_STAGE_TABLES[arc]) == null ? void 0 : _a[CONSTANTS.getLevelInArc(stage)]) || { stageName: "UNKNOWN DEPTHS" };
+    return { text: `${law.shortName}: ${data.stageName}`, color: ARC_COLORS[arc] || "#ec4899" };
+  }
+  function refreshStageHud() {
+    const stageUI = document.getElementById("stage-ui");
+    const affixUI = document.getElementById("affix-ui");
+    const hud = stageHudText(gameState.currentStage);
+    if (stageUI) {
+      stageUI.innerText = hud.text;
+      stageUI.style.color = hud.color;
+      stageUI.classList.remove("stage-pulse");
+      void stageUI.offsetWidth;
+      stageUI.classList.add("stage-pulse");
     }
+    if (affixUI) affixUI.innerText = gameState.wagerMult > 1 && gameState.currentAffix ? `WAGER: ${gameState.currentAffix.name} x${gameState.wagerMult}` : "";
+  }
+  function openingSubtitle() {
+    if (!profileFlag("seenArc1Theme")) {
+      setProfileFlag("seenArc1Theme");
+      return CONSTANTS.ARC_LAWS[1].theme;
+    }
+    return CONSTANTS.STAGE_TAGLINES[1];
   }
   function advanceStage() {
     var _a;
+    const prevStage = gameState.currentStage;
+    const clearPts = addScore(CONSTANTS.SCORE.stageClear, void 0, void 0, { noCombo: true });
+    if (clearPts > 0) showToast(`STAGE CLEAR +${clearPts.toLocaleString()}`, "#facc15");
     gameState.currentStage++;
     gameState.bossDefeatedThisStage = false;
-    gameState.currentAffix = CONSTANTS.AFFIXES[Math.floor(random() * CONSTANTS.AFFIXES.length)];
+    clearWager();
+    gameState.wagerOffer = rollWagerOffer(gameState.currentStage);
     gameState.stageClearing = false;
     gameState.bossActive = false;
     gameState.stageProgress = 0;
@@ -906,6 +1630,9 @@
     let isBoss = CONSTANTS.isBossStage(gameState.currentStage);
     let safeArcIndex = Math.min(arcIndex, 5);
     let law = CONSTANTS.ARC_LAWS[safeArcIndex] || CONSTANTS.ARC_LAWS[5];
+    gameState.paletteFrom = CONSTANTS.paletteKeyForStage(prevStage);
+    gameState.paletteTo = CONSTANTS.paletteKeyForStage(gameState.currentStage);
+    gameState.paletteT = 0;
     gameState.hazards = [];
     gameState.hazardCooldown = CONSTANTS.HAZARDS.cooldownFrames;
     gameState.hazardsThisStage = 0;
@@ -922,47 +1649,34 @@
       }
     }
     const LANE_LABEL = ["TOP", "MID", "BOTTOM"];
-    const hotLaneCard = gameState.hotLane >= 0 ? [{ type: "text", title: "LANE SURGE", subtitle: `${LANE_LABEL[gameState.hotLane]} LANE RUNNING HOT`, duration: 150 }] : [];
+    const hotLaneCard = gameState.hotLane >= 0 ? [{ type: "text", title: "LANE SURGE", subtitle: `${LANE_LABEL[gameState.hotLane]} LANE RUNNING HOT`, duration: 120 }] : [];
     let stageData = ((_a = CONSTANTS.ARC_STAGE_TABLES[safeArcIndex]) == null ? void 0 : _a[levelInArc]) || { stageName: "UNKNOWN DEPTHS" };
     let titleText = isBoss ? stageData.stageName : `${law.shortName} \u2014 ${stageData.stageName}`;
-    let subtitleText = isBoss ? law.uiText : law.theme;
-    let affixName = gameState.currentAffix.name !== "NONE" ? `[${gameState.currentAffix.name}]` : "SYSTEM STABLE";
-    let affixDesc = gameState.currentAffix.name !== "NONE" ? gameState.currentAffix.desc : "No anomalies detected.";
-    const ARC_COLORS = { 1: "#22d3ee", 2: "#34d399", 3: "#f87171", 4: "#c084fc", 5: "#facc15" };
-    const ARC_TINTS = {
-      1: "rgba(34, 211, 238, 0.18)",
-      2: "rgba(52, 211, 153, 0.18)",
-      3: "rgba(248, 113, 113, 0.18)",
-      4: "rgba(192, 132, 252, 0.18)",
-      5: "rgba(250, 204, 21, 0.18)"
-    };
-    const isNewArc = levelInArc === 1 && gameState.currentStage > 1;
+    let subtitleText = isBoss ? law.uiText : CONSTANTS.STAGE_TAGLINES[levelInArc];
+    const isNewArc = CONSTANTS.locateStage(gameState.currentStage).ordinal === 1 && gameState.currentStage > 1;
     const chapterCardSteps = isNewArc ? [
-      { type: "tint", color: "rgba(0, 0, 0, 0.92)", duration: 35 },
+      { type: "tint", color: "rgba(0, 0, 0, 0.82)", duration: 20 },
       { type: "text", title: `ARC ${safeArcIndex}`, subtitle: law.name.toUpperCase(), duration: 85 },
       { type: "tint", color: ARC_TINTS[safeArcIndex] || "rgba(236, 72, 153, 0.18)", duration: 10 },
-      { type: "text", title: law.name.toUpperCase(), subtitle: law.theme, duration: 170 }
-    ] : [
-      { type: "tint", color: "rgba(0, 0, 0, 0.9)", duration: 30 }
-    ];
+      { type: "text", title: law.name.toUpperCase(), subtitle: law.theme, duration: 160 },
+      { type: "tint", color: "transparent", duration: 10 }
+    ] : [];
+    const rm = reducedMotion();
     SequenceManager.playDynamic([
+      { type: "walkout", duration: rm ? 24 : 46 },
+      { type: "call", fn: () => {
+        playSound("sweep");
+        refreshStageHud();
+      } },
+      { type: "sweep", duration: rm ? 24 : 54 },
       ...chapterCardSteps,
-      { type: "text", title: titleText, subtitle: subtitleText, duration: 140 },
-      { type: "text", title: `STAGE MODIFIER: ${affixName}`, subtitle: affixDesc, duration: 200 },
+      { type: "text", title: titleText, subtitle: subtitleText, duration: 120 },
+      { type: "wager" },
       ...hotLaneCard,
-      { type: "tint", color: "transparent", duration: 30 },
+      { type: "walkin", duration: rm ? 24 : 44 },
+      { type: "call", fn: refreshStageHud },
       { type: "resume" }
     ]);
-    const stageUI = document.getElementById("stage-ui");
-    const affixUI = document.getElementById("affix-ui");
-    if (stageUI) {
-      stageUI.innerText = `${law.shortName}: ${stageData.stageName}`;
-      stageUI.style.color = ARC_COLORS[safeArcIndex] || "#ec4899";
-      stageUI.classList.remove("stage-pulse");
-      void stageUI.offsetWidth;
-      stageUI.classList.add("stage-pulse");
-    }
-    if (affixUI) affixUI.innerText = gameState.currentAffix.name !== "NONE" ? affixName : "";
   }
 
   // src/systems/progression/requirements.js
@@ -1092,6 +1806,22 @@
     pushRecentlyOffered(st, chosen.map((c) => c.id));
     return chosen;
   }
+  var TREE_SHORT = { speed: "SPD", power: "PWR", technique: "TEC" };
+  function buildFusionTease(st, pool, arcIndex) {
+    if (arcIndex !== 1) return null;
+    if ((st.currentDraftOptions || []).some((o) => o.kind === "fusion")) return null;
+    let best = null;
+    for (const f of pool.fusions) {
+      if (st.acquiredUpgradeIds.includes(f.id)) continue;
+      const need = f.reqs && f.reqs.orbTreeAtLeast || {};
+      let missing = 0;
+      for (const [tree, lvl] of Object.entries(need)) missing += Math.max(0, lvl - (st.orbCounts[tree] || 0));
+      if (!best || missing < best.missing) best = { fusion: f, missing, need };
+    }
+    if (!best) return null;
+    const reqText = Object.entries(best.need).map(([t, l]) => `${TREE_SHORT[t] || t} ${Math.min(st.orbCounts[t] || 0, l)}/${l}`).join(" \xB7 ");
+    return { ...best.fusion, locked: true, reqText };
+  }
 
   // src/systems/tutorial.js
   function triggerTutorial(id, title, text) {
@@ -1184,6 +1914,287 @@
     });
   }
 
+  // src/systems/boss_rules.js
+  var BO = CONSTANTS.BOSS_OFFENSE;
+  function telegraphLead(en) {
+    const mult = en && en.arcMods && en.arcMods.punishWindowMult || 1;
+    return Math.max(BO.minTelegraphLead, Math.floor(BO.telegraphLead * mult));
+  }
+  function punishFrames(en, move) {
+    const mult = en && en.arcMods && en.arcMods.punishWindowMult || 1;
+    const base = BO.punishFrames[move] || BO.punishFrames.jab;
+    return Math.max(BO.minPunishFrames, Math.floor(base * mult));
+  }
+  function beginPunishWindow(en, move) {
+    const f = punishFrames(en, move);
+    en.recoverTimer = f;
+    en.recoverMax = f;
+    en.punishShown = false;
+    en.telegraphed = false;
+  }
+  function isBossOpen(en) {
+    if (!en || !en.isBoss) return false;
+    if ((en.recoverTimer || 0) > 0) return true;
+    return en.controller === "static_monk" && en.currentMove === "recharge";
+  }
+  function clampCycle(frames) {
+    return Math.max(BO.minTelegraphLead + 2, Math.round(frames));
+  }
+
+  // src/systems/finisher.js
+  var F = CONSTANTS.FINISHER;
+  var LANE_STEP = { up: -1, down: 1 };
+  function finisherSequence(controller, kind) {
+    const set = F.sequences[controller] || F.sequences.neon_enforcer;
+    return set[kind] || set.break1;
+  }
+  function gateBossDamage(en, dmg) {
+    if (!en || !en.isBoss || en.koDone || gameState.finisher || en.pendingFinisher) return dmg;
+    const stage = en.finisherStage || 0;
+    if (stage < F.thresholds.length) {
+      const line = en.maxHp * F.thresholds[stage];
+      if (en.hp - dmg <= line) {
+        en.finisherStage = stage + 1;
+        en.pendingFinisher = "break" + (stage + 1);
+        return Math.max(0, en.hp - line);
+      }
+    }
+    if (en.hp - dmg <= 0) {
+      en.pendingFinisher = "ko";
+      return Math.max(0, en.hp - 1);
+    }
+    return dmg;
+  }
+  function checkBossThresholds(en) {
+    if (!en || !en.isBoss || en.koDone || gameState.finisher || en.pendingFinisher) return;
+    const stage = en.finisherStage || 0;
+    if (en.hp <= 0) {
+      en.hp = 1;
+      en.pendingFinisher = "ko";
+      return;
+    }
+    if (stage < F.thresholds.length && en.hp <= en.maxHp * F.thresholds[stage]) {
+      en.finisherStage = stage + 1;
+      en.pendingFinisher = "break" + (stage + 1);
+    }
+  }
+  function startFinisher(en, kind) {
+    const seq = finisherSequence(en.controller, kind).slice();
+    let dmgPerHit = 0;
+    if (kind !== "ko") {
+      const nextStage = en.finisherStage || 0;
+      const floorFrac = nextStage < F.thresholds.length ? F.thresholds[nextStage] + 0.02 : 0.02;
+      const budget = Math.max(0, Math.min(en.maxHp * F.breakDamageFrac, en.hp - en.maxHp * floorFrac));
+      dmgPerHit = budget / seq.length;
+    }
+    gameState.finisher = {
+      boss: en,
+      kind,
+      seq,
+      idx: 0,
+      phase: "intro",
+      frame: 0,
+      timer: F.introFrames,
+      nextBeat: 0,
+      hits: 0,
+      perfects: 0,
+      result: null,
+      dmgPerHit,
+      zoom: 1,
+      bars: 0,
+      freeze: 0,
+      poseTimer: 0,
+      judge: null,
+      judgeTimer: 0,
+      jabAlt: false
+    };
+    const p = gameState.player;
+    p.state = "idle";
+    p.punchTimer = 0;
+    p.hitFrame = 0;
+    p.inputBuffer = null;
+    p.movementBuffer = null;
+    p.lane = 1;
+    p.x = Math.min(Math.max(p.x, 160), 300);
+    en.lane = 1;
+    en.x = p.x + 118;
+    en.vx = 0;
+    en.stun = 0;
+    en.recoverTimer = 0;
+    en.telegraphed = false;
+    en.shiftWarning = 0;
+    en.exposedTimer = 0;
+    en.decoyTimer = 0;
+    en.targetLanes = [];
+    en.justAttacked = 0;
+    gameState.hazards = [];
+    gameState.hitstop = 0;
+    const label = kind === "ko" ? "FINAL BLOW" : "STAGGERED!";
+    spawnFloatingText(en.x + en.w / 2, en.y - 190, label, kind === "ko" ? "#ff0055" : "#ffffff");
+    playSound("stagger");
+    doFlash(kind === "ko" ? 0.7 : 0.5);
+    triggerShockwave(en.x, en.y - 60, gameState.bossThemeColor || "#ffffff");
+    createShatter(en.x, en.y - 60, gameState.bossThemeColor || "#ffffff");
+    gameState.shake = Math.max(gameState.shake, 20);
+  }
+  function justPressed(code) {
+    return !!gameState.keys[code] && !gameState.lastKeys[code];
+  }
+  function readFinisherInput() {
+    if (justPressed("ArrowUp") || gameState.pad.up) return "up";
+    if (justPressed("ArrowDown") || gameState.pad.down) return "down";
+    if (justPressed("KeyA") || gameState.pad.jab) return "jab";
+    if (justPressed("KeyS") || gameState.pad.cross) return "cross";
+    if (justPressed("KeyD") || gameState.pad.hook) return "hook";
+    return null;
+  }
+  var ease = (t) => 1 - Math.pow(1 - Math.min(1, Math.max(0, t)), 3);
+  function judge(text, color) {
+    const f = gameState.finisher;
+    f.judge = { text, color };
+    f.judgeTimer = 34;
+  }
+  function landPrompt(isPerfect) {
+    const f = gameState.finisher, en = f.boss, p = gameState.player;
+    const move = f.seq[f.idx];
+    if (move in LANE_STEP) {
+      const old = { x: en.x, y: en.y };
+      p.lane += LANE_STEP[move];
+      p.slipCooldown = 20;
+      en.lane = p.lane;
+      en.y = gameState.height * CONSTANTS.LANE_Y[en.lane];
+      createShatter(old.x, old.y - 60, gameState.bossThemeColor || "#ffffff");
+      p.state = "punching";
+      p.punchType = "cross";
+      p.hitFrame = 0;
+      p.didHit = true;
+    } else {
+      p.state = "punching";
+      p.punchType = move === "jab" ? (f.jabAlt = !f.jabAlt) ? "jab1" : "jab2" : move;
+      p.hitFrame = 0;
+      p.didHit = true;
+    }
+    f.poseTimer = 12;
+    if (f.kind !== "ko") en.hp = Math.max(1, en.hp - f.dmgPerHit);
+    f.hits++;
+    gameState.statFinisherHits = (gameState.statFinisherHits || 0) + 1;
+    if (isPerfect) f.perfects++;
+    gameState.combo++;
+    if (gameState.combo > gameState.statMaxCombo) gameState.statMaxCombo = gameState.combo;
+    addScore(CONSTANTS.SCORE.finisherHit + (isPerfect ? CONSTANTS.SCORE.finisherPerfect : 0), en.x + en.w / 2, en.y - 150, { big: true });
+    judge(isPerfect ? "PERFECT" : "GREAT", isPerfect ? "#ffffff" : "#22d3ee");
+    playSound("finisher_hit");
+    doFlash(isPerfect ? 0.45 : 0.3);
+    gameState.shake = Math.max(gameState.shake, isPerfect ? 26 : 18);
+    triggerShockwave(en.x, en.y - 60, isPerfect ? "#ffffff" : gameState.bossThemeColor || "#ff0055");
+    createShatter(en.x, en.y - 70, isPerfect ? "#ffffff" : gameState.bossThemeColor || "#ff0055");
+    for (let i = 0; i < 3; i++) createImpact(en.x, en.y - 60 - i * 20, "#ffffff");
+    f.freeze = hitStopEnabled() ? isPerfect ? 9 : 6 : 0;
+    f.idx++;
+    if (f.idx >= f.seq.length) endPrompts("clean");
+    else f.nextBeat += F.beatFrames;
+  }
+  function missPrompt(reason) {
+    judge(reason, "#ff8800");
+    playSound("finisher_miss");
+    endPrompts("broken");
+  }
+  function endPrompts(result) {
+    const f = gameState.finisher;
+    f.result = result;
+    f.phase = "outro";
+    f.timer = F.outroFrames;
+    const en = f.boss;
+    if (result === "clean") {
+      gameState.statFinishersClean = (gameState.statFinishersClean || 0) + 1;
+      addScore(CONSTANTS.SCORE.finisherClean, en.x + en.w / 2, en.y - 210, { big: true });
+      spawnFloatingText(en.x + en.w / 2, en.y - 230, f.kind === "ko" ? "FLAWLESS FINISH" : "FULL BREAK!", "#facc15");
+    } else if (f.kind !== "ko") {
+      spawnFloatingText(en.x + en.w / 2, en.y - 230, "STAGGER BROKEN", "#ff8800");
+    }
+    if (f.kind === "ko") {
+      playSound("finisher_ko");
+      doFlash(0.8);
+      gameState.shake = Math.max(gameState.shake, 40);
+      for (let i = 0; i < 3; i++) triggerShockwave(en.x, en.y - 60 - i * 10, i === 1 ? "#ffffff" : gameState.bossThemeColor || "#ff0055");
+      spawnFloatingText(en.x + en.w / 2, en.y - 260, "K.O.", "#ffffff");
+    }
+  }
+  function finishFinisher() {
+    const f = gameState.finisher, en = f.boss, p = gameState.player;
+    p.state = "idle";
+    p.punchType = null;
+    if (f.kind === "ko") {
+      en.koDone = true;
+      en.hp = 0;
+    } else {
+      en.x = Math.min(gameState.width - 150, en.x + 150);
+      en.stun = 0;
+      en.stunResist = 60;
+      en.recoverTimer = 0;
+      en.telegraphed = false;
+      en.attackCooldown = (en.maxCooldown || 60) + 40;
+      if (en.controller === "static_monk") {
+        en.currentMove = "laser";
+        en.attackCooldown = 110;
+        en.bossMashCount = 0;
+      }
+    }
+    gameState.finisher = null;
+    gameState.finisherZoom = 1;
+  }
+  function updateFinisher() {
+    const f = gameState.finisher;
+    if (!f) return;
+    f.frame++;
+    if (f.judgeTimer > 0) f.judgeTimer--;
+    if (f.freeze > 0) f.freeze--;
+    if (f.poseTimer > 0 && --f.poseTimer === 0) gameState.player.state = "idle";
+    gameState.player.y += (gameState.height * CONSTANTS.LANE_Y[gameState.player.lane] - gameState.player.y) * 0.35;
+    if (gameState.player.slipCooldown > 0) gameState.player.slipCooldown--;
+    if (f.phase === "intro") {
+      f.timer--;
+      const k = ease(1 - f.timer / F.introFrames);
+      f.zoom = 1 + (F.zoom - 1) * k;
+      f.bars = k;
+      if (f.timer <= 0) {
+        f.phase = "prompts";
+        f.nextBeat = f.frame + F.beatFrames * F.leadBeats;
+      }
+    } else if (f.phase === "prompts") {
+      f.zoom = F.zoom;
+      f.bars = 1;
+      const t = f.frame - f.nextBeat;
+      if (t === 0) playSound("beat_tick");
+      const input = readFinisherInput();
+      const want = f.seq[f.idx];
+      if (input) {
+        if (t < -F.windowEarly) missPrompt("TOO EARLY");
+        else if (input !== want) missPrompt("WRONG MOVE");
+        else landPrompt(Math.abs(t) <= F.perfectWindow);
+      } else if (t > F.windowLate) {
+        missPrompt("MISSED");
+      }
+    } else if (f.phase === "outro") {
+      f.timer--;
+      const k = ease(f.timer / F.outroFrames);
+      f.zoom = 1 + (F.zoom - 1) * k;
+      f.bars = k;
+      if (f.timer <= 0) {
+        finishFinisher();
+        return;
+      }
+    }
+    gameState.finisherZoom = reducedMotion() ? 1 : f.zoom;
+  }
+  function promptProgress() {
+    const f = gameState.finisher;
+    if (!f || f.phase !== "prompts") return null;
+    const lead = F.beatFrames * F.leadBeats;
+    const t = f.frame - f.nextBeat;
+    return { move: f.seq[f.idx], progress: Math.min(1.2, Math.max(0, (t + lead) / lead)), t };
+  }
+
   // src/systems/combat.js
   function checkHit(type) {
     let isJab = type.startsWith("jab") || type === "guard_jab";
@@ -1263,8 +2274,18 @@
         if (buffActive) dmg *= 2;
         if (en.type === "shield" && type === "cross") {
           en.type = "grunt";
-          en.color = "#ff0055";
+          if (!en.isBoss) en.color = "#ff0055";
           dmg *= 1.5;
+        }
+        const bossOpen = en.isBoss && isBossOpen(en);
+        if (bossOpen) {
+          dmg = Math.round(dmg * CONSTANTS.BOSS_OFFENSE.punishDamageMult);
+          addScore(CONSTANTS.SCORE.punishBonus, en.x + jX(), en.y - 170 + jY(), { silent: true });
+          if (!en.punishShown) {
+            en.punishShown = true;
+            spawnFloatingText(en.x + jX(), en.y - 150 + jY(), "PUNISH!", "#22d3ee");
+            playSound("punish");
+          }
         }
         let trueReadActive = false;
         if (en.isBoss && (en.exposedTimer || 0) > 0 && (type === "cross" || type === "hook" || buffActive)) {
@@ -1286,7 +2307,7 @@
           gameState.shake += 4;
         }
         if (en.isBoss) {
-          if (en.name === "PHANTOM BOXER") {
+          if (en.name === "PHANTOM BOXER" && !bossOpen) {
             en.bossMashCount = (en.bossMashCount || 0) + 1;
             en.mashDecay = 60;
             if (en.shiftWarning > 0) {
@@ -1320,7 +2341,7 @@
               spawnFloatingText(en.x + jX(), en.y - 100 + jY(), "SHIFT READY", "#ffffff");
             }
           }
-          let enforcerArmored = en.name === "NEON ENFORCER" && (en.phase === 2 || en.arcMods && en.arcMods.retaliationTimingVariant);
+          let enforcerArmored = !bossOpen && en.name === "NEON ENFORCER" && (en.phase === 2 || en.arcMods && en.arcMods.retaliationTimingVariant);
           if (enforcerArmored) {
             if (isJab && !trueReadActive && !isGuardPunch) {
               let chain = en.arcMods && en.arcMods.armoredRetaliationChain || 1;
@@ -1331,6 +2352,7 @@
               return false;
             }
           }
+          dmg = gateBossDamage(en, dmg);
           if (en.hp - dmg <= en.maxHp * 0.25 && !en.desperation) {
             en.desperation = true;
             spawnFloatingText(en.x + jX(), en.y - 120 + jY(), "DESPERATION!", "#ff0000");
@@ -1465,6 +2487,7 @@
         gameState.combo++;
         if (gameState.combo > gameState.statMaxCombo) gameState.statMaxCombo = gameState.combo;
       }
+      addScore(hitScore(type) * (buffActive ? CONSTANTS.SCORE.counterHitMult : 1), gameState.player.x + reach * 0.6, gameState.player.y - 110);
       if (buffActive) spawnFloatingText(gameState.player.x + reach / 2 + jX(), gameState.player.y - 80 + jY(), "COUNTER HIT!", "#ffffff");
       gameState.player.flowStreak = (gameState.player.flowStreak || 0) + 1;
       const flowMult = getFlowMultiplier(gameState);
@@ -1535,8 +2558,8 @@
         gameState.player.ghostStepCharges--;
         gameState.player.state = "ghost_step";
         gameState.player.ghostStepTimer = 18;
+        gameState.player.ghostPerfected = false;
         if (gameState.player.ghostStepCharges <= 0) gameState.player.ghostStepCooldown = Math.max(10, Math.floor(60 * gameState.progressionMods.ghostStepCooldownMult));
-        gameState.combo = 0;
         resetJabString();
         playSound("ghost_step");
         for (let i = 0; i < 8; i++) {
@@ -1557,6 +2580,18 @@
         }
       }
     }
+  }
+  function registerPerfectGhostStep() {
+    const p = gameState.player;
+    if (!p || p.ghostPerfected) return false;
+    p.ghostPerfected = true;
+    gameState.combo++;
+    if (gameState.combo > gameState.statMaxCombo) gameState.statMaxCombo = gameState.combo;
+    gameState.statGhostSteps = (gameState.statGhostSteps || 0) + 1;
+    p.flowStreak = (p.flowStreak || 0) + 1;
+    addScore(CONSTANTS.SCORE.perfectGhostStep, p.x + 40, p.y - 120);
+    spawnFloatingText(p.x, p.y - 95, "PERFECT GHOST +1", "#e5e7eb");
+    return true;
   }
   function checkPerfectSlip(oldLane) {
     let slipQuality = "none", bossSlipped = null;
@@ -1627,6 +2662,7 @@
       doFlash(0.2);
       playSound("perfect_slip");
       gameState.statTotalSlips++;
+      addScore(CONSTANTS.SCORE.perfectSlip, gameState.player.x + 40, gameState.player.y - 120);
       gameState.exp += Math.floor(2 * (1 + gameState.progressionMods.expGainBonusMult) * flowMult);
       gameState.player.slipBuff = gameState.orbCounts.technique >= 2 ? 2 : 1;
       spawnFloatingText(gameState.player.x, gameState.player.y - 80, "COUNTER READY!", "#ffffff");
@@ -1648,6 +2684,7 @@
       }
       gameState.shake = 3;
       playSound("slip");
+      addScore(CONSTANTS.SCORE.goodSlip, gameState.player.x + 40, gameState.player.y - 120);
     }
     if (HUD.slipPopup) {
       HUD.slipPopup.style.opacity = 1;
@@ -1718,9 +2755,9 @@
     if (!gameState.isInstinct) doFlash(isHeavy ? 0.4 : 0.2);
     playSound("hit");
     let sf = document.getElementById("screen-flash");
-    if (sf) {
+    if (sf && flashScale() > 0.01) {
       sf.style.background = "red";
-      sf.style.opacity = 0.4;
+      sf.style.opacity = 0.4 * flashScale();
       setTimeout(() => {
         if (sf) {
           sf.style.background = "white";
@@ -2007,6 +3044,7 @@
               if (en.lane === gameState.player.lane) {
                 if (gameState.player.state === "ghost_step") {
                   spawnFloatingText(gameState.player.x, gameState.player.y - 50, "EVADED", "#888888");
+                  registerPerfectGhostStep();
                   if (gameState.progressionMods.ghostCounter && gameState.player.slipBuff === 0) {
                     gameState.player.slipBuff = 1;
                     playSound("perfect_slip");
@@ -2029,6 +3067,9 @@
         if (Math.abs(en.x - gameState.player.x) < 130) {
           if (en.attackCooldown <= perfectThresh) gameState.laneFlash[en.lane] = 2;
           else if (en.attackCooldown <= goodThresh + 6) gameState.laneFlash[en.lane] = Math.max(gameState.laneFlash[en.lane], 1);
+        }
+        if (en.isBoss && en.telegraphed && !(en.recoverTimer > 0) && Math.abs(en.x - gameState.player.x) < 140 && en.attackCooldown > perfectThresh) {
+          gameState.laneFlash[en.lane] = Math.max(gameState.laneFlash[en.lane], 1);
         }
         if (en.lane === gameState.player.lane && Math.abs(en.x - gameState.player.x) < 130 && en.attackCooldown > 0) {
           if (en.attackCooldown <= perfectThresh) gameState.player.dangerLevel = Math.max(gameState.player.dangerLevel, 2);
@@ -2101,6 +3142,7 @@
             en.justAttacked = 5;
             if (gameState.player.state === "ghost_step" && gameState.player.ghostStepTimer > 4 && isAtPlayer && en.isActiveThreat) {
               spawnFloatingText(gameState.player.x, gameState.player.y - 50, "GHOST STEP", "#888888");
+              if (!en.tutorialType) registerPerfectGhostStep();
               if (gameState.progressionMods.ghostCounter && gameState.player.slipBuff === 0) {
                 gameState.player.slipBuff = 1;
                 playSound("perfect_slip");
@@ -2183,6 +3225,11 @@
     if (gameState.purifyTimer > 0) gameState.purifyTimer--;
     for (let i = gameState.enemies.length - 1; i >= 0; i--) {
       const en = gameState.enemies[i];
+      if (en.hp <= 0 && en.isBoss && !en.koDone) {
+        en.hp = 1;
+        if (!en.pendingFinisher && !gameState.finisher) en.pendingFinisher = "ko";
+        continue;
+      }
       if (en.hp <= 0) {
         gameState.statTotalKills++;
         let comboMult = 1 + Math.min(0.3, Math.floor(gameState.combo / 2) * 0.1);
@@ -2197,6 +3244,8 @@
           gameState.instinctMeter = Math.min(100, gameState.instinctMeter + 50 * (1 + gameState.progressionMods.instinctGainBonusMult) * flowMult);
           playSound("perfect_slip");
           gameState.exp += Math.floor(15 * comboMult * (1 + gameState.progressionMods.expGainBonusMult) * flowMult);
+          addScore(CONSTANTS.SCORE.bossKo * Math.min(5, CONSTANTS.getArcIndex(gameState.currentStage)), en.x + en.w / 2, en.y - 200, { big: true });
+          setMusicIntensity(0);
         } else {
           let instGain = 0;
           let hpGain = 0;
@@ -2222,6 +3271,7 @@
           gameState.instinctMeter = Math.min(100, gameState.instinctMeter + instGain * (1 + gameState.progressionMods.instinctGainBonusMult) * flowMult);
           if (hpGain > 0) gameState.health = Math.min(gameState.maxHealth, gameState.health + hpGain);
           gameState.exp += Math.floor(baseExp * comboMult * (1 + gameState.progressionMods.expGainBonusMult) * flowMult);
+          if (!en.tutorialType) addScore(killScore(en.type), en.x + en.w / 2, en.y - 130);
         }
         if (en.tutorialType) gameState.tutorialDelay = 60;
         gameState.enemies.splice(i, 1);
@@ -2259,7 +3309,7 @@
     }
     return out;
   }
-  var ARC1_LEVELS = {
+  var ARC_BASE_LEVELS = {
     1: {
       // SHATTERED CATHEDRAL (Fundamentals)
       speedMult: 1,
@@ -2375,14 +3425,36 @@
     }
     return out;
   }
-  var ARC2_LEVELS = deriveArc(ARC1_LEVELS, [ruleEcho], 12, 1.03);
-  var ARC3_LEVELS = deriveArc(ARC1_LEVELS, [rulePincerAndBruiser], 16, 1.05);
-  var ARC4_LEVELS = deriveArc(ARC1_LEVELS, [ruleReadOverGuard], 20, 1.04);
-  var ARC5_LEVELS = deriveArc(ARC1_LEVELS, [ruleEcho, rulePincerAndBruiser, ruleReadOverGuard], 24, 1.08);
+  var ARC2_LEVELS = deriveArc(ARC_BASE_LEVELS, [ruleEcho], 12, 1.03);
+  var ARC3_LEVELS = deriveArc(ARC_BASE_LEVELS, [rulePincerAndBruiser], 16, 1.05);
+  var ARC4_LEVELS = deriveArc(ARC_BASE_LEVELS, [ruleReadOverGuard], 20, 1.04);
+  var ARC5_LEVELS = deriveArc(ARC_BASE_LEVELS, [ruleEcho, rulePincerAndBruiser, ruleReadOverGuard], 24, 1.08);
+  function compressLevel(level, keep, breather = 45) {
+    const packets = keep.map((pi, i) => {
+      var _a;
+      const pkt = level.packets[pi];
+      const enemies = cloneEnemyDefs(pkt);
+      const marker = markerOf(pkt);
+      const last = i === keep.length - 1;
+      return [...enemies, { b: last ? marker.b : Math.min(marker.b, breather), th: (_a = marker.th) != null ? _a : 1 }];
+    });
+    return { speedMult: level.speedMult, packets };
+  }
+  var ARC1_LEVELS = {
+    ...ARC_BASE_LEVELS,
+    1: compressLevel(ARC_BASE_LEVELS[1], [0, 2, 3]),
+    // grunts -> first armor -> mixed
+    2: compressLevel(ARC_BASE_LEVELS[2], [0, 2, 3]),
+    // assassin lead -> screened -> finale
+    3: compressLevel(ARC_BASE_LEVELS[3], [0, 1, 4]),
+    // zoner -> bruiser -> finale
+    6: compressLevel(ARC_BASE_LEVELS[6], [0, 1, 3, 5])
+    // the composure exam, trimmed
+  };
   var ARC_WAVE_TABLES = { 1: ARC1_LEVELS, 2: ARC2_LEVELS, 3: ARC3_LEVELS, 4: ARC4_LEVELS, 5: ARC5_LEVELS };
   function spawnEnemy() {
     if (gameState.stageClearing || gameState.bossActive || gameState.bossIntroTimer > 0 || gameState.screen !== "playing" || gameState.purifyTimer > 0) return;
-    if (gameState.currentStage % 7 === 0) {
+    if (CONSTANTS.isBossStage(gameState.currentStage)) {
       if (!gameState.bossActive && !gameState.stageClearing) {
         gameState.stageClearing = true;
         gameState.purifyTimer = 90;
@@ -2401,6 +3473,7 @@
       }
       if (gameState.enemies.some((e) => e.tutorialType)) return;
     }
+    if (gameState.pendingUpgrades > 0 && gameState.enemies.length === 0) return;
     if (gameState.waveThreshold === void 0 || gameState.wavesCleared === 0) gameState.waveThreshold = 0;
     if (gameState.enemies.length <= gameState.waveThreshold && gameState.tutorialDelay <= 0) {
       if (gameState.waveTimer > 0) {
@@ -2471,7 +3544,7 @@
           speed = 4.5;
           cooldown = 35;
         }
-        hp = Math.floor(hp * (1 + (gameState.currentStage - 1) * 0.1) * gm.packetDensityMult);
+        hp = Math.floor(hp * (1 + (CONSTANTS.difficultyStage(gameState.currentStage) - 1) * 0.1) * gm.packetDensityMult);
         if (type === "shield" || type === "bruiser") cooldown = Math.max(20, Math.round(cooldown * gm.enemyRecoveryMult));
         speed *= gameState.stageSpeedMult;
         if (gameState.laneTempo && gameState.laneTempo[lane] !== void 0) speed *= gameState.laneTempo[lane];
@@ -2546,7 +3619,7 @@
     }
   ];
   function spawnMonkAdd() {
-    let hp = Math.floor(45 * (1 + (gameState.currentStage - 1) * 0.1));
+    let hp = Math.floor(45 * (1 + (CONSTANTS.difficultyStage(gameState.currentStage) - 1) * 0.1));
     let lane = Math.floor(random() * 3);
     gameState.enemies.push({
       x: gameState.width + 60,
@@ -2579,7 +3652,8 @@
     gameState.bossIntroTimer = 120;
     gameState.shake = 15;
     playSound("bash_tell");
-    let baseHp = 300 + gameState.currentStage * 100;
+    setMusicIntensity(1);
+    let baseHp = 300 + CONSTANTS.difficultyStage(gameState.currentStage) * 100;
     const rawArcIndex = CONSTANTS.getArcIndex(gameState.currentStage);
     const bossIndex = (rawArcIndex - 1) % BOSS_ROSTER.length;
     const template = BOSS_ROSTER[bossIndex];
@@ -2627,6 +3701,15 @@
       decoyTimer: 0,
       decoyLane: -1,
       decoyRolledThisCycle: false,
+      // v16 offense audit + finisher bookkeeping
+      telegraphed: false,
+      recoverTimer: 0,
+      recoverMax: 0,
+      punishShown: false,
+      feintSwitched: false,
+      finisherStage: 0,
+      pendingFinisher: null,
+      koDone: false,
       arcMods
       // Assigned directly to the entity!
     });
@@ -2636,6 +3719,7 @@
     if (Math.abs(en.x - gameState.player.x) > 100) return;
     if (gameState.player.state === "ghost_step") {
       spawnFloatingText(gameState.player.x, gameState.player.y - 50, "GHOST STEP", "#888888");
+      registerPerfectGhostStep();
       if (gameState.progressionMods.ghostCounter && gameState.player.slipBuff === 0) {
         gameState.player.slipBuff = 1;
         playSound("perfect_slip");
@@ -2646,48 +3730,77 @@
     let dmg = gameState.isInstinct ? Math.floor(rawDmg * 0.5) : rawDmg;
     takeDamage(dmg, isHeavy, en);
   }
+  function nextCycle(en, frames) {
+    const mult = en.desperation ? CONSTANTS.BOSS_OFFENSE.desperationCooldownMult : 1;
+    return clampCycle(frames * mult);
+  }
+  function meleeTelegraph(en, inRange, onTell) {
+    const lead = telegraphLead(en);
+    if (!inRange) {
+      if (en.attackCooldown <= lead) {
+        en.attackCooldown = lead + 6;
+        en.telegraphed = false;
+      }
+      return;
+    }
+    if (!en.telegraphed && en.attackCooldown <= lead) {
+      en.telegraphed = true;
+      en.telegraphAt = en.attackCooldown;
+      onTell();
+    }
+  }
   function handleNeonEnforcer(en) {
+    if (en.recoverTimer > 0) {
+      en.recoverTimer--;
+      return;
+    }
     en.attackCooldown--;
-    if (en.desperation && gameState.runCount % 2 === 0) en.attackCooldown -= 1;
     if (en.currentMove !== "bash" && en.x > gameState.player.x + 100) {
       en.x -= en.speed * 0.5 * en.arcMods.walkDownMult;
     }
-    if (Math.abs(en.x - gameState.player.x) < 140 && en.stun <= 0) {
-      if (en.attackCooldown === Math.floor(22 * en.arcMods.punishWindowMult)) {
-        playSound("bash_tell");
-        if (en.currentMove === "bash") createImpact(en.x, en.y - 60, "#ffaa00");
-      }
-      if (en.attackCooldown <= 0) {
-        en.justAttacked = 5;
-        resolveBossStrike(en, en.currentMove === "bash" ? 30 : 12, en.currentMove === "bash");
-        if (en.enraged) {
-          en.currentMove = "bash";
-          en.enraged = false;
+    const inRange = Math.abs(en.x - gameState.player.x) < 140 && en.stun <= 0;
+    meleeTelegraph(en, inRange, () => {
+      playSound(en.currentMove === "bash" ? "bash_tell" : "jab_tell");
+      if (en.currentMove === "bash") createImpact(en.x, en.y - 60, "#ffaa00");
+    });
+    if (inRange && en.attackCooldown <= 0) {
+      en.justAttacked = 5;
+      const struck = en.currentMove;
+      resolveBossStrike(en, struck === "bash" ? 30 : 12, struck === "bash");
+      if (en.enraged) {
+        en.currentMove = "bash";
+        en.enraged = false;
+        en.maxCooldown = nextCycle(en, 55);
+      } else {
+        let roll = random();
+        if (en.phase === 1) {
+          en.currentMove = roll > 0.6 ? "bash" : "jab";
+          en.maxCooldown = nextCycle(en, en.currentMove === "bash" ? 70 : 45);
         } else {
-          let roll = random();
-          if (en.phase === 1) {
-            en.currentMove = roll > 0.6 ? "bash" : "jab";
-            en.maxCooldown = en.currentMove === "bash" ? 70 : 45;
-          } else {
-            en.currentMove = roll > 0.5 ? "bash" : "jab";
-            en.maxCooldown = en.currentMove === "bash" ? 55 : 35;
-          }
+          en.currentMove = roll > 0.5 ? "bash" : "jab";
+          en.maxCooldown = nextCycle(en, en.currentMove === "bash" ? 55 : 35);
         }
-        en.attackCooldown = en.maxCooldown;
       }
+      en.attackCooldown = en.maxCooldown;
+      beginPunishWindow(en, struck);
     }
   }
   function handlePhantomBoxer(en) {
+    if (en.recoverTimer > 0) {
+      en.recoverTimer--;
+      return;
+    }
     en.attackCooldown--;
-    if (en.desperation && gameState.runCount % 2 === 0) en.attackCooldown -= 1;
     if (en.x > gameState.player.x + 100) {
       en.x -= en.speed;
     }
-    if (en.arcMods.fakeLaneFlash && !en.decoyRolledThisCycle && Math.abs(en.x - gameState.player.x) < 140 && en.attackCooldown === Math.floor(28 * en.arcMods.punishWindowMult) && random() < 0.45) {
+    if (en.arcMods.fakeLaneFlash && !en.decoyRolledThisCycle && Math.abs(en.x - gameState.player.x) < 140 && en.attackCooldown <= Math.floor(28 * en.arcMods.punishWindowMult)) {
       en.decoyRolledThisCycle = true;
-      const otherLanes = [0, 1, 2].filter((l) => l !== en.lane);
-      en.decoyLane = otherLanes[Math.floor(random() * otherLanes.length)];
-      en.decoyTimer = 16;
+      if (random() < 0.45) {
+        const otherLanes = [0, 1, 2].filter((l) => l !== en.lane);
+        en.decoyLane = otherLanes[Math.floor(random() * otherLanes.length)];
+        en.decoyTimer = 16;
+      }
     }
     if (en.decoyTimer > 0) {
       en.decoyTimer--;
@@ -2699,55 +3812,62 @@
         gameState.laneFlash[ghost.lane] = Math.max(gameState.laneFlash[ghost.lane], 1);
       }
     }
-    if (Math.abs(en.x - gameState.player.x) < 140 && en.stun <= 0) {
-      if (en.attackCooldown === Math.floor(22 * en.arcMods.punishWindowMult)) {
-        playSound(en.currentMove === "feint" ? "feint_tell" : "jab_tell");
-      }
-      if (en.currentMove === "feint" && en.attackCooldown === Math.floor(12 * en.arcMods.punishWindowMult)) {
+    const inRange = Math.abs(en.x - gameState.player.x) < 140 && en.stun <= 0;
+    meleeTelegraph(en, inRange, () => {
+      playSound(en.currentMove === "feint" ? "feint_tell" : "jab_tell");
+    });
+    if (inRange) {
+      if (en.currentMove === "feint" && !en.feintSwitched && en.attackCooldown <= Math.max(14, Math.floor(16 * en.arcMods.punishWindowMult))) {
+        en.feintSwitched = true;
         en.lane = gameState.player.lane;
         en.y = gameState.height * CONSTANTS.LANE_Y[en.lane];
         createImpact(en.x, en.y - 60, "#aa00ff");
       }
       if (en.attackCooldown <= 0) {
         en.justAttacked = 5;
+        const struck = en.currentMove;
         resolveBossStrike(en, 15, false);
         en.decoyRolledThisCycle = false;
         en.decoyTimer = 0;
+        en.feintSwitched = false;
         let roll = random();
         if (en.phase === 1) {
           en.currentMove = roll > 0.5 ? "feint" : "jab";
-          en.maxCooldown = en.currentMove === "feint" ? 45 : 30;
+          en.maxCooldown = nextCycle(en, en.currentMove === "feint" ? 45 : 30);
         } else {
           if (en.lastMove === "feint") en.currentMove = "jab";
           else en.currentMove = roll > 0.2 ? "feint" : "jab";
-          en.maxCooldown = en.currentMove === "feint" ? 35 : 20;
+          en.maxCooldown = nextCycle(en, en.currentMove === "feint" ? 35 : 26);
         }
         en.lastMove = en.currentMove;
         en.attackCooldown = en.maxCooldown;
+        beginPunishWindow(en, struck === "feint" ? "feint" : "jab");
       }
     }
   }
   function handleStaticMonk(en) {
     en.attackCooldown--;
-    if (en.desperation && gameState.runCount % 2 === 0) en.attackCooldown -= 1;
     if (en.currentMove === "recharge") {
       en.x = gameState.player.x + 100;
       if (en.attackCooldown <= 0) {
         en.currentMove = "laser";
         en.x = gameState.width - 150;
-        en.attackCooldown = 100;
+        en.attackCooldown = nextCycle(en, 100);
+        en.telegraphed = false;
         playSound("ghost_step");
         createShatter(en.x, en.y - 60, "#00ff00");
       }
     } else {
       en.x = gameState.width - 150 + Math.sin(Date.now() * 2e-3) * 50;
-      if (en.attackCooldown === 80) {
+      if (!en.telegraphed && en.attackCooldown <= 80) {
+        en.telegraphed = true;
+        en.telegraphAt = en.attackCooldown;
         playSound("zoner_tell");
         en.targetLanes = [gameState.player.lane];
         let adjacentLane = gameState.player.lane === 1 ? random() > 0.5 ? 0 : 2 : 1;
         en.targetLanes.push(adjacentLane);
       }
-      if (en.attackCooldown <= 80 && en.attackCooldown > 0 && en.targetLanes.length > 0) {
+      if (en.attackCooldown > 0 && en.targetLanes.length > 0) {
         en.targetLanes.forEach((laneIndex) => {
           gameState.laneFlash[laneIndex] = en.attackCooldown <= 15 ? 2 : 1;
           if (gameState.player.lane === laneIndex) {
@@ -2769,12 +3889,15 @@
               createImpact(en.x - i * 150, gameState.height * CONSTANTS.LANE_Y[laneIndex], "#00ff00");
             }
             if (gameState.player.lane === laneIndex) {
-              if (gameState.player.state === "ghost_step") spawnFloatingText(gameState.player.x, gameState.player.y - 50, "EVADED", "#888888");
-              else takeDamage(gameState.isInstinct ? 15 : 30, true, en);
+              if (gameState.player.state === "ghost_step") {
+                spawnFloatingText(gameState.player.x, gameState.player.y - 50, "EVADED", "#888888");
+                registerPerfectGhostStep();
+              } else takeDamage(gameState.isInstinct ? 15 : 30, true, en);
             }
           });
         }
         en.targetLanes = [];
+        en.telegraphed = false;
         en.bossMashCount++;
         const volleysPerBurst = 1 + (en.arcMods.patternChainLength || 1);
         if (en.bossMashCount >= volleysPerBurst) {
@@ -2784,9 +3907,10 @@
           en.lane = gameState.player.lane;
           en.y = gameState.height * CONSTANTS.LANE_Y[en.lane];
           en.x = gameState.player.x + 100;
+          en.punishShown = false;
           playSound("ghost_step");
           createImpact(en.x, en.y - 60, "#00ff00");
-          spawnFloatingText(en.x, en.y - 120, "RECHARGING!", "#00ff00");
+          spawnFloatingText(en.x, en.y - 120, "RECHARGING \u2014 OPEN!", "#00ff00");
           if (en.arcMods.summonSupportPressure && gameState.enemies.filter((e) => !e.isBoss).length < 1) {
             spawnMonkAdd();
           }
@@ -2800,12 +3924,20 @@
     }
   }
   function updateBosses() {
-    gameState.enemies.forEach((en) => {
-      if (!en.isBoss || en.stun > 0 || gameState.bossIntroTimer > 0) return;
+    for (const en of gameState.enemies) {
+      if (!en.isBoss) continue;
+      checkBossThresholds(en);
+      if (en.pendingFinisher && !gameState.finisher) {
+        const kind = en.pendingFinisher;
+        en.pendingFinisher = null;
+        startFinisher(en, kind);
+        return;
+      }
+      if (en.stun > 0 || gameState.bossIntroTimer > 0) continue;
       if (en.controller === "neon_enforcer") handleNeonEnforcer(en);
       else if (en.controller === "phantom_boxer") handlePhantomBoxer(en);
       else if (en.controller === "static_monk") handleStaticMonk(en);
-    });
+    }
   }
 
   // src/systems/hazards.js
@@ -2822,7 +3954,7 @@
       gameState.hazardCooldown--;
       return;
     }
-    if (gameState.screen !== "playing" || gameState.bossActive || gameState.stageClearing || gameState.bossIntroTimer > 0 || gameState.currentStage % 7 === 0) return;
+    if (gameState.screen !== "playing" || gameState.bossActive || gameState.stageClearing || gameState.bossIntroTimer > 0 || CONSTANTS.isBossStage(gameState.currentStage)) return;
     if (gameState.hazards.length > 0) return;
     const arc = Math.min(CONSTANTS.getArcIndex(gameState.currentStage), 5);
     const cap = (H.maxPerStageByArc || {})[arc] || 0;
@@ -2856,6 +3988,7 @@
             takeDamage(gameState.isInstinct ? Math.floor(H.damage * 0.5) : H.damage, true, null);
             spawnFloatingText(gameState.player.x, gameState.player.y - 60, "HAZARD!", "#ff8800");
           } else {
+            if (evading && gameState.player.lane === hz.lane) registerPerfectGhostStep();
             spawnFloatingText(gameState.width * 0.5, gameState.height * CONSTANTS.LANE_Y[hz.lane] - 40, evading && gameState.player.lane === hz.lane ? "EVADED" : "CLEARED", "#ffaa00");
           }
         }
@@ -2876,7 +4009,7 @@
     { id: "prism", name: "Prism", color: "#34d399", unlock: "daily", hint: "Beat a boss in a Daily Challenge" }
   ];
   var GRADE_RANK = { C: 0, B: 1, A: 2, S: 3 };
-  function safeGet(key) {
+  function safeGet2(key) {
     try {
       const raw = localStorage.getItem(key);
       return raw ? JSON.parse(raw) : null;
@@ -2884,18 +4017,18 @@
       return null;
     }
   }
-  function safeSet(key, val) {
+  function safeSet2(key, val) {
     try {
       localStorage.setItem(key, JSON.stringify(val));
     } catch (e) {
     }
   }
   function loadLeaderboard() {
-    const a = safeGet(LB_KEY);
+    const a = safeGet2(LB_KEY);
     return Array.isArray(a) ? a : [];
   }
   function loadMeta() {
-    const m = safeGet(META_KEY) || {};
+    const m = safeGet2(META_KEY) || {};
     return {
       totalRuns: m.totalRuns || 0,
       bestBossStreak: m.bestBossStreak || 0,
@@ -2909,7 +4042,7 @@
     };
   }
   function saveMeta(m) {
-    safeSet(META_KEY, m);
+    safeSet2(META_KEY, m);
   }
   function getAlias() {
     return loadMeta().alias;
@@ -2962,7 +4095,7 @@
   function commitRunRecord(run) {
     const entry = { score: run.score, grade: run.grade, stage: run.stage, daily: !!run.daily, at: Date.now() };
     const { list, rank } = rankInsert(loadLeaderboard(), entry);
-    safeSet(LB_KEY, list);
+    safeSet2(LB_KEY, list);
     const meta = loadMeta();
     meta.totalRuns += 1;
     meta.bestBossStreak = Math.max(meta.bestBossStreak, run.bossKills || 0);
@@ -2999,7 +4132,7 @@
     const body = {
       game: GAME,
       name: String(run.name || "STRIKER").slice(0, 16),
-      score: Math.max(0, Math.min(1e6, Math.round(run.score || 0))),
+      score: Math.max(0, Math.min(5e7, Math.round(run.score || 0))),
       grade: ["C", "B", "A", "S"].includes(run.grade) ? run.grade : "C",
       stage: Math.max(1, Math.min(999, Math.round(run.stage || 1))),
       daily: !!run.daily,
@@ -3056,7 +4189,8 @@
     let scrollSpeed = gameState.scrollX * (gameState.stageSpeedMult || 1);
     gameState.ambientDust.forEach((d) => {
       d.x += d.vx - scrollSpeed * 0.01;
-      if (gameState.currentStage === 3 || gameState.currentStage === 5) d.y += d.vy + 2;
+      const lk = CONSTANTS.getLevelInArc(gameState.currentStage);
+      if (lk === 3 || lk === 5) d.y += d.vy + 2;
       else d.y += d.vy;
       if (d.x < 0) d.x = gameState.width;
       if (d.y < 0) d.y = gameState.height;
@@ -3088,60 +4222,33 @@
     gameState.roseWindow.x -= scrollSpeed * 2e-3;
     if (gameState.roseWindow.x < -400) gameState.roseWindow.x = gameState.width + 400;
   }
+  var lerp = (a, b, t) => a + (b - a) * t;
+  var mixRGB = (a, b, t) => `rgb(${Math.round(lerp(a[0], b[0], t))}, ${Math.round(lerp(a[1], b[1], t))}, ${Math.round(lerp(a[2], b[2], t))})`;
+  var mixRGBA = (a, b, t) => `rgba(${Math.round(lerp(a[0], b[0], t))}, ${Math.round(lerp(a[1], b[1], t))}, ${Math.round(lerp(a[2], b[2], t))}, ${lerp(a[3], b[3], t).toFixed(3)})`;
+  function currentPalette() {
+    const P = CONSTANTS.PALETTES;
+    const from = P[gameState.paletteFrom] || P[1];
+    const to = P[gameState.paletteTo] || P[CONSTANTS.paletteKeyForStage(gameState.currentStage)] || P[1];
+    const t = Math.min(1, Math.max(0, gameState.paletteT === void 0 ? 1 : gameState.paletteT));
+    return { from, to, t };
+  }
   function drawAtmosphere() {
     let grad = ctx.createLinearGradient(0, 0, 0, gameState.height);
-    let levelInArc = CONSTANTS.getLevelInArc(gameState.currentStage);
-    let cStage = levelInArc === 7 ? 6 : levelInArc;
+    const { from, to, t } = currentPalette();
     if (gameState.purifyTimer > 0) {
       let pAlpha = gameState.purifyTimer / 100;
       grad.addColorStop(0, `rgba(2, 30, 60, ${pAlpha})`);
       grad.addColorStop(0.5, `rgba(10, 40, 70, ${pAlpha})`);
       grad.addColorStop(1, `rgba(5, 15, 30, ${pAlpha})`);
-    } else if (cStage === 1) {
-      grad.addColorStop(0, "#020205");
-      grad.addColorStop(0.5, "#05050a");
-      grad.addColorStop(1, "#0a0a14");
-    } else if (cStage === 2) {
-      grad.addColorStop(0, "#001a1a");
-      grad.addColorStop(0.5, "#002b33");
-      grad.addColorStop(1, "#00404d");
-    } else if (cStage === 3) {
-      grad.addColorStop(0, "#1a0505");
-      grad.addColorStop(0.5, "#2b0a0a");
-      grad.addColorStop(1, "#4d1010");
-    } else if (cStage === 4) {
-      grad.addColorStop(0, "#140026");
-      grad.addColorStop(0.5, "#20003b");
-      grad.addColorStop(1, "#3d004d");
-    } else if (cStage === 5) {
-      grad.addColorStop(0, "#000000");
-      grad.addColorStop(0.5, "#020502");
-      grad.addColorStop(1, "#051005");
     } else {
-      grad.addColorStop(0, "#1a1a1a");
-      grad.addColorStop(0.5, "#333333");
-      grad.addColorStop(1, "#4d4d4d");
+      grad.addColorStop(0, mixRGB(from.top, to.top, t));
+      grad.addColorStop(0.5, mixRGB(from.mid, to.mid, t));
+      grad.addColorStop(1, mixRGB(from.bot, to.bot, t));
     }
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, gameState.width, gameState.height);
-    let accentColor = "rgba(0, 255, 255, 0.02)";
-    let shardColor = "rgba(0, 255, 255, 0.05)";
-    if (cStage === 2) {
-      accentColor = "rgba(0, 255, 255, 0.04)";
-      shardColor = "rgba(0, 255, 255, 0.09)";
-    } else if (cStage === 3) {
-      accentColor = "rgba(255, 50, 50, 0.03)";
-      shardColor = "rgba(255, 50, 50, 0.06)";
-    } else if (cStage === 4) {
-      accentColor = "rgba(255, 0, 255, 0.03)";
-      shardColor = "rgba(255, 0, 255, 0.08)";
-    } else if (cStage === 5) {
-      accentColor = "rgba(0, 255, 0, 0.02)";
-      shardColor = "rgba(0, 255, 0, 0.04)";
-    } else if (cStage === 6) {
-      accentColor = "rgba(255, 255, 255, 0.05)";
-      shardColor = "rgba(255, 255, 255, 0.15)";
-    }
+    const accentColor = mixRGBA(from.accent, to.accent, t);
+    const shardColor = mixRGBA(from.shard, to.shard, t);
     gameState.lightShafts.forEach((L) => {
       let gradLight = ctx.createLinearGradient(L.x, 0, L.x + 200, gameState.height);
       gradLight.addColorStop(0, accentColor);
@@ -3216,6 +4323,22 @@
     });
     ctx.restore();
   }
+  function drawLightSweep() {
+    if (!(gameState.lightSweep >= 0 && gameState.lightSweep <= 1)) return;
+    const { to } = currentPalette();
+    const x = -250 + gameState.lightSweep * (gameState.width + 500);
+    const c = to.shard;
+    const g = ctx.createLinearGradient(x - 220, 0, x + 220, 0);
+    g.addColorStop(0, "rgba(255,255,255,0)");
+    g.addColorStop(0.42, `rgba(${c[0]}, ${c[1]}, ${c[2]}, 0.18)`);
+    g.addColorStop(0.5, "rgba(255,255,255,0.55)");
+    g.addColorStop(0.58, `rgba(${c[0]}, ${c[1]}, ${c[2]}, 0.18)`);
+    g.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = g;
+    ctx.fillRect(x - 220, 0, 440, gameState.height);
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    ctx.fillRect(x - 1, 0, 2, gameState.height);
+  }
 
   // src/render/boxer.js
   function drawBoxer(ctx3, entity, isPlayer, opacity = 1, isTrail = false) {
@@ -3275,7 +4398,12 @@
     if (entity.stun > 0) sL = -15 * d;
     lX += sL;
     let lg1X, lg2X;
-    if (isPlayer) {
+    if (isPlayer && entity.walking) {
+      const wc = Math.sin(t * 0.018) * 16;
+      lg1X = wc * d;
+      lg2X = -wc * d;
+      bn += Math.abs(Math.sin(t * 0.018)) * -3;
+    } else if (isPlayer) {
       lg1X = 15 * d;
       lg2X = -10 * d;
     } else {
@@ -3388,6 +4516,11 @@
       ldY = nY - 15;
       rrX = sX + 15 * d;
       rrY = nY - 5;
+    } else if (!isPlayer && entity.isBoss && entity.stun <= 0 && (entity.recoverTimer > 0 || entity.currentMove === "recharge")) {
+      ldX = sX + 12 * d;
+      ldY = nY + 38;
+      rrX = sX - 6 * d;
+      rrY = nY + 34;
     } else if (!isPlayer && entity.stun <= 0) {
       if (entity.justAttacked > 0) {
         if (entity.currentMove === "bash" || entity.type === "shield" || entity.type === "bruiser") {
@@ -3440,6 +4573,26 @@
     ctx3.stroke();
     ctx3.fillStyle = dC;
     dc(ldX, ldY, gS, true, false);
+    if (entity.gloveGlow) {
+      const heat = entity.gloveHeat === void 0 ? 1 : entity.gloveHeat;
+      const fl = 1 + Math.sin(t * 0.04) * 0.12;
+      ctx3.save();
+      ctx3.shadowColor = entity.gloveGlow;
+      ctx3.shadowBlur = 28 * heat;
+      ctx3.fillStyle = entity.gloveGlow;
+      ctx3.globalAlpha = opacity * heat;
+      dc(ldX, ldY, (gS + 3) * fl, true, false);
+      dc(rrX, rrY, (gS + 3) * fl, true, false);
+      ctx3.globalAlpha = opacity * heat * 0.45;
+      dc(ldX, ldY, (gS + 9) * fl, true, false);
+      dc(rrX, rrY, (gS + 9) * fl, true, false);
+      ctx3.fillStyle = "#ffffff";
+      ctx3.globalAlpha = opacity * heat * 0.9;
+      dc(ldX, ldY, gS * 0.45, true, false);
+      dc(rrX, rrY, gS * 0.45, true, false);
+      ctx3.restore();
+      entity.glovePositions = [[ldX, ldY], [rrX, rrY]];
+    }
     if (isPlayer && !isTrail && isCounterReady) {
       let cP = Math.sin(Date.now() * 0.02) * 2;
       ctx3.save();
@@ -3450,6 +4603,334 @@
       ctx3.restore();
     }
     ctx3.globalAlpha = 1;
+  }
+
+  // src/render/overlays.js
+  var MOVE_STYLE = {
+    bash: { label: "BASH", color: "#ffaa00" },
+    jab: { label: "JAB", color: "#ffffff" },
+    feint: { label: "FEINT", color: "#c084fc" },
+    laser: { label: "LASER", color: "#39ff14" }
+  };
+  function drawScorePops(ctx3) {
+    if (!gameState.scorePops || !gameState.scorePops.length) return;
+    ctx3.save();
+    ctx3.textAlign = "center";
+    gameState.scorePops.forEach((p) => {
+      ctx3.globalAlpha = Math.max(0, Math.min(1, p.life * 1.4));
+      ctx3.font = p.big ? "900 italic 26px Orbitron" : "bold 13px Orbitron";
+      ctx3.fillStyle = p.big ? "#facc15" : "#fde68a";
+      ctx3.shadowColor = "#facc15";
+      ctx3.shadowBlur = p.big ? 12 : 4;
+      ctx3.fillText(p.text, p.x, p.y);
+    });
+    ctx3.restore();
+  }
+  function drawBossTells(ctx3, en) {
+    if (!en.isBoss || gameState.bossIntroTimer > 0) return;
+    const cx = en.x - 34, top = en.y - en.h * 0.95;
+    ctx3.save();
+    if (isBossOpen(en)) {
+      const max = en.recoverMax || 1;
+      const left = en.controller === "static_monk" && en.currentMove === "recharge" ? Math.max(0, en.attackCooldown) / Math.max(1, Math.floor(180 / (en.arcMods && en.arcMods.teleportRateMult || 1))) : (en.recoverTimer || 0) / max;
+      const pulse = 0.6 + 0.4 * Math.sin(Date.now() * 0.02);
+      ctx3.strokeStyle = `rgba(34, 211, 238, ${pulse})`;
+      ctx3.lineWidth = 3;
+      const bx = en.x - 22, by = en.y - en.h * 1.5 - 10, bw = en.w + 44, bh = en.h * 1.5 + 16, k = 14;
+      ctx3.beginPath();
+      ctx3.moveTo(bx, by + k);
+      ctx3.lineTo(bx, by);
+      ctx3.lineTo(bx + k, by);
+      ctx3.moveTo(bx + bw - k, by);
+      ctx3.lineTo(bx + bw, by);
+      ctx3.lineTo(bx + bw, by + k);
+      ctx3.moveTo(bx, by + bh - k);
+      ctx3.lineTo(bx, by + bh);
+      ctx3.lineTo(bx + k, by + bh);
+      ctx3.moveTo(bx + bw - k, by + bh);
+      ctx3.lineTo(bx + bw, by + bh);
+      ctx3.lineTo(bx + bw, by + bh - k);
+      ctx3.stroke();
+      ctx3.fillStyle = "#22d3ee";
+      ctx3.font = "900 italic 18px Orbitron";
+      ctx3.textAlign = "center";
+      ctx3.shadowColor = "#22d3ee";
+      ctx3.shadowBlur = 12;
+      ctx3.fillText("OPEN", cx, top + 8);
+      ctx3.shadowBlur = 0;
+      ctx3.fillStyle = "rgba(34, 211, 238, 0.25)";
+      ctx3.fillRect(cx - 40, top + 16, 80, 4);
+      ctx3.fillStyle = "#22d3ee";
+      ctx3.fillRect(cx - 40, top + 16, 80 * Math.max(0, Math.min(1, left)), 4);
+    } else if (en.telegraphed && en.stun <= 0 && en.attackCooldown > 0) {
+      const move = en.controller === "static_monk" ? "laser" : en.currentMove || "jab";
+      const style = MOVE_STYLE[move] || MOVE_STYLE.jab;
+      const lead = Math.max(1, en.telegraphAt || 30);
+      const k = Math.max(0, Math.min(1, 1 - en.attackCooldown / lead));
+      const r = 16;
+      ctx3.lineWidth = 4;
+      ctx3.strokeStyle = "rgba(255,255,255,0.15)";
+      ctx3.beginPath();
+      ctx3.arc(cx, top - 4, r, 0, Math.PI * 2);
+      ctx3.stroke();
+      ctx3.strokeStyle = k > 0.8 ? "#ffffff" : style.color;
+      ctx3.shadowColor = style.color;
+      ctx3.shadowBlur = 10;
+      ctx3.beginPath();
+      ctx3.arc(cx, top - 4, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * k);
+      ctx3.stroke();
+      ctx3.shadowBlur = 0;
+      ctx3.fillStyle = style.color;
+      ctx3.font = "bold 12px Orbitron";
+      ctx3.textAlign = "center";
+      ctx3.fillText(style.label, cx, top + 28);
+    }
+    ctx3.restore();
+  }
+  function drawBossHud(ctx3) {
+    const boss = gameState.enemies.find((e) => e.isBoss);
+    if (!boss) return;
+    const W = 460, H = 12, x = (gameState.width - W) / 2, y = 104;
+    const pct = Math.max(0, boss.hp / boss.maxHp);
+    const inFinisher = !!gameState.finisher;
+    ctx3.save();
+    ctx3.fillStyle = "rgba(0,0,0,0.6)";
+    ctx3.fillRect(x - 4, y - 22, W + 8, H + 30);
+    ctx3.fillStyle = "#fff";
+    ctx3.font = "bold 12px Orbitron";
+    ctx3.textAlign = "left";
+    ctx3.fillText(boss.name, x, y - 7);
+    ctx3.textAlign = "right";
+    ctx3.fillStyle = isBossOpen(boss) ? "#22d3ee" : boss.desperation ? "#ff3355" : "#9ca3af";
+    ctx3.fillText(isBossOpen(boss) ? "OPEN \u2014 PUNISH" : boss.desperation ? "DESPERATION" : "", x + W, y - 7);
+    ctx3.fillStyle = "rgba(255,255,255,0.08)";
+    ctx3.fillRect(x, y, W, H);
+    const flash = inFinisher ? 0.7 + 0.3 * Math.sin(Date.now() * 0.03) : 1;
+    ctx3.globalAlpha = flash;
+    ctx3.fillStyle = gameState.bossThemeColor || "#ff0055";
+    ctx3.fillRect(x, y, W * pct, H);
+    ctx3.globalAlpha = 1;
+    CONSTANTS.FINISHER.thresholds.forEach((th, i) => {
+      const used = (boss.finisherStage || 0) > i;
+      const nx = x + W * th;
+      ctx3.fillStyle = used ? "rgba(255,255,255,0.25)" : "#ffffff";
+      ctx3.fillRect(nx - 1.5, y - 5, 3, H + 10);
+      if (!used) {
+        ctx3.fillStyle = "#ffffff";
+        ctx3.beginPath();
+        ctx3.moveTo(nx, y - 5);
+        ctx3.lineTo(nx - 5, y - 11);
+        ctx3.lineTo(nx + 5, y - 11);
+        ctx3.closePath();
+        ctx3.fill();
+      }
+    });
+    ctx3.restore();
+  }
+  function drawFinisherDim(ctx3) {
+    const f = gameState.finisher;
+    if (!f) return;
+    ctx3.fillStyle = `rgba(0, 0, 0, ${0.55 * f.bars})`;
+    ctx3.fillRect(-200, -200, gameState.width + 400, gameState.height + 400);
+  }
+  var PROMPT_X = 0.72;
+  var PROMPT_Y = 0.48;
+  var PROMPT_GLYPH = {
+    up: { key: "\u25B2", hint: "\u2191 / D-PAD", color: "#22d3ee" },
+    down: { key: "\u25BC", hint: "\u2193 / D-PAD", color: "#22d3ee" },
+    jab: { key: "A", hint: "JAB \xB7 X", color: "#ffffff" },
+    cross: { key: "S", hint: "CROSS \xB7 Y", color: "#ec4899" },
+    hook: { key: "D", hint: "HOOK \xB7 B", color: "#facc15" }
+  };
+  function drawFinisherUI(ctx3) {
+    const f = gameState.finisher;
+    if (!f) return;
+    const W = gameState.width, H = gameState.height;
+    ctx3.save();
+    const barH = 58 * f.bars;
+    ctx3.fillStyle = "#000";
+    ctx3.fillRect(0, 0, W, barH);
+    ctx3.fillRect(0, H - barH, W, barH);
+    const vg = ctx3.createRadialGradient(W / 2, H / 2, H * 0.25, W / 2, H / 2, H * 0.85);
+    vg.addColorStop(0, "rgba(0,0,0,0)");
+    vg.addColorStop(1, `rgba(0,0,0,${0.55 * f.bars})`);
+    ctx3.fillStyle = vg;
+    ctx3.fillRect(0, 0, W, H);
+    ctx3.textAlign = "center";
+    const title = f.kind === "ko" ? "FINAL BLOW" : f.kind === "break1" ? "STAGGER I" : "STAGGER II";
+    ctx3.globalAlpha = f.bars;
+    ctx3.fillStyle = f.kind === "ko" ? "#ff0055" : "#ffffff";
+    ctx3.font = "900 italic 22px Orbitron";
+    ctx3.fillText(title, W / 2, Math.max(24, barH - 18));
+    const n = f.seq.length, pipW = 34, gap = 8, total = n * pipW + (n - 1) * gap;
+    for (let i = 0; i < n; i++) {
+      const px = W / 2 - total / 2 + i * (pipW + gap);
+      const done = i < f.idx, cur = i === f.idx && f.phase === "prompts";
+      const g = PROMPT_GLYPH[f.seq[i]];
+      ctx3.fillStyle = done ? g.color : cur ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.06)";
+      ctx3.fillRect(px, H - barH + 14, pipW, 22);
+      ctx3.fillStyle = done ? "#000" : cur ? "#fff" : "rgba(255,255,255,0.35)";
+      ctx3.font = "bold 13px Orbitron";
+      ctx3.fillText(g.key, px + pipW / 2, H - barH + 30);
+    }
+    ctx3.globalAlpha = 1;
+    const pp = promptProgress();
+    if (pp) {
+      const g = PROMPT_GLYPH[pp.move];
+      const cx = PROMPT_X * W, cy = PROMPT_Y * H;
+      const box = 38;
+      const ringR = box + 70 * (1 - Math.min(1, pp.progress));
+      const inWindow = pp.t >= -CONSTANTS.FINISHER.windowEarly;
+      ctx3.lineWidth = 4;
+      ctx3.strokeStyle = inWindow ? "#ffffff" : "rgba(255,255,255,0.45)";
+      ctx3.beginPath();
+      ctx3.arc(cx, cy, ringR, 0, Math.PI * 2);
+      ctx3.stroke();
+      ctx3.fillStyle = "rgba(0,0,0,0.75)";
+      ctx3.beginPath();
+      ctx3.arc(cx, cy, box, 0, Math.PI * 2);
+      ctx3.fill();
+      ctx3.strokeStyle = g.color;
+      ctx3.lineWidth = 3;
+      ctx3.shadowColor = g.color;
+      ctx3.shadowBlur = 18;
+      ctx3.beginPath();
+      ctx3.arc(cx, cy, box, 0, Math.PI * 2);
+      ctx3.stroke();
+      ctx3.shadowBlur = 0;
+      ctx3.fillStyle = g.color;
+      ctx3.font = "900 34px Orbitron";
+      ctx3.fillText(g.key, cx, cy + 12);
+      ctx3.fillStyle = "rgba(255,255,255,0.8)";
+      ctx3.font = "bold 11px Orbitron";
+      ctx3.fillText(g.hint, cx, cy + box + 22);
+    } else if (f.phase === "intro") {
+      ctx3.fillStyle = `rgba(255,255,255,${f.bars})`;
+      ctx3.font = "bold 13px Orbitron";
+      ctx3.fillText("HIT EACH PROMPT ON THE BEAT", PROMPT_X * W, PROMPT_Y * H);
+    }
+    if (f.judge && f.judgeTimer > 0) {
+      const a = Math.min(1, f.judgeTimer / 12);
+      const s = reducedMotion() ? 1 : 1 + Math.max(0, f.judgeTimer - 26) * 0.06;
+      ctx3.save();
+      ctx3.translate(PROMPT_X * W, PROMPT_Y * H - 128);
+      ctx3.scale(s, s);
+      ctx3.globalAlpha = a;
+      ctx3.fillStyle = f.judge.color;
+      ctx3.font = "900 italic 30px Orbitron";
+      ctx3.shadowColor = f.judge.color;
+      ctx3.shadowBlur = 14;
+      ctx3.fillText(f.judge.text, 0, 0);
+      ctx3.restore();
+    }
+    ctx3.restore();
+  }
+  function drawVignette(ctx3) {
+    const v = gameState.vignette;
+    if (!v) return;
+    const W = gameState.width, H = gameState.height, t = v.timer, D = v.duration;
+    const inA = Math.min(1, t / 8), outA = Math.min(1, (D - t) / 8);
+    const a = Math.min(inA, outA);
+    const rm = reducedMotion();
+    ctx3.save();
+    ctx3.globalAlpha = a;
+    ctx3.fillStyle = "rgba(0,0,0,0.86)";
+    ctx3.fillRect(0, 0, W, H);
+    const slashIn = rm ? 1 : Math.min(1, t / 10);
+    ctx3.save();
+    ctx3.translate(W / 2, H / 2);
+    ctx3.rotate(-0.22);
+    const sg = ctx3.createLinearGradient(-W, 0, W, 0);
+    sg.addColorStop(0, "rgba(0,0,0,0)");
+    sg.addColorStop(0.5, v.color);
+    sg.addColorStop(1, "rgba(0,0,0,0)");
+    ctx3.globalAlpha = a * 0.28;
+    ctx3.fillStyle = sg;
+    ctx3.fillRect(-W * slashIn, -70, W * 2 * slashIn, 140);
+    ctx3.globalAlpha = a * 0.9;
+    ctx3.fillStyle = v.color;
+    ctx3.fillRect(-W * slashIn, 72, W * 2 * slashIn, 3);
+    ctx3.restore();
+    const pose = { speed: "jab3", power: "cross", technique: "guard_jab" }[v.upgrade.tree] || (v.rarity === "fusion" ? "hook" : "cross");
+    const S = 2.3, bx = 250, by = 430;
+    const ent = {
+      x: bx / S - 25,
+      y: by / S,
+      w: 50,
+      h: 110,
+      lane: 1,
+      state: "punching",
+      punchType: pose,
+      hitFrame: 0,
+      didHit: true,
+      slipBuff: 0,
+      color: gameState.strikerColor || "#00ffff",
+      trails: [],
+      gloveGlow: v.color,
+      gloveHeat: Math.min(1, t / 14)
+    };
+    ctx3.save();
+    ctx3.scale(S, S);
+    drawBoxer(ctx3, ent, true, a);
+    ctx3.restore();
+    if (ent.glovePositions) {
+      ctx3.fillStyle = v.color;
+      v.sparks.forEach((sp) => {
+        const gp = ent.glovePositions[sp.gx];
+        ctx3.globalAlpha = a * sp.life;
+        ctx3.fillRect(gp[0] * S + sp.ox, gp[1] * S + sp.oy, 3, 3);
+      });
+      ctx3.globalAlpha = a;
+    }
+    const slamK = rm ? 1 : Math.min(1, Math.max(0, (t - 4) / 8));
+    const scale = rm ? 1 : 1 + (1 - slamK) * 1.6;
+    const kindLabel = { fusion: "\u2726 FUSION \u2726", apex: "\u2605 APEX MASTERY \u2605", mastery: "\u25C6 MASTERY", overclock: "OVERCLOCK", orb: "EVOLUTION" }[v.rarity] || "EVOLUTION";
+    ctx3.save();
+    ctx3.translate(W * 0.64, H * 0.46);
+    ctx3.globalAlpha = a * slamK;
+    ctx3.fillStyle = v.color;
+    ctx3.font = "bold 14px Orbitron";
+    ctx3.textAlign = "center";
+    ctx3.fillText(kindLabel + (v.upgrade.tree && TREE_NAME[v.upgrade.tree] ? ` \xB7 ${TREE_NAME[v.upgrade.tree]}` : ""), 0, -48);
+    ctx3.scale(scale, scale);
+    ctx3.fillStyle = "#ffffff";
+    ctx3.font = "900 italic 44px Orbitron";
+    ctx3.shadowColor = v.color;
+    ctx3.shadowBlur = 24;
+    ctx3.fillText(v.upgrade.name.toUpperCase(), 0, 0);
+    ctx3.restore();
+    if (!v.repeat) {
+      ctx3.globalAlpha = a * Math.min(1, Math.max(0, (t - 16) / 10));
+      ctx3.fillStyle = "rgba(255,255,255,0.8)";
+      ctx3.font = "13px Orbitron";
+      ctx3.textAlign = "center";
+      wrapText(ctx3, v.upgrade.desc, W * 0.64, H * 0.46 + 40, 440, 18);
+    }
+    if (!rm && t >= 10 && t <= 13) {
+      ctx3.globalAlpha = 0.25 * (14 - t) / 4;
+      ctx3.fillStyle = "#fff";
+      ctx3.fillRect(0, 0, W, H);
+    }
+    ctx3.globalAlpha = a * 0.55;
+    ctx3.fillStyle = "#fff";
+    ctx3.font = "11px Orbitron";
+    ctx3.textAlign = "center";
+    ctx3.fillText("ANY KEY TO SKIP", W / 2, H - 96);
+    ctx3.restore();
+  }
+  var TREE_NAME = { speed: "SPEED", power: "POWER", technique: "TECHNIQUE" };
+  function wrapText(ctx3, text, x, y, maxW, lh) {
+    const words = String(text || "").split(" ");
+    let line = "", yy = y;
+    for (const w of words) {
+      const test = line ? line + " " + w : w;
+      if (ctx3.measureText(test).width > maxW && line) {
+        ctx3.fillText(line, x, yy);
+        line = w;
+        yy += lh;
+      } else line = test;
+    }
+    if (line) ctx3.fillText(line, x, yy);
   }
 
   // src/render/draw.js
@@ -3463,14 +4944,23 @@
     ctx.shadowBlur = 0;
     ctx.clearRect(0, 0, gameState.width, gameState.height);
     ctx.save();
-    if (gameState.shake > 1) {
-      ctx.translate((Math.random() - 0.5) * gameState.shake, (Math.random() - 0.5) * gameState.shake);
+    const shake = gameState.shake * shakeScale();
+    if (shake > 1) {
+      ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+    }
+    const zoom = gameState.finisher ? gameState.finisherZoom || 1 : 1;
+    if (zoom !== 1 && gameState.finisher && gameState.finisher.boss) {
+      const fx = (gameState.player.x + gameState.finisher.boss.x) / 2 + 20, fy = gameState.player.y - 70;
+      ctx.translate(fx, fy);
+      ctx.scale(zoom, zoom);
+      ctx.translate(-fx, -fy);
     }
     if (gameState.bossIntroTimer > 0) {
       ctx.fillStyle = "rgba(255, 0, 85, 0.15)";
       ctx.fillRect(0, 0, gameState.width, gameState.height);
     }
     drawAtmosphere();
+    drawLightSweep();
     let pLY = gameState.height * CONSTANTS.LANE_Y[gameState.player.lane];
     let pG = ctx.createLinearGradient(gameState.player.x - 150, 0, gameState.player.x + 150, 0);
     pG.addColorStop(0, "rgba(0, 255, 255, 0)");
@@ -3577,6 +5067,7 @@
       }
     });
     ctx.globalAlpha = 1;
+    drawFinisherDim(ctx);
     gameState.player.trails.forEach((t) => {
       let ghost = { lane: t.lane, x: t.x, y: t.y, w: 50, h: 110, state: t.state, punchType: t.punchType, hitFrame: t.hitFrame, slipBuff: t.slipBuff, color: "#00ffff" };
       drawBoxer(ctx, ghost, true, t.opacity, true);
@@ -3678,19 +5169,7 @@
         }
         ctx.globalAlpha = 1;
       }
-      if (en.isBoss) {
-        let nameY = en.y - en.h - 35;
-        let flashAlpha = 0.4 + Math.sin(Date.now() * 0.01) * 0.4;
-        ctx.fillStyle = `rgba(255, 170, 0, ${flashAlpha * 0.4})`;
-        ctx.fillRect(en.x - 30, nameY - 15, en.w + 60, 22);
-        ctx.fillStyle = `rgba(255, 170, 0, ${flashAlpha})`;
-        ctx.fillRect(en.x - 30, nameY + 5, en.w + 60, 2);
-        ctx.fillStyle = "#fff";
-        ctx.font = "bold 16px Orbitron";
-        ctx.textAlign = "center";
-        ctx.fillText(en.name, en.x + en.w / 2, nameY);
-        ctx.textAlign = "left";
-      }
+      drawBossTells(ctx, en);
     });
     drawBoxer(ctx, gameState.player, true);
     gameState.floatingTexts.forEach((ft) => {
@@ -3702,6 +5181,7 @@
       ctx.textAlign = "left";
     });
     ctx.globalAlpha = 1;
+    drawScorePops(ctx);
     if (gameState.bossIntroTimer > 0) {
       ctx.fillStyle = "#000";
       ctx.fillRect(0, gameState.height / 2 - 80, gameState.width, 160);
@@ -3712,8 +5192,79 @@
       ctx.fillText(gameState.bossIntroText, gameState.width / 2 * slideIn + gameState.width / 4, gameState.height / 2 - 10);
       ctx.textAlign = "left";
     }
-    SequenceManager.draw(ctx, gameState.width, gameState.height);
     ctx.restore();
+    if (gameState.screen !== "start") drawBossHud(ctx);
+    drawFinisherUI(ctx);
+    SequenceManager.draw(ctx, gameState.width, gameState.height);
+    drawVignette(ctx);
+  }
+
+  // src/systems/vignette.js
+  var VIGNETTE_FULL_FRAMES = 90;
+  var VIGNETTE_REPEAT_FRAMES = 36;
+  var SKIP_GUARD_FRAMES = 6;
+  var TREE_COLORS = { speed: "#22d3ee", power: "#ec4899", technique: "#facc15" };
+  function upgradeColor(u) {
+    if (!u) return "#ffffff";
+    if (u.kind === "fusion") return "#ff0055";
+    if (u.kind === "overclock") return "#c084fc";
+    return TREE_COLORS[u.tree] || "#ffffff";
+  }
+  function upgradeRarity(u) {
+    if (!u) return "orb";
+    if (u.kind === "fusion") return "fusion";
+    if (u.draftRole === "apex") return "apex";
+    if (u.kind === "mastery") return "mastery";
+    if (u.kind === "overclock") return "overclock";
+    return "orb";
+  }
+  var STING = { fusion: "sting_fusion", apex: "sting_fusion", mastery: "sting_mastery", overclock: "sting_overclock", orb: "sting_orb" };
+  function vignetteDuration(upgradeId, seenBefore, reduced = false) {
+    return seenBefore || reduced ? VIGNETTE_REPEAT_FRAMES : VIGNETTE_FULL_FRAMES;
+  }
+  function playUpgradeVignette(upgrade, onDone) {
+    const seen = hasSeenUpgrade(upgrade.id);
+    markUpgradeSeen(upgrade.id);
+    const rarity = upgradeRarity(upgrade);
+    gameState.vignette = {
+      upgrade,
+      rarity,
+      color: upgradeColor(upgrade),
+      repeat: seen,
+      timer: 0,
+      duration: vignetteDuration(upgrade.id, seen, reducedMotion()),
+      onDone,
+      sparks: []
+    };
+    gameState.screen = "vignette";
+    playSound(STING[rarity] || "sting_orb");
+  }
+  function updateVignette() {
+    const v = gameState.vignette;
+    if (!v) return;
+    v.timer++;
+    if (!reducedMotion() && v.timer < v.duration - 8) {
+      for (let i = 0; i < 3; i++) v.sparks.push({ gx: Math.random() < 0.5 ? 0 : 1, ox: (Math.random() - 0.5) * 14, oy: 0, vx: (Math.random() - 0.5) * 1.6, vy: -1.5 - Math.random() * 2.5, life: 1 });
+    }
+    v.sparks.forEach((s) => {
+      s.ox += s.vx;
+      s.oy += s.vy;
+      s.life -= 0.05;
+    });
+    v.sparks = v.sparks.filter((s) => s.life > 0);
+    if (v.timer >= v.duration) endVignette();
+  }
+  function skipVignette() {
+    const v = gameState.vignette;
+    if (!v || v.timer < SKIP_GUARD_FRAMES) return false;
+    endVignette();
+    return true;
+  }
+  function endVignette() {
+    const v = gameState.vignette;
+    if (!v) return;
+    gameState.vignette = null;
+    if (typeof v.onDone === "function") v.onDone();
   }
 
   // src/main.js
@@ -3722,8 +5273,13 @@
   };
   var canvas2 = document.getElementById("gameCanvas");
   var ctx2 = canvas2 ? canvas2.getContext("2d", { alpha: false }) : null;
+  var RARITY_BADGE = { orb: "EVOLUTION", mastery: "\u25C6 MASTERY", apex: "\u2605 APEX MASTERY", fusion: "\u2726 FUSION \u2726", overclock: "OVERCLOCK" };
+  function escapeAttr(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+  }
   function triggerUpgradeDraft() {
     gameState.screen = "upgrading";
+    gameState.draftHold = 0;
     const title = document.getElementById("upgrade-title");
     if (title) {
       if (gameState.pendingUpgrades > 1) {
@@ -3735,34 +5291,46 @@
       }
     }
     let draftOptions = buildDraft(gameState, UPGRADE_POOL);
+    const tease = buildFusionTease(gameState, UPGRADE_POOL, CONSTANTS.getArcIndex(gameState.currentStage));
     const container = document.getElementById("draft-container");
     if (container) {
       container.innerHTML = "";
+      const PAD_LABEL = ["X", "Y", "B"];
       draftOptions.forEach((option, index) => {
-        let themeColor = "#ffffff";
-        if (option.tree === "speed") themeColor = "#22d3ee";
-        if (option.tree === "power") themeColor = "#ec4899";
-        if (option.tree === "technique") themeColor = "#facc15";
-        const PAD_LABEL = ["X", "Y", "B"];
-        let iconText = `[${index + 1}] / [${PAD_LABEL[index] || "?"}]`;
-        if (option.kind === "overclock") themeColor = "#c084fc";
-        if (option.kind === "mastery") themeColor = "#34d399";
-        if (option.kind === "fusion") themeColor = "#ff0055";
-        let btnHTML = `
-                <div class="orb-btn flex-1 min-w-[250px] max-w-[320px] flex flex-col justify-between cursor-pointer" onclick="window.engineApplyUpgradeState('${option.id}')" style="border-color: ${themeColor}40;">
-                    <div>
-                        <div class="text-[10px] uppercase font-black tracking-widest mb-2" style="color: ${themeColor};">${option.kind}</div>
-                        <div class="font-bold text-xl text-white mb-2">${option.name} <span class="text-xs ml-2 opacity-60">${iconText}</span></div>
-                        <div class="text-xs opacity-80 mb-4 text-gray-300 leading-relaxed">${option.desc}</div>
+        const rarity = upgradeRarity(option);
+        const color = upgradeColor(option);
+        const iconText = `[${index + 1}] / [${PAD_LABEL[index] || "?"}]`;
+        const treeTag = option.tree && option.tree !== "general" ? ` \xB7 ${option.tree.toUpperCase()}` : "";
+        const btnHTML = `
+                <div class="draft-card card-${rarity}" style="--card-color:${color}; animation-delay:${index * 90 + (rarity === "fusion" || rarity === "apex" ? 220 : 0)}ms" onclick="window.engineApplyUpgradeState('${escapeAttr(option.id)}')">
+                    <div class="card-inner">
+                        <div class="card-badge">${RARITY_BADGE[rarity]}${treeTag}</div>
+                        <div class="card-name">${option.name}</div>
+                        <div class="card-desc">${option.desc}</div>
+                        <div class="card-key">${iconText}</div>
                     </div>
                 </div>
             `;
         container.insertAdjacentHTML("beforeend", btnHTML);
       });
+      if (tease) {
+        container.insertAdjacentHTML("beforeend", `
+                <div class="draft-card card-fusion card-locked" style="--card-color:#ff0055; animation-delay:${draftOptions.length * 90 + 260}ms" title="Locked \u2014 build toward it">
+                    <div class="card-inner">
+                        <div class="card-badge">\u{1F512} FUSION \xB7 LOCKED</div>
+                        <div class="card-name">${tease.name}</div>
+                        <div class="card-desc">${tease.desc}</div>
+                        <div class="card-key card-req">REQUIRES ${tease.reqText}</div>
+                    </div>
+                </div>`);
+      }
     }
+    const rarest = draftOptions.map(upgradeRarity).find((r) => r === "fusion" || r === "apex") || draftOptions.map(upgradeRarity).find((r) => r === "mastery");
+    if (rarest) setTimeout(() => playSound(rarest === "mastery" ? "sting_mastery" : "sting_fusion"), rarest === "mastery" ? 120 : 300);
     if (HUD.screens.upgrade) HUD.screens.upgrade.style.display = "flex";
   }
   window.engineTriggerUpgradeDraft = triggerUpgradeDraft;
+  window.enginePlayUpgradeVignette = playUpgradeVignette;
   function resetGame() {
     gameState.health = 100;
     gameState.combo = 0;
@@ -3796,6 +5364,8 @@
     gameState.pendingUpgrades = 0;
     gameState.totalLevel = 0;
     gameState.bossDefeatedThisStage = false;
+    gameState.draftHold = 0;
+    gameState.firstEvolutionGranted = false;
     gameState.acquiredUpgradeIds = [];
     gameState.recentlyOffered = [];
     gameState.currentDraftOptions = [];
@@ -3826,8 +5396,35 @@
       executionerCross: false,
       flowState: false
     };
+    gameState.statMaxCombo = 0;
+    gameState.statTotalSlips = 0;
+    gameState.statTotalKills = 0;
+    gameState.statBossKills = 0;
+    gameState.statCounterHits = 0;
+    gameState.statBossBreaks = 0;
+    gameState.statRecoilTaken = 0;
+    gameState.statDespDamage = 0;
+    gameState.statGhostSteps = 0;
+    gameState.statFinisherHits = 0;
+    gameState.statFinishersClean = 0;
+    gameState.score = 0;
+    gameState.displayScore = 0;
+    gameState.scorePops = [];
+    gameState.wagerMult = 1;
+    gameState.wagerOffer = null;
+    gameState.currentAffix = CONSTANTS.AFFIXES[0];
+    gameState.finisher = null;
+    gameState.finisherZoom = 1;
+    gameState.vignette = null;
+    gameState.paletteFrom = 1;
+    gameState.paletteTo = 1;
+    gameState.paletteT = 1;
+    gameState.lightSweep = -1;
+    setMusicIntensity(0);
     gameState.lastHUD.exp = -1;
     gameState.lastHUD.mult = -1;
+    gameState.lastHUD.score = -1;
+    gameState.lastHUD.wager = -1;
     gameState.enemies = [];
     gameState.particles = [];
     gameState.floatingTexts = [];
@@ -3840,6 +5437,8 @@
       stageElem.style.color = "#22d3ee";
       stageElem.classList.remove("stage-pulse");
     }
+    let affixElem = document.getElementById("affix-ui");
+    if (affixElem) affixElem.innerText = "";
     let barCont = document.getElementById("bar-cont");
     if (barCont) barCont.classList.remove("beast-active");
     ["speed", "power", "technique"].forEach((t) => {
@@ -3847,21 +5446,32 @@
       if (orbUI) orbUI.innerText = "0";
     });
   }
-  function startGame(daily = false) {
+  function hideOverlay(id) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = "none";
+  }
+  function startGame(daily = false, opts = {}) {
+    if (typeof daily === "object" && daily !== null) {
+      opts = daily;
+      daily = !!opts.daily;
+    }
     gameState.runCount = (gameState.runCount || 0) + 1;
     initAudio();
     const toggle = document.getElementById("tutorial-toggle-cb");
-    gameState.tutorialEnabled = toggle ? toggle.checked : true;
-    gameState.dailyMode = daily;
+    gameState.tutorialEnabled = opts.tutorial !== void 0 ? !!opts.tutorial : toggle ? toggle.checked === true : true;
+    gameState.dailyMode = !!daily;
     gameState.dailyDateKey = daily ? todayKey() : null;
-    seedRng(daily ? dailySeedFromDate() : Math.random() * 4294967295 >>> 0);
+    seedRng(opts.seed !== void 0 ? opts.seed : daily ? dailySeedFromDate() : Math.random() * 4294967295 >>> 0);
     resetGame();
     gameState.screen = "playing";
-    const startScreen = document.getElementById("start-screen");
-    if (startScreen) startScreen.style.display = "none";
-    const goScreen = document.getElementById("gameover-screen");
-    if (goScreen) goScreen.style.display = "none";
-    SequenceManager.play("stage1Intro");
+    ["start-screen", "gameover-screen", "pause-screen", "wager-screen", "upgrade-screen"].forEach(hideOverlay);
+    duckMusic(false);
+    startMusic();
+    SequenceManager.playDynamic([
+      { type: "walkin", duration: 50 },
+      { type: "text", title: "ARC 1 \u2014 SHATTERED CATHEDRAL", subtitle: openingSubtitle(), duration: 130 },
+      { type: "resume" }
+    ]);
   }
   function startDailyChallenge() {
     startGame(true);
@@ -3886,16 +5496,186 @@
     gameState.screen = "start";
     const startScreen = document.getElementById("start-screen");
     if (startScreen) startScreen.style.display = "flex";
-    const pauseScreen = document.getElementById("pause-screen");
-    if (pauseScreen) pauseScreen.style.display = "none";
-    const goScreen = document.getElementById("gameover-screen");
-    if (goScreen) goScreen.style.display = "none";
+    ["pause-screen", "gameover-screen", "wager-screen", "upgrade-screen"].forEach(hideOverlay);
     SequenceManager.active = false;
+    SequenceManager.waiting = false;
+    stopMusic();
   }
   window.engineApplyUpgradeState = function(id) {
+    if (gameState.screen !== "upgrading") return;
     let option = gameState.currentDraftOptions.find((o) => o.id === id);
     if (option) applyUpgrade(gameState, option);
   };
+  var PAUSE_TABS = ["resume", "loadout", "settings"];
+  var SETTINGS_ROWS = [
+    { key: "masterVolume", label: "Master Volume", type: "range" },
+    { key: "musicVolume", label: "Music Volume", type: "range" },
+    { key: "sfxVolume", label: "SFX Volume", type: "range" },
+    { key: "screenShake", label: "Screen Shake", type: "range" },
+    { key: "flashIntensity", label: "Flash Intensity", type: "range" },
+    { key: "hitStop", label: "Hit-Stop", type: "toggle" },
+    { key: "reducedMotion", label: "Reduced Motion", type: "toggle" }
+  ];
+  var pauseTab = "resume";
+  var settingsFocus = 0;
+  function openPause() {
+    if (gameState.screen !== "playing") return;
+    gameState.screen = "paused";
+    duckMusic(true);
+    setPauseTab("resume");
+    const p = document.getElementById("pause-screen");
+    if (p) p.style.display = "flex";
+  }
+  function closePause() {
+    if (gameState.screen !== "paused") return;
+    gameState.screen = "playing";
+    duckMusic(false);
+    const p = document.getElementById("pause-screen");
+    if (p) p.style.display = "none";
+  }
+  window.engineClosePause = closePause;
+  function setPauseTab(tab) {
+    if (!PAUSE_TABS.includes(tab)) return;
+    pauseTab = tab;
+    PAUSE_TABS.forEach((t) => {
+      const btn = document.getElementById(`ptab-${t}`), panel = document.getElementById(`ppanel-${t}`);
+      if (btn) btn.classList.toggle("active", t === tab);
+      if (panel) panel.style.display = t === tab ? "block" : "none";
+    });
+    if (tab === "loadout") renderLoadout();
+    if (tab === "settings") renderSettings();
+  }
+  window.engineSetPauseTab = setPauseTab;
+  function cyclePauseTab(dir) {
+    const i = PAUSE_TABS.indexOf(pauseTab);
+    setPauseTab(PAUSE_TABS[(i + dir + PAUSE_TABS.length) % PAUSE_TABS.length]);
+  }
+  var ORB_PERKS = {
+    speed: ["Faster strikes", "Missed Jabs don't snap Combo", "Slip Cancel"],
+    power: ["Heavier knockback", "Cross gains reach", "Bowling Collateral"],
+    technique: ["More Instinct from reads", "Perfect Slips charge 2 Counters", "True Read on bosses"]
+  };
+  var TREE_COLOR = { speed: "#22d3ee", power: "#ec4899", technique: "#facc15" };
+  var OC_NAMES = { vitality: "oc_vital_surge", nerves: "oc_quick_nerves", focus: "oc_sharp_eye", instinct: "oc_calm_engine", clinch: "oc_clinch_breaker", finish: "oc_clean_finish" };
+  function findUpgrade(id) {
+    return [...UPGRADE_POOL.orbs, ...UPGRADE_POOL.masteries, ...UPGRADE_POOL.fusions, ...UPGRADE_POOL.overclocks].find((u) => u.id === id);
+  }
+  function renderLoadout() {
+    const el = document.getElementById("loadout-body");
+    if (!el) return;
+    const orbRows = ["speed", "power", "technique"].map((tree) => {
+      const lvl = gameState.orbCounts[tree] || 0;
+      const perks = ORB_PERKS[tree].map((p, i) => `<span class="perk ${i < lvl ? "on" : ""}">${p}</span>`).join("");
+      return `<div class="lo-orb"><span class="lo-orb-name" style="color:${TREE_COLOR[tree]}">${tree.toUpperCase()} ${lvl}/3</span>${perks}</div>`;
+    }).join("");
+    const owned = gameState.acquiredUpgradeIds.map(findUpgrade).filter(Boolean);
+    const cards = owned.map((u) => {
+      const r = upgradeRarity(u);
+      return `<div class="lo-card lo-${r}" style="--card-color:${upgradeColor(u)}"><div class="lo-badge">${RARITY_BADGE[r]}</div><div class="lo-name">${u.name}</div><div class="lo-desc">${u.desc}</div></div>`;
+    }).join("");
+    const ocs = Object.entries(gameState.overclockCounts).filter(([, n]) => n > 0).map(([k, n]) => {
+      const u = findUpgrade(OC_NAMES[k]);
+      return u ? `<div class="lo-oc"><b>${u.name}</b> \xD7${n} <span>${u.desc}</span></div>` : "";
+    }).join("");
+    const wager = gameState.wagerMult > 1 && gameState.currentAffix ? `<div class="lo-wager">ACTIVE WAGER: <b>${gameState.currentAffix.name}</b> \xD7${gameState.wagerMult} score \u2014 ${gameState.currentAffix.desc}</div>` : "";
+    el.innerHTML = `
+        ${wager}
+        <h4 class="lo-h">Evolution Trees</h4>${orbRows}
+        <h4 class="lo-h">Masteries &amp; Fusions</h4>
+        ${cards || '<div class="lo-empty">None yet \u2014 Masteries unlock at tree level 2; Fusions combine two trees at level 2.</div>'}
+        ${ocs ? `<h4 class="lo-h">Overclocks</h4>${ocs}` : ""}`;
+  }
+  function renderSettings() {
+    const el = document.getElementById("settings-body");
+    if (!el) return;
+    const s = getSettings();
+    el.innerHTML = SETTINGS_ROWS.map((row, i) => {
+      const focus = i === settingsFocus ? " focused" : "";
+      if (row.type === "range") {
+        const v = Math.round(s[row.key] * 100);
+        return `<div class="set-row${focus}" data-i="${i}"><label>${row.label}</label><input type="range" min="0" max="100" step="5" value="${v}" oninput="window.engineSetSetting('${row.key}', this.value / 100, true)"><span class="set-val">${v}%</span></div>`;
+      }
+      const on = s[row.key] === true;
+      return `<div class="set-row${focus}" data-i="${i}"><label>${row.label}</label><button class="set-toggle ${on ? "on" : ""}" onclick="window.engineSetSetting('${row.key}', ${!on})">${on ? "ON" : "OFF"}</button></div>`;
+    }).join("") + '<div class="set-hint">[\u2191/\u2193] select \xB7 [\u2190/\u2192] adjust \xB7 [ENTER] toggle \xB7 saved automatically</div>';
+  }
+  window.engineSetSetting = function(key, value, fromSlider = false) {
+    setSetting(key, value);
+    refreshAudioLevels();
+    if (fromSlider) {
+      const row = SETTINGS_ROWS.findIndex((r) => r.key === key);
+      const val = document.querySelector(`#settings-body .set-row[data-i="${row}"] .set-val`);
+      if (val) val.innerText = `${Math.round(getSettings()[key] * 100)}%`;
+    } else renderSettings();
+  };
+  function adjustFocusedSetting(dir) {
+    const row = SETTINGS_ROWS[settingsFocus];
+    const s = getSettings();
+    if (row.type === "range") setSetting(row.key, Math.round((s[row.key] + dir * 0.05) * 100) / 100);
+    else setSetting(row.key, !s[row.key]);
+    refreshAudioLevels();
+    renderSettings();
+  }
+  function pauseKey(code) {
+    if (code === "KeyQ") {
+      cyclePauseTab(-1);
+      return;
+    }
+    if (code === "KeyE" || code === "Tab") {
+      cyclePauseTab(1);
+      return;
+    }
+    if (pauseTab === "settings") {
+      if (code === "ArrowUp") {
+        settingsFocus = (settingsFocus - 1 + SETTINGS_ROWS.length) % SETTINGS_ROWS.length;
+        renderSettings();
+      } else if (code === "ArrowDown") {
+        settingsFocus = (settingsFocus + 1) % SETTINGS_ROWS.length;
+        renderSettings();
+      } else if (code === "ArrowLeft") adjustFocusedSetting(-1);
+      else if (code === "ArrowRight") adjustFocusedSetting(1);
+      else if (code === "Enter" || code === "Space") {
+        if (SETTINGS_ROWS[settingsFocus].type === "toggle") adjustFocusedSetting(1);
+      }
+      return;
+    }
+    if (pauseTab === "resume" && (code === "Enter" || code === "Space")) closePause();
+  }
+  function showWager() {
+    const offer = gameState.wagerOffer;
+    if (!offer) {
+      SequenceManager.resumeFromWait();
+      return;
+    }
+    gameState.screen = "wager";
+    playSound("wager");
+    const set = (id, v) => {
+      const el = document.getElementById(id);
+      if (el) el.innerText = v;
+    };
+    set("wager-name", offer.name);
+    set("wager-desc", offer.desc);
+    set("wager-mult", `\xD7${offer.scoreMult} SCORE THIS STAGE`);
+    const w = document.getElementById("wager-screen");
+    if (w) w.style.display = "flex";
+  }
+  window.engineShowWager = showWager;
+  function resolveWager(accept) {
+    if (gameState.screen !== "wager") return;
+    const w = document.getElementById("wager-screen");
+    if (w) w.style.display = "none";
+    gameState.screen = "playing";
+    if (accept) {
+      const a = acceptWager();
+      playSound("perfect_slip");
+      if (a) SequenceManager.injectNext([{ type: "text", title: `WAGER ACCEPTED \xD7${a.scoreMult}`, subtitle: a.name, duration: 80 }]);
+    } else {
+      declineWager();
+    }
+    refreshStageHud();
+    SequenceManager.resumeFromWait();
+  }
+  window.engineResolveWager = resolveWager;
   function pollGamepad() {
     let gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
     let gp = null;
@@ -3918,26 +5698,32 @@
       gameState.pad.hook = jp(1);
       gameState.pad.instinct = jp(0);
       gameState.pad.pause = jp(9) || jp(16);
+      const anyPress = gp.buttons.some((b, i) => jp(i));
       if (gameState.screen === "start") {
         if (gameState.pad.instinct || gameState.pad.pause || gameState.pad.jab) startGame();
       } else if (gameState.screen === "playing") {
-        if (gameState.pad.pause && !SequenceManager.active) {
-          gameState.screen = "paused";
-          let p2 = document.getElementById("pause-screen");
-          if (p2) p2.style.display = "flex";
-        }
+        if (gameState.pad.pause && !SequenceManager.active && !gameState.finisher) openPause();
       } else if (gameState.screen === "paused") {
-        if (gameState.pad.instinct || gameState.pad.pause) {
-          gameState.screen = "playing";
-          let p2 = document.getElementById("pause-screen");
-          if (p2) p2.style.display = "none";
-        }
+        if (gameState.pad.pause) closePause();
+        else if (jp(4)) cyclePauseTab(-1);
+        else if (jp(5)) cyclePauseTab(1);
+        else if (gameState.pad.up) pauseKey("ArrowUp");
+        else if (gameState.pad.down) pauseKey("ArrowDown");
+        else if (jp(14)) pauseKey("ArrowLeft");
+        else if (jp(15)) pauseKey("ArrowRight");
+        else if (gameState.pad.instinct) pauseKey("Enter");
+        else if (gameState.pad.hook) returnToMenu();
       } else if (gameState.screen === "tutorial") {
         if (gameState.pad.instinct || gameState.pad.jab || gameState.pad.cross) dismissTutorial();
+      } else if (gameState.screen === "vignette") {
+        if (anyPress) skipVignette();
+      } else if (gameState.screen === "wager") {
+        if (gameState.pad.jab || gameState.pad.instinct) resolveWager(true);
+        else if (gameState.pad.hook) resolveWager(false);
       } else if (gameState.screen === "upgrading") {
         if (gameState.pad.jab && gameState.currentDraftOptions[0]) applyUpgrade(gameState, gameState.currentDraftOptions[0]);
-        if (gameState.pad.cross && gameState.currentDraftOptions[1]) applyUpgrade(gameState, gameState.currentDraftOptions[1]);
-        if (gameState.pad.hook && gameState.currentDraftOptions[2]) applyUpgrade(gameState, gameState.currentDraftOptions[2]);
+        else if (gameState.pad.cross && gameState.currentDraftOptions[1]) applyUpgrade(gameState, gameState.currentDraftOptions[1]);
+        else if (gameState.pad.hook && gameState.currentDraftOptions[2]) applyUpgrade(gameState, gameState.currentDraftOptions[2]);
       } else if (gameState.screen === "gameover") {
         if (gameState.pad.instinct || gameState.pad.jab) startGame();
         if (gameState.pad.hook || gameState.pad.cross) returnToMenu();
@@ -3961,16 +5747,23 @@
       startGame();
       return;
     }
+    if (gameState.screen === "vignette") {
+      if (!e.repeat) skipVignette();
+      return;
+    }
+    if (gameState.screen === "wager") {
+      if (e.code === "Digit1" || e.code === "KeyA" || e.code === "Enter") resolveWager(true);
+      else if (e.code === "Digit2" || e.code === "KeyD" || e.code === "Escape") resolveWager(false);
+      return;
+    }
     if (e.code === "KeyP" || e.code === "Escape" && gameState.screen !== "howto" && gameState.screen !== "tutorial") {
-      if (gameState.screen === "playing") {
-        gameState.screen = "paused";
-        let p = document.getElementById("pause-screen");
-        if (p) p.style.display = "flex";
-      } else if (gameState.screen === "paused") {
-        gameState.screen = "playing";
-        let p = document.getElementById("pause-screen");
-        if (p) p.style.display = "none";
-      }
+      if (gameState.screen === "playing" && !gameState.finisher) openPause();
+      else if (gameState.screen === "paused") closePause();
+      return;
+    }
+    if (gameState.screen === "paused" && e.code !== "KeyH" && e.code !== "KeyM") {
+      if (e.code === "Tab") e.preventDefault && e.preventDefault();
+      pauseKey(e.code);
       return;
     }
     if (e.code === "KeyM") {
@@ -3986,9 +5779,10 @@
       return;
     }
     if (gameState.screen === "upgrading") {
+      if (e.repeat) return;
       if (e.code === "Digit1" && gameState.currentDraftOptions[0]) applyUpgrade(gameState, gameState.currentDraftOptions[0]);
-      if (e.code === "Digit2" && gameState.currentDraftOptions[1]) applyUpgrade(gameState, gameState.currentDraftOptions[1]);
-      if (e.code === "Digit3" && gameState.currentDraftOptions[2]) applyUpgrade(gameState, gameState.currentDraftOptions[2]);
+      else if (e.code === "Digit2" && gameState.currentDraftOptions[1]) applyUpgrade(gameState, gameState.currentDraftOptions[1]);
+      else if (e.code === "Digit3" && gameState.currentDraftOptions[2]) applyUpgrade(gameState, gameState.currentDraftOptions[2]);
       return;
     }
     if (gameState.screen === "gameover" && e.code === "KeyR") {
@@ -3999,17 +5793,49 @@
   window.addEventListener("keyup", (e) => {
     gameState.keys[e.code] = false;
   });
+  window.addEventListener("pointerdown", () => {
+    if (gameState.screen === "vignette") skipVignette();
+  });
+  function tutorialRunning() {
+    return gameState.currentStage === 1 && gameState.tutorialEnabled && (gameState.spawnTotal < 5 || gameState.enemies.some((e) => e.tutorialType));
+  }
+  function maybeGrantFirstEvolution() {
+    if (gameState.firstEvolutionGranted) return;
+    if (gameState.totalLevel > 0 || gameState.pendingUpgrades > 0) {
+      gameState.firstEvolutionGranted = true;
+      return;
+    }
+    if (gameState.currentStage !== 1 || gameState.enemies.length > 0) return;
+    const ready = gameState.tutorialEnabled ? gameState.spawnTotal >= 5 && !tutorialRunning() : gameState.statTotalKills >= 3;
+    if (ready) {
+      gameState.firstEvolutionGranted = true;
+      gameState.exp = Math.max(gameState.exp, gameState.expNeeded);
+    }
+  }
+  var DRAFT_HOLD_FRAMES = 20;
   function update() {
     if (gameState.screen !== "playing") return;
-    if (gameState.hitstop > 0) {
-      gameState.hitstop--;
+    if (gameState.finisher) {
+      if (gameState.shake > 0) gameState.shake *= 0.9;
+      const f = gameState.finisher;
+      if (f.freeze <= 0 && f.frame % 2 === 0) updateParticlesAndTrails();
+      updateFinisher();
+      if (typeof updateHUD === "function") updateHUD();
       return;
+    }
+    if (gameState.hitstop > 0) {
+      if (!hitStopEnabled()) gameState.hitstop = 0;
+      else {
+        gameState.hitstop--;
+        return;
+      }
     }
     if (gameState.shake > 0) gameState.shake *= 0.88;
     updateAtmosphere();
     updateParticlesAndTrails();
     if (SequenceManager.active) {
       SequenceManager.update();
+      if (typeof updateHUD === "function") updateHUD();
       return;
     }
     if (gameState.tutorialGrace > 0) gameState.tutorialGrace--;
@@ -4035,8 +5861,13 @@
     updatePlayer();
     updateEnemies();
     if (typeof updateBosses === "function") updateBosses();
+    if (gameState.finisher) {
+      if (typeof updateHUD === "function") updateHUD();
+      return;
+    }
     maybeScheduleHazard();
     updateHazards();
+    maybeGrantFirstEvolution();
     while (gameState.exp >= gameState.expNeeded) {
       gameState.exp -= gameState.expNeeded;
       gameState.totalLevel++;
@@ -4046,90 +5877,89 @@
       playSound("perfect_slip");
     }
     if (gameState.stageClearing && gameState.enemies.length === 0 && !gameState.bossActive && gameState.screen === "playing" && gameState.purifyTimer <= 0) {
-      if (gameState.currentStage % 7 === 0 && !gameState.bossDefeatedThisStage) {
+      if (CONSTANTS.isBossStage(gameState.currentStage) && !gameState.bossDefeatedThisStage) {
         if (typeof spawnBoss === "function") spawnBoss();
       } else {
         advanceStage();
-      }
-    }
-    if (gameState.waveTimer <= 30 || gameState.enemies.length > 0) gameState.draftedThisBreather = false;
-    if (gameState.screen === "playing" && gameState.pendingUpgrades > 0 && gameState.enemies.length === 0 && !gameState.bossActive && !gameState.stageClearing && !gameState.draftedThisBreather) {
-      if (gameState.waveTimer > 30 && gameState.bossIntroTimer <= 0) {
-        gameState.draftedThisBreather = true;
-        triggerUpgradeDraft();
+        if (typeof updateHUD === "function") updateHUD();
+        return;
       }
     }
     if (gameState.health <= 0) {
-      gameState.screen = "gameover";
-      if (HUD.finalStage) HUD.finalStage.innerText = `STAGE REACHED: ${gameState.currentStage}`;
-      let title = "SURVIVOR ROUTE";
-      if (gameState.orbCounts.speed === 3) title = "VELOCITY ROUTE";
-      else if (gameState.orbCounts.power === 3) title = "TYRANT ROUTE";
-      else if (gameState.orbCounts.technique === 3) title = "PHANTOM ROUTE";
-      const runTitle = document.getElementById("run-title-ui");
-      if (runTitle) runTitle.innerText = `"${title}"`;
-      const runMode = document.getElementById("run-mode-ui");
-      if (runMode) runMode.innerText = gameState.dailyMode ? `DAILY CHALLENGE \xB7 ${gameState.dailyDateKey}` : "";
-      let score = gameState.statTotalKills * 10 + gameState.statMaxCombo * 50 + gameState.statTotalSlips * 250 + gameState.statBossKills * 250 + gameState.statCounterHits * 200 + gameState.statBossBreaks * 350 - gameState.statRecoilTaken * 150 - gameState.statDespDamage * 200;
-      let grade = "C";
-      if (score > 3e3) grade = "S";
-      else if (score > 1500) grade = "A";
-      else if (score > 800) grade = "B";
-      let reqSlipsForS = Math.min(gameState.statBossKills, 3);
-      if (reqSlipsForS === 0) reqSlipsForS = 1;
-      if (grade === "S" && gameState.statTotalSlips < reqSlipsForS) grade = "A";
-      if (grade === "A" && gameState.statTotalSlips < 1) grade = "B";
-      const statGrade = document.getElementById("stat-grade");
-      if (statGrade) {
-        statGrade.innerText = grade;
-        if (grade === "S") statGrade.className = "stat-val text-5xl ml-2 text-yellow-400";
-        else if (grade === "A") statGrade.className = "stat-val text-5xl ml-2 text-pink-500";
-        else statGrade.className = "stat-val text-5xl ml-2 text-cyan-400";
-      }
-      const scCombo = document.getElementById("stat-combo");
-      if (scCombo) scCombo.innerText = gameState.statMaxCombo;
-      const scSlips = document.getElementById("stat-slips");
-      if (scSlips) scSlips.innerText = gameState.statTotalSlips;
-      const scKills = document.getElementById("stat-kills");
-      if (scKills) scKills.innerText = gameState.statTotalKills;
-      const scBosses = document.getElementById("stat-bosses");
-      if (scBosses) scBosses.innerText = gameState.statBossKills;
-      const scBuild = document.getElementById("stat-build");
-      if (scBuild) scBuild.innerText = `FINAL BUILD: SPD ${gameState.orbCounts.speed} | PWR ${gameState.orbCounts.power} | TEC ${gameState.orbCounts.technique}`;
-      const scScore = document.getElementById("stat-score");
-      if (scScore) scScore.innerText = Math.max(0, score).toLocaleString();
-      const runResult = commitRun(Math.max(0, score), grade, gameState.currentStage);
-      const rec = commitRunRecord({ score: Math.max(0, score), grade, stage: gameState.currentStage, daily: gameState.dailyMode, bossKills: gameState.statBossKills });
-      const submittable = { name: getAlias(), score: Math.max(0, score), grade, stage: gameState.currentStage, daily: gameState.dailyMode, dateKey: gameState.dailyDateKey };
-      if (getOnlineOptIn() && isSubmittableRun(submittable)) submitScore(submittable);
-      const scStreak = document.getElementById("stat-streak");
-      if (scStreak) scStreak.innerText = `${gameState.statBossKills}${rec.bestBossStreak > gameState.statBossKills ? ` (best ${rec.bestBossStreak})` : ""}`;
-      const rankLine = document.getElementById("run-rank-ui");
-      if (rankLine) rankLine.innerText = rec.rank > 0 ? `LEADERBOARD #${rec.rank}` : "";
-      if (rec.newUnlocks && rec.newUnlocks.length) {
-        rec.newUnlocks.filter((id) => id !== "cyan").forEach((id) => {
-          const skin = STRIKER_SKINS.find((s) => s.id === id);
-          if (skin) showToast(`STRIKER UNLOCKED: ${skin.name.toUpperCase()}`, skin.color);
-        });
-      }
-      const nb = document.getElementById("new-best");
-      if (nb) {
-        if (gameState.dailyMode) {
-          nb.innerText = "NEW DAILY BEST";
-          nb.style.display = runResult.isDailyBest ? "block" : "none";
-        } else {
-          nb.innerText = "NEW PERSONAL BEST";
-          nb.style.display = runResult.isBest ? "block" : "none";
-        }
-      }
-      if (HUD.screens.gameover) HUD.screens.gameover.style.display = "flex";
+      endRun();
+      return;
     }
     gameState.health = Math.round(gameState.health);
     if (typeof updateHUD === "function") updateHUD();
     if (!gameState.seenTutorials.footwork_tip && gameState.currentStage === 1 && gameState.enemies.length === 0 && (!gameState.tutorialEnabled || gameState.spawnTotal >= 5)) {
       triggerTutorial("footwork_tip", "FOOTWORK", 'You are not locked to one spot.<br><br>Hold <span class="text-cyan-400 font-bold">[RIGHT]</span> to press forward &mdash; you reach enemies sooner and can interrupt a windup before it becomes a threat, but more of them converge on you at once.<br><br>Hold <span class="text-cyan-400 font-bold">[LEFT]</span> past the initial Ghost Step burst to give ground &mdash; buys you time, at the cost of tempo.<br><br><i>Let go of both and you drift back to a neutral stance on your own.</i>');
+      return;
     }
+    if (gameState.pendingUpgrades > 0 && gameState.enemies.length === 0 && !gameState.bossActive && !gameState.stageClearing && gameState.bossIntroTimer <= 0 && !tutorialRunning()) {
+      if (++gameState.draftHold >= DRAFT_HOLD_FRAMES) {
+        triggerUpgradeDraft();
+        return;
+      }
+    } else gameState.draftHold = 0;
     spawnEnemy();
+  }
+  function endRun() {
+    gameState.screen = "gameover";
+    stopMusic();
+    if (HUD.finalStage) HUD.finalStage.innerText = `STAGE REACHED: ${gameState.currentStage}`;
+    const runMode = document.getElementById("run-mode-ui");
+    if (runMode) runMode.innerText = gameState.dailyMode ? `DAILY CHALLENGE \xB7 ${gameState.dailyDateKey}` : "";
+    const score = Math.max(0, Math.round(gameState.score || 0));
+    const grade = rankForRun({ score, slips: gameState.statTotalSlips, bossKills: gameState.statBossKills });
+    const prev = gameState.dailyMode ? loadDailyBest() : loadBest();
+    const delta = pbDeltaText(score, prev ? prev.score : null);
+    const statGrade = document.getElementById("stat-grade");
+    if (statGrade) {
+      statGrade.innerText = grade;
+      statGrade.className = `rank-letter rank-${grade}`;
+    }
+    const pb = document.getElementById("pb-delta");
+    if (pb) {
+      pb.innerText = (gameState.dailyMode ? "DAILY: " : "") + delta.text;
+      pb.className = `pb-delta pb-${delta.kind}`;
+    }
+    const setText = (id, v) => {
+      const el = document.getElementById(id);
+      if (el) el.innerText = v;
+    };
+    setText("stat-combo", gameState.statMaxCombo);
+    setText("stat-slips", gameState.statTotalSlips);
+    setText("stat-ghosts", gameState.statGhostSteps || 0);
+    setText("stat-kills", gameState.statTotalKills);
+    setText("stat-bosses", gameState.statBossKills);
+    setText("stat-finishers", `${gameState.statFinishersClean || 0} clean \xB7 ${gameState.statFinisherHits || 0} hits`);
+    setText("stat-build", `FINAL BUILD: SPD ${gameState.orbCounts.speed} | PWR ${gameState.orbCounts.power} | TEC ${gameState.orbCounts.technique}`);
+    setText("stat-score", score.toLocaleString());
+    const runResult = commitRun(score, grade, gameState.currentStage);
+    const rec = commitRunRecord({ score, grade, stage: gameState.currentStage, daily: gameState.dailyMode, bossKills: gameState.statBossKills });
+    const submittable = { name: getAlias(), score, grade, stage: gameState.currentStage, daily: gameState.dailyMode, dateKey: gameState.dailyDateKey };
+    if (getOnlineOptIn() && isSubmittableRun(submittable)) submitScore(submittable);
+    const scStreak = document.getElementById("stat-streak");
+    if (scStreak) scStreak.innerText = `${gameState.statBossKills}${rec.bestBossStreak > gameState.statBossKills ? ` (best ${rec.bestBossStreak})` : ""}`;
+    const rankLine = document.getElementById("run-rank-ui");
+    if (rankLine) rankLine.innerText = rec.rank > 0 ? `LEADERBOARD #${rec.rank}` : "";
+    if (rec.newUnlocks && rec.newUnlocks.length) {
+      rec.newUnlocks.filter((id) => id !== "cyan").forEach((id) => {
+        const skin = STRIKER_SKINS.find((s) => s.id === id);
+        if (skin) showToast(`STRIKER UNLOCKED: ${skin.name.toUpperCase()}`, skin.color);
+      });
+    }
+    const nb = document.getElementById("new-best");
+    if (nb) {
+      if (gameState.dailyMode) {
+        nb.innerText = "NEW DAILY BEST";
+        nb.style.display = runResult.isDailyBest ? "block" : "none";
+      } else {
+        nb.innerText = "NEW PERSONAL BEST";
+        nb.style.display = runResult.isBest ? "block" : "none";
+      }
+    }
+    if (HUD.screens.gameover) HUD.screens.gameover.style.display = "flex";
   }
   var SAVE_KEY = "neon_strike_best_v1";
   var DAILY_KEY = "neon_strike_daily_v1";
@@ -4284,6 +6114,7 @@
   function toggleAudio() {
     gameState.audioMuted = !gameState.audioMuted;
     gameState.audioEnabled = !gameState.audioMuted && !!gameState.audioCtx;
+    refreshAudioLevels();
     const el = document.getElementById("audio-state");
     if (el) el.innerText = `[M] AUDIO: ${gameState.audioMuted ? "OFF" : "ON"}`;
   }
@@ -4295,8 +6126,22 @@
     shell.style.transform = `scale(${scale})`;
   }
   window.addEventListener("resize", fitViewport);
+  var lastCine = "";
+  function syncCinematicClass() {
+    const mode = gameState.screen === "vignette" ? "vignette" : gameState.finisher ? "finisher" : "";
+    if (mode === lastCine) return;
+    lastCine = mode;
+    try {
+      const b = document.body;
+      b.classList.toggle("cine-vignette", mode === "vignette");
+      b.classList.toggle("cine-finisher", mode === "finisher");
+    } catch (e) {
+    }
+  }
   function loop() {
     pollGamepad();
+    syncCinematicClass();
+    if (gameState.screen === "vignette") updateVignette();
     update();
     draw();
     gameState.lastKeys = { ...gameState.keys };
@@ -4309,6 +6154,7 @@
       canvas2.width = gameState.width;
       canvas2.height = gameState.height;
     }
+    applySettingsSideEffects();
     resetGame();
     initAtmosphere();
     fitViewport();
@@ -4317,4 +6163,38 @@
     loop();
   }
   init();
+  var __test = { startGame, resetGame, update, triggerUpgradeDraft, resolveWager, openPause, closePause, setPauseTab, renderLoadout, renderSettings, endRun };
+  try {
+    if (typeof location !== "undefined" && /[?&]debug\b/.test(location.search)) {
+      window.__ns = {
+        st: gameState,
+        CONSTANTS,
+        SequenceManager,
+        jump(stage) {
+          gameState.enemies = [];
+          gameState.currentStage = Math.max(1, stage - 1);
+          gameState.stageClearing = false;
+          gameState.bossActive = false;
+          advanceStage();
+        },
+        draft(n = 1) {
+          gameState.pendingUpgrades += n;
+          triggerUpgradeDraft();
+        },
+        // Advance the real frame loop n times synchronously (works even when the
+        // tab is hidden and requestAnimationFrame is paused).
+        step(n = 1) {
+          for (let i = 0; i < n; i++) {
+            pollGamepad();
+            syncCinematicClass();
+            if (gameState.screen === "vignette") updateVignette();
+            update();
+            gameState.lastKeys = { ...gameState.keys };
+          }
+          draw();
+        }
+      };
+    }
+  } catch (e) {
+  }
 })();
