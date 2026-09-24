@@ -1,0 +1,378 @@
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;900&display=swap');
+
+body { 
+    margin: 0; 
+    background: #050505; 
+    color: #fff; 
+    font-family: 'Orbitron', sans-serif; 
+    overflow: hidden; 
+    user-select: none; 
+}
+
+#viewport-shell {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #000;
+    overflow: hidden;
+}
+
+#game-container { 
+    position: relative; 
+    width: 1000px; 
+    height: 600px; 
+    flex: none;
+    transform-origin: center center; 
+    display: flex; 
+    justify-content: center; 
+    align-items: center; 
+    overflow: hidden; 
+    transition: background 2s ease; 
+}
+
+canvas { 
+    background: linear-gradient(to bottom, #030305 0%, #050508 40%, #0a0a12 100%); 
+}
+
+.ui-overlay { 
+    position: absolute; 
+    top: 20px; 
+    left: 20px; 
+    right: 20px; 
+    pointer-events: none; 
+    z-index: 50; 
+}
+
+.instinct-bar-container { 
+    width: 300px; 
+    height: 16px; 
+    background: rgba(255, 255, 255, 0.05); 
+    border: 1px solid #333; 
+    border-radius: 20px; 
+    overflow: hidden; 
+    position: relative; 
+}
+
+#instinct-bar { 
+    width: 0%; 
+    height: 100%; 
+    background: linear-gradient(90deg, #ff00ff, #00ffff); 
+    transition: width 0.1s; 
+}
+
+.beast-active #instinct-bar { 
+    background: linear-gradient(90deg, #ff0000, #ffaa00); 
+    animation: pulse 0.4s infinite alternate; 
+    box-shadow: 0 0 15px #ffaa00; 
+}
+
+@keyframes pulse { 
+    0% { opacity: 0.7; } 
+    100% { opacity: 1; } 
+}
+
+#instinct-ready-banner { 
+    color: #00ffff; 
+    font-weight: 900; 
+    font-style: italic; 
+    font-size: 0.9rem; 
+    letter-spacing: 2px; 
+    text-shadow: 0 0 10px #00ffff; 
+    display: none; 
+    animation: textPulse 1s infinite; 
+    transform-origin: left center; 
+}
+
+@keyframes textPulse { 
+    0%, 100% { opacity: 0.5; transform: scale(0.98); } 
+    50% { opacity: 1; transform: scale(1.02); } 
+}
+
+.flash { 
+    position: absolute; 
+    inset: 0; 
+    background: white; 
+    opacity: 0; 
+    pointer-events: none; 
+    z-index: 10; 
+    transition: opacity 0.15s ease-out; 
+}
+
+.combo-counter { 
+    font-size: 4rem; 
+    font-weight: 900; 
+    color: #00ffff; 
+    text-shadow: 0 0 15px #00ffff; 
+    font-style: italic; 
+    padding-right: 15px; 
+    transition: color 0.2s, text-shadow 0.2s; 
+}
+
+.fullscreen-overlay { 
+    position: absolute; 
+    inset: 0; 
+    background: rgba(0,0,0,0.85); 
+    display: none; 
+    flex-direction: column; 
+    justify-content: center; /* fallback for browsers without `safe` support */
+    justify-content: safe center; 
+    /* "safe center" (not plain "center") matters here: with plain center,
+       content that overflows on the *start* side of a scroll container can
+       become permanently unreachable — the browser only lets you scroll
+       toward the end side. "safe" falls back to start-alignment once content
+       no longer fits, which keeps it fully reachable via the scrollbar
+       instead of clipping the top no matter how far you scroll. */
+    justify-content: safe center; 
+    align-items: center; 
+    z-index: 200; 
+    backdrop-filter: blur(5px); 
+    overflow-y: auto; 
+    max-height: 100%; 
+    box-sizing: border-box; 
+    padding: 16px 0; 
+}
+
+#tutorial-screen #tutorial-title { font-size: 2.25rem; margin-bottom: 0.75rem; }
+#tutorial-screen #tutorial-text { font-size: 1.125rem; line-height: 1.4; margin-bottom: 1.5rem; max-width: 46rem; }
+
+/* Same class of bug, same fix: the results screen (title + stage/route lines
+   + New Best banner + stat box + two full buttons) stacks up to roughly
+   670px+ at its original sizing — taller than the fixed 600px canvas even
+   before the New Best banner shows, let alone with it. Tighter sizing for
+   the common case on top of the scroll fallback above. */
+#gameover-screen h2 { font-size: 2.75rem; margin-bottom: 0.25rem; }
+#gameover-screen .mb-8 { margin-bottom: 1rem; }
+#gameover-screen .orb-btn { padding: 14px; margin: 6px; }
+#gameover-screen #stat-grade { font-size: 2.25rem; }
+
+.orb-btn { 
+    background: #111; 
+    border: 1px solid #00ffff; 
+    padding: 24px; 
+    margin: 12px; 
+    width: 400px; 
+    text-align: center; 
+    cursor: pointer; 
+    transition: all 0.2s; 
+    pointer-events: auto; 
+    position: relative; /* Added for tooltips */
+}
+
+.orb-btn:hover { 
+    background: #00ffff; 
+    color: #000; 
+    transform: scale(1.05); 
+    box-shadow: 0 0 30px #00ffff; 
+}
+
+.orb-disabled { 
+    opacity: 0.3; 
+    pointer-events: none; 
+    border-color: #555; 
+}
+
+/* NEW: Deep Explanation Tooltips for Upgrades */
+.tooltip { 
+    position: absolute; 
+    bottom: 105%; 
+    left: 50%; 
+    transform: translateX(-50%); 
+    width: 340px; 
+    background: rgba(5, 10, 15, 0.98); 
+    border: 1px solid #00ffff; 
+    padding: 15px; 
+    border-radius: 8px; 
+    font-size: 0.8rem; 
+    line-height: 1.5; 
+    color: #ddd; 
+    opacity: 0; 
+    pointer-events: none; 
+    transition: opacity 0.2s, transform 0.2s; 
+    box-shadow: 0 0 30px rgba(0, 255, 255, 0.15); 
+    z-index: 300; 
+    text-align: center;
+}
+.orb-btn:hover .tooltip { 
+    opacity: 1; 
+    transform: translate(-50%, -5px); 
+}
+
+#perfect-slip-ui { 
+    position: absolute; 
+    top: 40%; 
+    left: 50%; 
+    transform: translate(-50%, -50%); 
+    font-size: 3rem; 
+    font-weight: 900; 
+    color: #fff; 
+    text-shadow: 0 0 20px #00ffff; 
+    opacity: 0; 
+    pointer-events: none; 
+    transition: opacity 0.2s; 
+    z-index: 50; 
+}
+
+#instructions { 
+    position: absolute; 
+    bottom: 20px; 
+    background: rgba(0,0,0,0.8); 
+    padding: 10px 20px; 
+    border-radius: 5px; 
+    font-size: 0.75rem; 
+    border: 1px solid #00ffff; 
+    z-index: 50; 
+    text-align: center; 
+    line-height: 1.6; 
+}
+
+.stat-line { color: #aaa; margin: 4px 0; font-size: 1.1rem; } 
+.stat-val { color: #00ffff; font-weight: bold; }
+#howto-screen, #tutorial-screen { z-index: 250; }
+
+.manual-container { 
+    max-width: 800px; 
+    background: rgba(10, 10, 10, 0.95); 
+    border: 1px solid #00ffff; 
+    padding: 40px; 
+    border-radius: 10px; 
+    text-align: left; 
+    max-height: 80vh; 
+    overflow-y: auto; 
+    box-shadow: 0 0 40px rgba(0, 255, 255, 0.2); 
+}
+
+.manual-h3 { color: #00ffff; font-weight: 900; font-size: 1.5rem; margin-top: 20px; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 2px; }
+.manual-p { color: #ccc; font-size: 1rem; line-height: 1.6; margin-bottom: 15px; } 
+.manual-highlight { color: #ffdd00; font-weight: bold; } 
+.manual-alert { color: #ff0055; font-weight: bold; }
+
+/* --- Release layer additions --- */
+#best-run {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    text-align: right;
+    font-size: 0.7rem;
+    letter-spacing: 2px;
+    color: #6b7280;
+    z-index: 210;
+    pointer-events: none;
+}
+#best-run b { color: #00ffff; }
+#audio-state {
+    position: absolute;
+    bottom: 20px;
+    right: 20px;
+    font-size: 0.65rem;
+    letter-spacing: 2px;
+    color: #4b5563;
+    z-index: 60;
+    pointer-events: none;
+}
+#new-best {
+    color: #facc15;
+    font-weight: 900;
+    font-style: italic;
+    letter-spacing: 3px;
+    animation: textPulse 1s infinite;
+    margin-bottom: 12px;
+}
+
+/* Stage label was getting lost next to the combo counter / instinct bar —
+   given real weight and an arc-coded color, with a pulse on stage change. */
+#stage-ui {
+    font-size: 0.95rem;
+    font-weight: 900;
+    letter-spacing: 1px;
+    text-shadow: 0 0 10px currentColor;
+    transition: color 0.6s ease;
+    display: inline-block;
+}
+@keyframes stagePulse {
+    0%   { transform: scale(1);    text-shadow: 0 0 10px currentColor; }
+    35%  { transform: scale(1.22); text-shadow: 0 0 26px currentColor; }
+    100% { transform: scale(1);    text-shadow: 0 0 10px currentColor; }
+}
+.stage-pulse { animation: stagePulse 1.6s cubic-bezier(.2,.8,.2,1); transform-origin: left center; }
+
+/* Overclock picks are invisible math with nothing else to make them feel like
+   a real moment — a brief golden power-surge glow across the draft screen. */
+@keyframes overclockPulse {
+    0%   { box-shadow: inset 0 0 0px 0px rgba(250, 204, 21, 0); }
+    25%  { box-shadow: inset 0 0 140px 40px rgba(250, 204, 21, 0.4); }
+    100% { box-shadow: inset 0 0 0px 0px rgba(250, 204, 21, 0); }
+}
+.overclock-flourish { animation: overclockPulse 0.8s ease-out; }
+
+/* --- Retention layer: Records / Leaderboard / Striker cosmetics --- */
+.records-container {
+    max-width: 640px;
+    width: 90%;
+    background: rgba(10, 10, 10, 0.96);
+    border: 1px solid #34d399;
+    padding: 32px 36px;
+    border-radius: 10px;
+    text-align: left;
+    max-height: 82vh;
+    overflow-y: auto;
+    box-shadow: 0 0 40px rgba(52, 211, 153, 0.2);
+}
+.records-container #records-stats b { color: #34d399; }
+.records-h3 { color: #34d399; font-weight: 900; font-size: 1.05rem; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 8px; }
+.records-list { display: flex; flex-direction: column; gap: 4px; }
+.rec-row {
+    display: grid;
+    grid-template-columns: 32px 28px 1fr auto;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 12px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 6px;
+    font-size: 0.85rem;
+}
+.rec-rank { color: #6b7280; font-weight: 900; }
+.rec-grade { font-weight: 900; font-style: italic; font-size: 1.1rem; text-align: center; }
+.rec-score { color: #e5e7eb; font-weight: 700; letter-spacing: 1px; }
+.rec-stage { color: #9ca3af; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1px; }
+.striker-picker { display: flex; flex-wrap: wrap; gap: 8px; }
+.striker-swatch {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.72rem;
+    transition: border-color 0.15s, background 0.15s;
+    pointer-events: auto;
+}
+.striker-swatch:hover { border-color: rgba(255, 255, 255, 0.4); background: rgba(255,255,255,0.04); }
+.striker-swatch.selected { border-color: #34d399; box-shadow: 0 0 12px rgba(52, 211, 153, 0.35); }
+.striker-swatch.locked { opacity: 0.5; cursor: default; }
+.striker-swatch.locked:hover { border-color: rgba(255, 255, 255, 0.12); background: none; }
+.sw-dot { width: 14px; height: 14px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+.sw-name { color: #d1d5db; letter-spacing: 1px; text-transform: uppercase; }
+
+/* --- Online leaderboard additions --- */
+.records-container { max-width: 720px; }
+.alias-row { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.alias-label { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 2px; color: #6b7280; white-space: nowrap; }
+.alias-input {
+    flex: 1; background: rgba(255,255,255,0.05); border: 1px solid rgba(52,211,153,0.4);
+    border-radius: 6px; padding: 7px 10px; color: #e5e7eb; font-weight: 700;
+    letter-spacing: 2px; text-transform: uppercase; font-size: 0.8rem; pointer-events: auto;
+    outline: none;
+}
+.alias-input:focus { border-color: #34d399; box-shadow: 0 0 10px rgba(52,211,153,0.3); }
+.global-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 620px) { .global-cols { grid-template-columns: 1fr; } }
+.rec-name { color: #e5e7eb; font-weight: 700; letter-spacing: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Online-leaderboard consent row (Records screen). Opt-in, default off — the
+   note is deliberately explicit about what leaves the device. */
+.online-row { display: flex; align-items: flex-start; gap: 9px; margin-bottom: 14px; text-align: left; }
+.online-checkbox { width: 15px; height: 15px; margin-top: 2px; flex: none; cursor: pointer; accent-color: #34d399; }
+.online-label { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 1.5px; color: #9ca3af; cursor: pointer; line-height: 1.5; }
+.online-note { display: block; text-transform: none; letter-spacing: 0.3px; font-size: 0.6rem; color: #6b7280; margin-top: 3px; max-width: 46ch; }

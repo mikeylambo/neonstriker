@@ -1,0 +1,2470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NEON STRIKE: INSTINCT</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;900&display=swap');
+        body { margin: 0; background: #050505; color: #fff; font-family: 'Orbitron', sans-serif; overflow: hidden; user-select: none; }
+        
+        #game-container { position: relative; width: 100vw; height: 100vh; display: flex; justify-content: center; align-items: center; overflow: hidden; }
+        
+        canvas { background: linear-gradient(to bottom, #030305 0%, #050508 40%, #0a0a12 100%); }
+        
+        .ui-overlay { position: absolute; top: 20px; left: 20px; right: 20px; pointer-events: none; z-index: 50; }
+        .instinct-bar-container { width: 300px; height: 16px; background: rgba(255, 255, 255, 0.05); border: 1px solid #333; border-radius: 20px; overflow: hidden; position: relative; }
+        #instinct-bar { width: 0%; height: 100%; background: linear-gradient(90deg, #ff00ff, #00ffff); transition: width 0.1s; }
+        
+        .beast-active #instinct-bar { background: linear-gradient(90deg, #ff0000, #ffaa00); animation: pulse 0.4s infinite alternate; }
+        @keyframes pulse { 0% { opacity: 0.7; } 100% { opacity: 1; } }
+        
+        #instinct-ready-banner { color: #00ffff; font-weight: 900; font-style: italic; font-size: 0.9rem; letter-spacing: 2px; text-shadow: 0 0 10px #00ffff; display: none; animation: textPulse 1s infinite; transform-origin: left center; }
+        @keyframes textPulse { 0% { opacity: 0.5; transform: scale(0.98); } 50% { opacity: 1; transform: scale(1.02); } 100% { opacity: 0.5; transform: scale(0.98); } }
+        
+        .flash { position: absolute; inset: 0; background: white; opacity: 0; pointer-events: none; z-index: 10; }
+        .combo-counter { font-size: 4rem; font-weight: 900; color: #ff00ff; text-shadow: 0 0 15px #ff00ff; font-style: italic; padding-right: 15px; }
+        .fullscreen-overlay { position: absolute; inset: 0; background: rgba(0,0,0,0.85); display: none; flex-direction: column; justify-content: center; align-items: center; z-index: 200; backdrop-filter: blur(5px); }
+        .orb-btn { background: #111; border: 1px solid #00ffff; padding: 24px; margin: 12px; width: 400px; text-align: center; cursor: pointer; transition: all 0.2s; pointer-events: auto; }
+        .orb-btn:hover { background: #00ffff; color: #000; transform: scale(1.05); box-shadow: 0 0 30px #00ffff; }
+        .orb-disabled { opacity: 0.3; pointer-events: none; border-color: #555; }
+        
+        #perfect-slip-ui { position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%); font-size: 3rem; font-weight: 900; color: #fff; text-shadow: 0 0 20px #00ffff; opacity: 0; pointer-events: none; transition: opacity 0.2s; z-index: 50; }
+        #instructions { position: absolute; bottom: 20px; background: rgba(0,0,0,0.8); padding: 10px 20px; border-radius: 5px; font-size: 0.8rem; border: 1px solid #ff00ff; z-index: 50; }
+        .stat-line { color: #aaa; margin: 4px 0; font-size: 1.1rem; }
+        .stat-val { color: #00ffff; font-weight: bold; }
+        #howto-screen, #tutorial-screen { z-index: 250; }
+        .manual-container { max-width: 800px; background: rgba(10, 10, 10, 0.95); border: 1px solid #ff00ff; padding: 40px; border-radius: 10px; text-align: left; max-height: 80vh; overflow-y: auto; box-shadow: 0 0 40px rgba(255, 0, 255, 0.2); }
+        .manual-h3 { color: #00ffff; font-weight: 900; font-size: 1.5rem; margin-top: 20px; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 2px;}
+        .manual-p { color: #ccc; font-size: 1rem; line-height: 1.6; margin-bottom: 15px;}
+        .manual-highlight { color: #ff00ff; font-weight: bold; }
+        .manual-alert { color: #ffaa00; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <div id="screen-flash" class="flash"></div>
+    <div id="perfect-slip-ui">PERFECT SLIP</div>
+    <canvas id="gameCanvas"></canvas>
+    
+    <div class="ui-overlay flex justify-between items-start w-full pr-8">
+        <div class="relative">
+            <div class="text-xs mb-1 uppercase tracking-widest text-cyan-400 font-bold">Instinct</div>
+            <div class="instinct-bar-container" id="bar-cont">
+                <div id="instinct-bar"></div>
+            </div>
+            
+            <div class="h-6 mt-1 flex items-center">
+                <div id="instinct-ready-banner">INSTINCT READY [SPACE]</div>
+            </div>
+            
+            <div class="mt-1 flex gap-4 text-[0.65rem] uppercase font-bold tracking-widest text-gray-500">
+                <div>SPD: <span id="orb-speed" class="text-cyan-400">0</span></div>
+                <div>PWR: <span id="orb-power" class="text-pink-500">0</span></div>
+                <div>TEC: <span id="orb-technique" class="text-yellow-400">0</span></div>
+            </div>
+
+            <!-- Counter PIP HUD -->
+            <div id="counter-hud" class="mt-1 text-[0.65rem] font-bold tracking-widest text-gray-600 transition-colors">
+                COUNTER: <span id="counter-status" class="text-gray-600 transition-colors">INACTIVE</span>
+            </div>
+
+            <div class="mt-3 flex items-end gap-4">
+                <div class="text-4xl font-black italic tracking-tighter" id="health-ui">HP: 100</div>
+                <div class="text-sm font-bold mb-1 flex flex-col">
+                    <span class="text-pink-500" id="stage-ui">STAGE 1</span>
+                    <span class="text-yellow-400 text-xs tracking-widest uppercase" id="affix-ui"></span>
+                </div>
+            </div>
+        </div>
+        <div class="text-right">
+            <div class="combo-counter" id="combo-ui">0</div>
+            <div class="text-xs uppercase text-pink-500 font-bold tracking-widest" style="padding-right: 15px;">Momentum</div>
+        </div>
+    </div>
+
+    <!-- Start Screen -->
+    <div id="start-screen" class="fullscreen-overlay" style="display: flex;">
+        <h1 class="text-6xl mb-4 text-cyan-400 font-black italic tracking-tighter text-shadow-lg">NEON STRIKE</h1>
+        <p class="text-white tracking-widest uppercase text-sm opacity-70 mb-8">Press [SPACE] to Begin</p>
+        
+        <div class="mb-10 flex items-center justify-center gap-3 bg-gray-900 bg-opacity-50 p-3 rounded border border-gray-800 pointer-events-auto">
+            <input type="checkbox" id="tutorial-toggle-cb" checked class="w-5 h-5 cursor-pointer accent-pink-500">
+            <label for="tutorial-toggle-cb" class="text-cyan-400 font-bold uppercase tracking-widest cursor-pointer text-sm">Enable Interactive Tutorial</label>
+        </div>
+
+        <div class="orb-btn" onclick="toggleHowTo()">
+            <div class="font-bold text-xl">COMBAT MANUAL</div>
+            <div class="text-xs opacity-70 mt-1 uppercase">Learn the Mechanics [H]</div>
+        </div>
+    </div>
+
+    <!-- Active Tutorial Overlay -->
+    <div id="tutorial-screen" class="fullscreen-overlay">
+        <h2 class="text-6xl mb-6 text-pink-500 font-black italic tracking-tighter text-shadow-lg" id="tutorial-title">TUTORIAL</h2>
+        <p class="text-white text-2xl text-center max-w-3xl leading-relaxed mb-10" id="tutorial-text"></p>
+        <div class="orb-btn" onclick="dismissTutorial()">
+            <div class="font-bold text-2xl">GOT IT</div>
+            <div class="text-sm opacity-70 mt-2 uppercase">Press [ENTER] to Continue</div>
+        </div>
+    </div>
+
+    <!-- How To Play / Manual Screen -->
+    <div id="howto-screen" class="fullscreen-overlay">
+        <div class="manual-container">
+            <h2 class="text-4xl mb-6 text-pink-500 font-black italic tracking-tighter border-b border-gray-800 pb-4">COMBAT MANUAL</h2>
+            <h3 class="manual-h3">1. The Basics</h3>
+            <p class="manual-p">Use <span class="manual-highlight">[UP / DOWN ARROWS]</span> to slip between the 3 lanes. <br>
+            <span class="manual-highlight">[LEFT ARROW]</span> = Ghost Step (Emergency evade, drops pressure) <br>
+            <span class="manual-highlight">[A] [A] [A]</span> = Jab Chain (Pins enemies, safe 3rd hit shove) <br>
+            <span class="manual-highlight">[S]</span> = Cross (Heavy hitstop, Stuns, Armor Break, Low Knockback) <br>
+            <span class="manual-highlight">[D]</span> = Hook (Medium knockback space-maker)<br>
+            <span class="manual-highlight">[SHIFT]</span> = Guard (Reduces damage by 75%)</p>
+            <h3 class="manual-h3">2. Reading The Lanes (Perfect Slips)</h3>
+            <p class="manual-p">When an enemy is preparing to attack, their lane will flash <span style="color: #ff0055; font-weight: bold;">RED</span>. Slipping now grants a <span class="manual-highlight">Good Slip</span>.<br>
+            When the lane flashes <span style="color: #fff; font-weight: bold;">BRIGHT WHITE</span>, you are in the <span class="manual-highlight">Perfect Slip Window</span>. <br>
+            A Perfect Slip completely evades the attack, grants a massive Instinct Meter boost, and <span style="color: #ffff00; font-weight: bold;">CHARGES</span> a devastating Counter Hit for your next strike!</p>
+            <h3 class="manual-h3">3. Guard Offense & Breaking Shields</h3>
+            <p class="manual-p">Enemies with <span class="manual-alert">GOLD ARMOR</span> will block Jabs. You MUST use a <span class="manual-highlight">CROSS [S]</span> to shatter their shield.<br>
+            While holding <span class="manual-highlight">GUARD [SHIFT]</span>, you can press <span class="manual-highlight">[A]</span> for a fast Guard Jab, or <span class="manual-highlight">[D]</span> for a space-making Check Hook. These are safe, but won't build combo pressure.</p>
+            <h3 class="manual-h3">4. Momentum (Pressure Chains & Branching)</h3>
+            <p class="manual-p">Landing consecutive hits on an enemy builds <span class="manual-highlight">Pressure</span>. <br>
+            Jabs <span class="manual-highlight">[A]</span> pin enemies in place, letting you stack pressure.<br>
+            Branching into a <span class="manual-highlight">CROSS [S]</span> or <span class="manual-highlight">HOOK [D]</span> mid-string will <span class="manual-alert">CASH OUT</span> your pressure, converting it into massive damage and turning your strikes into real Launchers!<br>
+            Leaving the lane, guarding, ghost stepping, or missing an attack will drop the combo string.</p>
+            <h3 class="manual-h3">5. Instinct Mode</h3>
+            <p class="manual-p">When the top meter is full, press <span class="manual-highlight">[SPACE]</span> to unleash Instinct Mode. <br>
+            You gain Hyper Armor, take 50% less damage, and your raw attacks gain full knockback. Control the crowd!</p>
+            <div class="orb-btn mt-8 mx-auto w-full" onclick="toggleHowTo()">
+                <div class="font-bold text-xl">CLOSE MANUAL [H]</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Upgrade Screen -->
+    <div id="upgrade-screen" class="fullscreen-overlay">
+        <h2 class="text-4xl mb-2 text-white font-black italic tracking-tighter" id="upgrade-title">GAUNTLET CLEARED</h2>
+        <p class="text-cyan-400 mb-10 tracking-widest uppercase text-sm">Select Evolution Path</p>
+        
+        <div class="orb-btn" id="btn-speed" onclick="applyOrb('speed')">
+            <div class="font-bold text-xl">SPEED ORB</div>
+            <div class="text-[10px] text-cyan-200 mt-1 mb-2 font-bold" id="upg-speed-lvl">CURRENT: LVL 0</div>
+            <div class="text-xs opacity-70 uppercase">Faster Punches & Quicker Recovery</div>
+            <div class="text-[10px] text-pink-400 mt-2 font-bold" id="desc-speed-l2">LVL 2: MISSING JABS WON'T BREAK MOMENTUM</div>
+            <div class="text-[10px] text-cyan-400 mt-1 font-bold" style="display:none;" id="desc-speed-l3">LVL 3: SLIP CANCEL OFF HITS/SLIPS</div>
+        </div>
+        <div class="orb-btn" id="btn-power" onclick="applyOrb('power')">
+            <div class="font-bold text-xl">POWER ORB</div>
+            <div class="text-[10px] text-cyan-200 mt-1 mb-2 font-bold" id="upg-power-lvl">CURRENT: LVL 0</div>
+            <div class="text-xs opacity-70 uppercase">Higher Damage & Base Knockback</div>
+            <div class="text-[10px] text-pink-400 mt-2 font-bold" id="desc-power-l2">LVL 2: CROSS ATTACK GAINS MASSIVE REACH</div>
+            <div class="text-[10px] text-cyan-400 mt-1 font-bold" style="display:none;" id="desc-power-l3">LVL 3: COLLATERAL BOWLING DAMAGE</div>
+        </div>
+        <div class="orb-btn" id="btn-technique" onclick="applyOrb('technique')">
+            <div class="font-bold text-xl">TECHNIQUE ORB</div>
+            <div class="text-[10px] text-cyan-200 mt-1 mb-2 font-bold" id="upg-technique-lvl">CURRENT: LVL 0</div>
+            <div class="text-xs opacity-70 uppercase">Build Instinct Meter Much Faster</div>
+            <div class="text-[10px] text-pink-400 mt-2 font-bold" id="desc-technique-l2">LVL 2: PERFECT SLIPS CHARGE 2 COUNTER HITS</div>
+            <div class="text-[10px] text-cyan-400 mt-1 font-bold" style="display:none;" id="desc-technique-l3">LVL 3: SLIPPING BOSSES EXPOSES WEAKNESS</div>
+        </div>
+    </div>
+
+    <!-- Pause Screen -->
+    <div id="pause-screen" class="fullscreen-overlay">
+        <h2 class="text-6xl mb-4 text-cyan-400 font-black italic tracking-tighter text-shadow-lg">PAUSED</h2>
+        <p class="text-white tracking-widest uppercase text-sm opacity-70 mb-8">Press [ESC] or [P] to Resume</p>
+        <div class="orb-btn" onclick="toggleHowTo()">
+            <div class="font-bold text-xl">COMBAT MANUAL [H]</div>
+        </div>
+        <div class="orb-btn" style="border-color: #ef4444; color: #ef4444;" onclick="returnToMenu()">
+            <div class="font-bold text-xl">QUIT TO MENU</div>
+        </div>
+    </div>
+
+    <!-- Game Over Screen -->
+    <div id="gameover-screen" class="fullscreen-overlay">
+        <h2 class="text-6xl mb-2 text-pink-500 font-black italic tracking-tighter">GAUNTLET ENDED</h2>
+        <p class="text-cyan-400 mb-2 tracking-widest uppercase text-3xl" id="final-stage-ui">STAGE REACHED: 1</p>
+        <p class="text-yellow-400 mb-6 font-bold text-xl italic" id="run-title-ui">"SURVIVOR ROUTE"</p>
+        
+        <div class="mb-8 flex gap-8 text-left bg-black bg-opacity-50 p-6 rounded border border-gray-800">
+            <div>
+                <div class="stat-line">Grade: <span class="stat-val text-5xl ml-2" id="stat-grade">C</span></div>
+                <div class="stat-line mt-4">Max Combo: <span class="stat-val" id="stat-combo">0</span></div>
+                <div class="stat-line">Perfect Slips: <span class="stat-val" id="stat-slips">0</span></div>
+            </div>
+            <div>
+                <div class="stat-line mt-2">Enemies Defeated: <span class="stat-val" id="stat-kills">0</span></div>
+                <div class="stat-line">Bosses Defeated: <span class="stat-val" id="stat-bosses">0</span></div>
+                <div class="stat-line text-xs mt-4 text-gray-500 font-bold" id="stat-build">FINAL BUILD: SPD 0 | PWR 0 | TEC 0</div>
+            </div>
+        </div>
+
+        <div class="orb-btn" onclick="startGame()">
+            <div class="font-bold text-xl">RESTART RUN</div>
+            <div class="text-xs opacity-70 mt-1 uppercase">Press [R] or Click to Try Again</div>
+        </div>
+        <div class="orb-btn" style="border-color: #6b7280; color: #9ca3af;" onclick="returnToMenu()">
+            <div class="font-bold text-xl">MAIN MENU</div>
+        </div>
+    </div>
+
+    <div id="instructions">
+        [UP/DOWN] SLIP &nbsp;|&nbsp; [LEFT] GHOST STEP &nbsp;|&nbsp; [A] JAB CHAIN &nbsp;|&nbsp; [S] CROSS &nbsp;|&nbsp; [D] HOOK &nbsp;|&nbsp; [SPACE] INSTINCT
+    </div>
+</div>
+
+<script>
+// ==========================================
+// 1. ENGINE & GLOBAL VARIABLES
+// ==========================================
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d', { alpha: false });
+
+const HUD = {
+    combo: document.getElementById('combo-ui'),
+    instinctBar: document.getElementById('instinct-bar'),
+    instinctBanner: document.getElementById('instinct-ready-banner'),
+    barCont: document.getElementById('bar-cont'),
+    health: document.getElementById('health-ui'),
+    flash: document.getElementById('screen-flash'),
+    screens: {
+        upgrade: document.getElementById('upgrade-screen'),
+        pause: document.getElementById('pause-screen'),
+        gameover: document.getElementById('gameover-screen'),
+        start: document.getElementById('start-screen'),
+        howto: document.getElementById('howto-screen'),
+        tutorial: document.getElementById('tutorial-screen')
+    },
+    finalStage: document.getElementById('final-stage-ui'),
+    slipPopup: document.getElementById('perfect-slip-ui'),
+    stage: document.getElementById('stage-ui'),
+    affix: document.getElementById('affix-ui'),
+    counterHud: document.getElementById('counter-hud'),
+    counterStatus: document.getElementById('counter-status')
+};
+
+let lastHUD = { combo: -1, instinct: -1, hp: -1, slipBuff: -1 }; 
+
+let audioCtx;
+let audioEnabled = false;
+
+let width, height;
+const LANE_Y = [0.4, 0.6, 0.8]; 
+let scrollX = 0;
+let gameState = 'start'; 
+let previousGameState = 'start'; 
+let runCount = 0; 
+
+let combo = 0;
+let instinctMeter = 0;
+let isInstinct = false;
+let instinctPauseTimer = 0; 
+let shake = 0;
+let health = 100;
+let hitstop = 0;
+let enemiesDefeated = 0;
+let currentStage = 1;
+let spawnTotal = 0; 
+let stageClearing = false, bossActive = false;
+
+// Advanced Scoring Stats
+let statMaxCombo = 0, statTotalSlips = 0, statTotalKills = 0, statBossKills = 0;
+let statCounterHits = 0, statBossBreaks = 0, statRecoilTaken = 0, statDespDamage = 0;
+
+const AFFIXES = [
+    {name: 'NONE', desc: ''},
+    {name: 'FAST CROWD', desc: 'Assassins appear more often'},
+    {name: 'HEAVY HANDS', desc: 'Bruisers appear more often'},
+    {name: 'IRON WALL', desc: 'Shield units appear more often'},
+    {name: 'SURGE', desc: 'Instinct meter builds 50% faster'}
+];
+let currentAffix = AFFIXES[0];
+let tutorialEnabled = true;
+let laneFlash = [0, 0, 0]; 
+let seenTutorials = { shield: false, slip: false, guard: false, instinct: false, counter: false };
+let tutorialGrace = 0, tutorialDelay = 0; 
+let instinctReadyTimer = 0, bossIntroTimer = 0;
+let bossThemeColor = '#fff', bossIntroText = "";
+
+let orbCounts = { speed: 0, power: 0, technique: 0 };
+let stats = { speedMult: 1, powerMult: 1, techMult: 1 };
+let keys = {};
+
+let player = resetPlayerObj();
+let enemies = [];
+let particles = [];
+let floatingTexts = [];
+let shockwaves = []; 
+let ambientDust = [];
+let cathedralShards = []; 
+let cathedralPillars = [];
+let lightShafts = [];
+let roseWindow = { x: 0, baseY: 0, y: 0, rotation: 0, floatTime: 0, petals: [] }; 
+let foregroundLines = [];
+let bgGradient; 
+
+// ==========================================
+// 2. SEQUENCE MANAGER (MICRO-CUTSCENES)
+// ==========================================
+const SequenceManager = {
+    active: false,
+    currentSequence: null,
+    stepIndex: 0,
+    timer: 0,
+    overlayColor: 'transparent',
+    text: { title: '', subtitle: '', alpha: 0 },
+
+    play: function(sequenceId) {
+        this.active = true;
+        this.currentSequence = Sequences[sequenceId];
+        this.stepIndex = 0;
+        this.startStep();
+    },
+
+    startStep: function() {
+        if (this.stepIndex >= this.currentSequence.length) {
+            this.active = false;
+            return;
+        }
+        let step = this.currentSequence[this.stepIndex];
+        this.timer = step.duration || 0;
+
+        if (step.type === 'tint') this.overlayColor = step.color;
+        if (step.type === 'text') {
+            this.text = { title: step.title, subtitle: step.subtitle || '', alpha: 1 };
+        }
+        if (step.type === 'sound') playSound(step.name);
+        if (step.type === 'spawnBoss') spawnBoss();
+        if (step.type === 'resume') {
+            this.active = false;
+            this.overlayColor = 'transparent';
+            this.text.alpha = 0;
+            return; 
+        }
+    },
+
+    update: function() {
+        if (!this.active) return;
+
+        if (this.timer > 0) {
+            this.timer--;
+            if (this.timer < 30 && this.text.alpha > 0) {
+                this.text.alpha = Math.max(0, this.text.alpha - 0.05);
+            }
+            if (this.timer <= 0) {
+                this.stepIndex++;
+                this.startStep();
+            }
+        }
+    },
+
+    draw: function(ctx, w, h) {
+        if (!this.active) return;
+
+        if (this.overlayColor !== 'transparent') {
+            ctx.fillStyle = this.overlayColor;
+            ctx.fillRect(0, 0, w, h);
+        }
+        
+        if (this.text.alpha > 0) {
+            ctx.fillStyle = `rgba(255, 255, 255, ${this.text.alpha})`;
+            ctx.textAlign = 'center';
+            ctx.font = '900 italic 40px Orbitron';
+            ctx.fillText(this.text.title, w / 2, h / 2 - 10);
+            
+            if (this.text.subtitle) {
+                ctx.fillStyle = `rgba(0, 255, 255, ${this.text.alpha})`;
+                ctx.font = 'bold 20px Orbitron';
+                ctx.fillText(this.text.subtitle, w / 2, h / 2 + 30);
+            }
+            ctx.textAlign = 'left';
+        }
+    }
+};
+
+const Sequences = {
+    stage1Intro: [
+        { type: 'tint', color: 'rgba(0, 0, 0, 0.8)', duration: 30 },
+        { type: 'text', title: 'SHATTERED CATHEDRAL', duration: 150 },
+        { type: 'tint', color: 'transparent', duration: 30 },
+        { type: 'resume' }
+    ]
+};
+
+// ==========================================
+// 3. AUDIO & VFX UTILITIES
+// ==========================================
+function initAudio() {
+    if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        audioEnabled = true;
+    }
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+function playSound(type) {
+    if (!audioEnabled) return;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain); gain.connect(audioCtx.destination);
+    const now = audioCtx.currentTime;
+    
+    if (type === 'jab_tell') {
+        osc.type = 'sine'; osc.frequency.setValueAtTime(1200, now); osc.frequency.exponentialRampToValueAtTime(800, now + 0.05);
+        gain.gain.setValueAtTime(0.1, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.05);
+        osc.start(now); osc.stop(now + 0.05);
+    } else if (type === 'bash_tell') {
+        osc.type = 'sawtooth'; osc.frequency.setValueAtTime(150, now); osc.frequency.exponentialRampToValueAtTime(50, now + 0.3);
+        gain.gain.setValueAtTime(0.15, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+        osc.start(now); osc.stop(now + 0.3);
+    } else if (type === 'feint_tell') {
+        osc.type = 'triangle'; osc.frequency.setValueAtTime(400, now); osc.frequency.exponentialRampToValueAtTime(1200, now + 0.2);
+        gain.gain.setValueAtTime(0.1, now); gain.gain.linearRampToValueAtTime(0, now + 0.2);
+        osc.start(now); osc.stop(now + 0.2);
+    } else if (type === 'hit') {
+        osc.type = 'square'; osc.frequency.setValueAtTime(100, now); osc.frequency.exponentialRampToValueAtTime(40, now + 0.15);
+        gain.gain.setValueAtTime(0.2, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
+        osc.start(now); osc.stop(now + 0.15);
+    } else if (type === 'slip') {
+        osc.type = 'sine'; osc.frequency.setValueAtTime(600, now); osc.frequency.exponentialRampToValueAtTime(150, now + 0.1);
+        gain.gain.setValueAtTime(0.05, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+        osc.start(now); osc.stop(now + 0.1);
+    } else if (type === 'perfect_slip') {
+        osc.type = 'square'; osc.frequency.setValueAtTime(1200, now); osc.frequency.exponentialRampToValueAtTime(300, now + 0.15);
+        gain.gain.setValueAtTime(0.2, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
+        osc.start(now); osc.stop(now + 0.15);
+    } else if (type === 'ghost_step') {
+        osc.type = 'sawtooth'; osc.frequency.setValueAtTime(300, now); osc.frequency.exponentialRampToValueAtTime(50, now + 0.15);
+        gain.gain.setValueAtTime(0.1, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
+        osc.start(now); osc.stop(now + 0.15);
+    } else if (type === 'bounce') {
+        osc.type = 'triangle'; osc.frequency.setValueAtTime(200, now); osc.frequency.exponentialRampToValueAtTime(100, now + 0.1);
+        gain.gain.setValueAtTime(0.1, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+        osc.start(now); osc.stop(now + 0.1);
+    } else if (type === 'laser') {
+        osc.type = 'sawtooth'; osc.frequency.setValueAtTime(800, now); osc.frequency.exponentialRampToValueAtTime(100, now + 0.3);
+        gain.gain.setValueAtTime(0.2, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+        osc.start(now); osc.stop(now + 0.3);
+    } else if (type === 'zoner_tell') {
+        osc.type = 'sine'; osc.frequency.setValueAtTime(400, now); osc.frequency.exponentialRampToValueAtTime(1200, now + 0.5);
+        gain.gain.setValueAtTime(0, now); gain.gain.linearRampToValueAtTime(0.1, now + 0.4); gain.gain.linearRampToValueAtTime(0, now + 0.5);
+        osc.start(now); osc.stop(now + 0.5);
+    } else if (type === 'vacuum') {
+        osc.type = 'sine'; osc.frequency.setValueAtTime(100, now); osc.frequency.exponentialRampToValueAtTime(800, now + 0.2);
+        gain.gain.setValueAtTime(0, now); gain.gain.linearRampToValueAtTime(0.2, now + 0.1); gain.gain.linearRampToValueAtTime(0, now + 0.2);
+        osc.start(now); osc.stop(now + 0.2);
+    } else if (type === 'shatter') {
+        osc.type = 'square'; osc.frequency.setValueAtTime(8000, now); osc.frequency.exponentialRampToValueAtTime(100, now + 0.25);
+        gain.gain.setValueAtTime(0.3, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.25);
+        osc.start(now); osc.stop(now + 0.25);
+    }
+}
+
+function spawnFloatingText(x, y, text, color) {
+    floatingTexts.push({ x: x, y: y, text: text, color: color, life: 1.0, velocity: -1.5 });
+}
+
+function showToast(msg) {
+    spawnFloatingText(width / 2, height * 0.25, msg, '#fff');
+    let last = floatingTexts[floatingTexts.length - 1];
+    last.velocity = -0.5;
+    last.life = 2.0;
+}
+
+function triggerShockwave(x, y, color) {
+    shockwaves.push({ x: x, y: y, radius: 10, maxRadius: 300, color: color, alpha: 1.0 });
+}
+
+function createImpact(x, y, color) {
+    if (particles.length > 100) return; 
+    const count = particles.length > 80 ? 3 : 5;
+    for (let i = 0; i < count; i++) {
+        particles.push({ x, y, vx: (Math.random() - 0.5) * 20, vy: (Math.random() - 0.5) * 20, life: 1, color: color || '#fff', type: 'spark' });
+    }
+}
+
+function createVacuum(cx, cy) {
+    for(let i=0; i<15; i++) {
+        let angle = Math.random() * Math.PI * 2;
+        let dist = 60 + Math.random() * 40;
+        particles.push({
+            x: cx + Math.cos(angle) * dist, y: cy + Math.sin(angle) * dist,
+            vx: -Math.cos(angle) * 10, vy: -Math.sin(angle) * 10,
+            life: 0.5, color: '#ffffff', type: 'vacuum'
+        });
+    }
+}
+
+function createShatter(x, y, color) {
+    for (let i = 0; i < 20; i++) {
+        particles.push({ 
+            x, y, vx: (Math.random() - 0.5) * 40, vy: (Math.random() - 0.5) * 40, 
+            life: 1.5, color: color, type: 'shard',
+            size: Math.random() * 8 + 3, rot: Math.random() * Math.PI * 2, rotV: (Math.random() - 0.5) * 0.5
+        });
+    }
+    playSound('shatter');
+}
+
+function doFlash(amt) { 
+    HUD.flash.style.opacity = amt; 
+    setTimeout(() => HUD.flash.style.opacity = 0, 60); 
+}
+
+// ==========================================
+// 4. UI & MENU LOGIC
+// ==========================================
+function updateHUD() {
+    // CACHED DOM UPDATES FOR PERFORMANCE
+    if (lastHUD.combo !== combo) {
+        HUD.combo.innerText = combo;
+        lastHUD.combo = combo;
+    }
+    
+    let roundInstinct = Math.floor(instinctMeter);
+    if (lastHUD.instinct !== roundInstinct) {
+        HUD.instinctBar.style.width = roundInstinct + '%';
+        lastHUD.instinct = roundInstinct;
+    }
+    
+    let displayHP = Math.max(0, health);
+    if (lastHUD.hp !== displayHP) {
+        HUD.health.innerText = `HP: ${displayHP}`;
+        lastHUD.hp = displayHP;
+    }
+
+    if (lastHUD.slipBuff !== player.slipBuff) {
+        if (player.slipBuff > 0) {
+            HUD.counterHud.style.color = '#ffffff';
+            HUD.counterStatus.style.color = '#ffffff';
+            HUD.counterStatus.innerText = 'READY';
+        } else {
+            HUD.counterHud.style.color = '';
+            HUD.counterStatus.style.color = '';
+            HUD.counterStatus.innerText = 'INACTIVE';
+        }
+        lastHUD.slipBuff = player.slipBuff;
+    }
+}
+
+function triggerTutorial(id, title, text) {
+    if (seenTutorials[id]) return;
+    seenTutorials[id] = true;
+    gameState = 'tutorial';
+    document.getElementById('tutorial-title').innerText = title;
+    document.getElementById('tutorial-text').innerHTML = text;
+    HUD.screens.tutorial.style.display = 'flex';
+}
+
+function dismissTutorial() {
+    gameState = 'playing';
+    HUD.screens.tutorial.style.display = 'none';
+    tutorialGrace = 0; 
+}
+
+function startGame() {
+    runCount++; // Keep track of restarts/subsequent runs
+    initAudio();
+    tutorialEnabled = document.getElementById('tutorial-toggle-cb').checked;
+    resetGame(); 
+    gameState = 'playing';
+    HUD.screens.start.style.display = 'none';
+    HUD.screens.gameover.style.display = 'none';
+    SequenceManager.play('stage1Intro');
+}
+
+function returnToMenu() {
+    resetGame();
+    gameState = 'start';
+    HUD.screens.start.style.display = 'flex';
+    HUD.screens.pause.style.display = 'none';
+    HUD.screens.gameover.style.display = 'none';
+    SequenceManager.active = false;
+}
+
+function toggleHowTo() {
+    initAudio();
+    if (gameState === 'howto') {
+        gameState = previousGameState;
+        HUD.screens.howto.style.display = 'none';
+    } else {
+        previousGameState = gameState;
+        gameState = 'howto';
+        HUD.screens.howto.style.display = 'flex';
+    }
+}
+
+// ==========================================
+// 5. CORE INITIALIZATION & ATMOSPHERE
+// ==========================================
+function resetPlayerObj() {
+    return {
+        lane: 1, x: 180, y: 0, w: 50, h: 110, state: 'idle', 
+        punchTimer: 0, punchType: null, hitFrame: 0, didHit: false,
+        slipCooldown: 0, slipBuff: 0, color: '#00ffff', trails: [], trailTimer: 0,
+        recoveryTimer: 0, speedCancelReady: false,
+        jabStep: 0, comboWindow: 0, 
+        inputBuffer: null, inputBufferTimer: 0,
+        movementBuffer: null, movementBufferTimer: 0,
+        ghostStepTimer: 0, ghostStepCooldown: 0,
+        dangerLevel: 0
+    };
+}
+
+function resetJabString() {
+    player.jabStep = 0;
+    player.comboWindow = 0;
+}
+
+function clearAllPressure() {
+    enemies.forEach(en => { en.pressure = 0; });
+}
+
+function initAtmosphere() {
+    ambientDust = [];
+    for(let i=0; i<30; i++) { 
+        ambientDust.push({ x: Math.random() * width, y: Math.random() * height, vx: (Math.random() - 0.5) * 0.5 - 1, vy: (Math.random() - 0.5) * 0.5, size: Math.random() * 3 + 1, alpha: Math.random() * 0.5 });
+    }
+    
+    cathedralShards = [];
+    for(let i=0; i<15; i++) {
+        cathedralShards.push({ 
+            x: Math.random() * width * 2, y: Math.random() * height, 
+            size: Math.random() * 80 + 40,
+            angle: Math.random() * Math.PI * 2, 
+            speed: Math.random() * 0.2 + 0.1,
+            rotSpeed: (Math.random() - 0.5) * 0.01,
+            color: 'rgba(0, 150, 255, 0.03)',
+            points: Array.from({length: 3 + Math.floor(Math.random()*3)}, () => ({x: (Math.random()-0.5)*2, y: (Math.random()-0.5)*2}))
+        });
+    }
+
+    cathedralPillars = [];
+    for(let i=0; i<8; i++) {
+        cathedralPillars.push({ x: i * 250, w: 60, speed: 0.5 });
+    }
+
+    lightShafts = [];
+    for(let i=0; i<3; i++) {
+        lightShafts.push({ x: width * 0.2 + (i * 300), speed: 0.1 });
+    }
+
+    roseWindow.x = width * 0.8;
+    roseWindow.baseY = height * 0.25;
+    roseWindow.y = height * 0.25;
+    roseWindow.rotation = 0;
+    roseWindow.floatTime = 0;
+    
+    roseWindow.petals = [];
+    for(let i=0; i<8; i++) {
+        if (Math.random() > 0.15) roseWindow.petals.push(i * (Math.PI / 4));
+    }
+
+    foregroundLines = [];
+    for(let i=0; i<5; i++) {
+        foregroundLines.push({ x: Math.random() * width, y: height - Math.random() * 100, speed: Math.random() * 15 + 10, length: Math.random() * 100 + 50, alpha: Math.random() * 0.3 + 0.1 });
+    }
+    
+    bgGradient = ctx.createLinearGradient(0, 0, 0, height);
+    bgGradient.addColorStop(0, '#020204');
+    bgGradient.addColorStop(0.5, '#050508');
+    bgGradient.addColorStop(1, '#0a0a12');
+}
+
+function updateAtmosphere() {
+    ambientDust.forEach(d => {
+        d.x += d.vx - (scrollX * 0.01); d.y += d.vy;
+        if (d.x < 0) d.x = width; if (d.y < 0) d.y = height; if (d.y > height) d.y = 0;
+    });
+    foregroundLines.forEach(f => {
+        f.x -= f.speed + (scrollX * 0.2);
+        if (f.x + f.length < 0) { f.x = width + Math.random() * 500; f.y = height - Math.random() * 100; }
+    });
+    for (let i = shockwaves.length - 1; i >= 0; i--) {
+        shockwaves[i].radius += 15;
+        shockwaves[i].alpha -= 0.05;
+        if (shockwaves[i].alpha <= 0) shockwaves.splice(i, 1);
+    }
+
+    cathedralPillars.forEach(p => {
+        p.x -= p.speed + (scrollX * 0.01);
+        if (p.x < -200) p.x = width + 200;
+    });
+
+    lightShafts.forEach(L => {
+        L.x -= L.speed + (scrollX * 0.005);
+        if (L.x < -500) L.x = width + 200;
+    });
+
+    cathedralShards.forEach(shard => {
+        shard.x -= shard.speed + (scrollX * 0.05);
+        shard.angle += shard.rotSpeed;
+        if (shard.x < -200) shard.x = width + 200;
+    });
+
+    roseWindow.rotation += 0.0005;
+    roseWindow.floatTime += 0.01;
+    roseWindow.y = roseWindow.baseY + Math.sin(roseWindow.floatTime) * 15;
+    roseWindow.x -= (scrollX * 0.002); 
+    if(roseWindow.x < -400) roseWindow.x = width + 400;
+}
+
+function drawAtmosphere(ctx) {
+    ctx.fillStyle = bgGradient;
+    ctx.fillRect(0, 0, width, height);
+
+    lightShafts.forEach(L => {
+        let gradLight = ctx.createLinearGradient(L.x, 0, L.x + 200, height);
+        gradLight.addColorStop(0, 'rgba(0, 255, 255, 0.02)');
+        gradLight.addColorStop(1, 'transparent');
+        ctx.fillStyle = gradLight;
+        ctx.beginPath();
+        ctx.moveTo(L.x, 0); ctx.lineTo(L.x + 150, 0);
+        ctx.lineTo(L.x + 300, height); ctx.lineTo(L.x + 150, height);
+        ctx.fill();
+    });
+
+    ctx.save();
+    ctx.translate(roseWindow.x, roseWindow.y);
+    ctx.rotate(roseWindow.rotation);
+    ctx.strokeStyle = 'rgba(0, 150, 255, 0.04)'; 
+    ctx.lineWidth = 4;
+    
+    ctx.beginPath(); ctx.arc(0, 0, 250, 0, Math.PI * 2); ctx.stroke();
+    
+    roseWindow.petals.forEach(angle => {
+        ctx.save();
+        ctx.rotate(angle);
+        ctx.beginPath();
+        ctx.moveTo(0, 0); ctx.lineTo(60, 220); ctx.lineTo(0, 280); ctx.lineTo(-60, 220);
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(0, 150, 255, 0.01)'; 
+        ctx.fill(); ctx.stroke();
+        
+        ctx.beginPath();
+        ctx.moveTo(0, 40); ctx.lineTo(30, 140); ctx.lineTo(-30, 140);
+        ctx.closePath();
+        ctx.strokeStyle = 'rgba(0, 150, 255, 0.08)'; 
+        ctx.stroke();
+        ctx.restore();
+    });
+
+    ctx.beginPath(); ctx.arc(0, 0, 50, 0, Math.PI * 2); 
+    ctx.fillStyle = 'rgba(0, 150, 255, 0.05)'; ctx.fill(); ctx.stroke();
+    ctx.restore();
+
+    ctx.fillStyle = '#030305';
+    cathedralPillars.forEach(p => {
+        ctx.fillRect(p.x, 0, p.w, height);
+        ctx.fillStyle = 'rgba(0, 255, 255, 0.01)';
+        ctx.fillRect(p.x + 5, 0, 5, height);
+        ctx.fillStyle = '#030305';
+    });
+
+    ctx.save();
+    cathedralShards.forEach(shard => {
+        ctx.translate(shard.x, shard.y);
+        ctx.rotate(shard.angle);
+        ctx.fillStyle = shard.color;
+        ctx.strokeStyle = 'rgba(0, 255, 255, 0.05)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        shard.points.forEach((p, i) => {
+            if(i === 0) ctx.moveTo(p.x * shard.size, p.y * shard.size);
+            else ctx.lineTo(p.x * shard.size, p.y * shard.size);
+        });
+        ctx.closePath();
+        ctx.fill(); ctx.stroke();
+        ctx.rotate(-shard.angle);
+        ctx.translate(-shard.x, -shard.y);
+    });
+    ctx.restore();
+}
+
+function init() {
+    width = Math.min(window.innerWidth * 0.9, 1000);
+    height = 600;
+    canvas.width = width;
+    canvas.height = height;
+    player.y = height * LANE_Y[player.lane];
+    initAtmosphere();
+    loop();
+}
+
+function resetGame() {
+    health = 100; combo = 0; instinctMeter = 0; isInstinct = false;
+    currentStage = 1; enemiesDefeated = 0; instinctPauseTimer = 0;
+    laneFlash = [0, 0, 0]; 
+    lastHUD = { combo: -1, instinct: -1, hp: -1, slipBuff: -1 }; // Reset cache
+    
+    if (spawnTotal >= 4) tutorialEnabled = false; 
+    spawnTotal = tutorialEnabled ? 0 : 4;
+
+    stageClearing = false; bossActive = false; bossDefeated = false;
+    bossIntroTimer = 0; shockwaves = [];
+    
+    statMaxCombo = 0; statTotalSlips = 0; statTotalKills = 0; statBossKills = 0;
+    statCounterHits = 0; statBossBreaks = 0; statRecoilTaken = 0; statDespDamage = 0;
+    
+    instinctReadyTimer = 0; tutorialDelay = 0;
+    seenTutorials = { shield: false, slip: false, guard: false, instinct: false, counter: false };
+
+    orbCounts = { speed: 0, power: 0, technique: 0 };
+    document.getElementById('orb-speed').innerText = 0;
+    document.getElementById('orb-power').innerText = 0;
+    document.getElementById('orb-technique').innerText = 0;
+    
+    ['speed', 'power', 'technique'].forEach(t => {
+        document.getElementById(`btn-${t}`).classList.remove('orb-disabled');
+        document.getElementById(`btn-${t}`).style.pointerEvents = 'auto';
+        document.getElementById(`btn-${t}`).style.opacity = '1';
+        document.getElementById(`upg-${t}-lvl`).style.color = '#a5f3fc'; 
+        document.getElementById(`desc-${t}-l3`).style.display = 'none';
+    });
+
+    currentAffix = AFFIXES[0]; HUD.affix.innerText = '';
+    stats = { speedMult: 1, powerMult: 1, techMult: 1 };
+    enemies = []; particles = []; floatingTexts = [];
+    player = resetPlayerObj();
+    player.y = height * LANE_Y[player.lane];
+    HUD.stage.innerText = `STAGE ${currentStage}`;
+    HUD.barCont.classList.remove('beast-active');
+}
+
+// ==========================================
+// 6. INPUT HANDLING & COMBO BUFFER
+// ==========================================
+function executeAttackInput(code) {
+    if (player.state === 'guarding') {
+        if (code === 'KeyA') startPunch('guard_jab');
+        if (code === 'KeyD') startPunch('check_hook');
+        return;
+    }
+    
+    if (code === 'KeyA') {
+        if (player.jabStep === 0) startPunch('jab1');
+        else if (player.jabStep === 1) startPunch('jab2');
+        else if (player.jabStep === 2) startPunch('jab3');
+        else startPunch('jab1'); // Loop back if instamashed past 3
+    } else if (code === 'KeyS') {
+        startPunch('cross');
+    } else if (code === 'KeyD') {
+        startPunch('hook');
+    }
+}
+
+function executeMovementInput(code) {
+    if (code === 'ShiftLeft' || code === 'ShiftRight') {
+        player.state = 'guarding';
+        clearAllPressure();
+        resetJabString();
+    } else if (code === 'ArrowLeft') {
+        if (player.ghostStepCooldown <= 0) {
+            player.state = 'ghost_step';
+            player.ghostStepTimer = 14;
+            player.ghostStepCooldown = 90;
+            clearAllPressure();
+            resetJabString();
+            playSound('ghost_step');
+            
+            for(let i=0; i<8; i++) {
+                particles.push({
+                    x: player.x + Math.random()*30,
+                    y: player.y - 30 - Math.random()*60,
+                    vx: -10 - Math.random()*15,
+                    vy: 0,
+                    life: 0.6,
+                    color: '#666666',
+                    type: 'dash_line'
+                });
+            }
+        }
+    } else if (code === 'ArrowUp' || code === 'ArrowDown') {
+        const oldLane = player.lane;
+        if (code === 'ArrowUp') player.lane = Math.max(0, player.lane - 1);
+        if (code === 'ArrowDown') player.lane = Math.min(2, player.lane + 1);
+        if (oldLane !== player.lane && player.slipCooldown <= 0) {
+            clearAllPressure();
+            checkPerfectSlip(oldLane);
+            player.slipCooldown = 30; 
+            resetJabString();
+        }
+    }
+}
+
+window.addEventListener('keydown', e => {
+    keys[e.code] = true;
+    if (gameState === 'start' && e.code === 'Space') { startGame(); return; }
+    if (e.code === 'KeyH') { toggleHowTo(); return; }
+    if (gameState === 'tutorial' && e.code === 'Enter') { dismissTutorial(); return; }
+    if (e.code === 'KeyP' || (e.code === 'Escape' && gameState !== 'howto' && gameState !== 'tutorial')) {
+        if (gameState === 'playing' && !SequenceManager.active) { gameState = 'paused'; HUD.screens.pause.style.display = 'flex'; } 
+        else if (gameState === 'paused') { gameState = 'playing'; HUD.screens.pause.style.display = 'none'; }
+        return;
+    }
+    if (e.code === 'Escape' && gameState === 'howto') { toggleHowTo(); return; }
+    if (gameState === 'gameover' && e.code === 'KeyR') { startGame(); return; }
+    if (gameState !== 'playing' || SequenceManager.active) return; 
+    if (e.code === 'Space' && instinctMeter >= 100 && !isInstinct) { activateInstinct(); }
+
+    let canAct = player.state === 'idle' || player.state === 'guarding';
+    let attemptMovement = (e.code === 'ArrowUp' || e.code === 'ArrowDown' || e.code === 'ShiftLeft' || e.code === 'ShiftRight' || e.code === 'ArrowLeft');
+
+    // SPEED L3: Slip Cancel
+    if (!canAct && player.speedCancelReady && orbCounts.speed >= 3 && attemptMovement) {
+        canAct = true;
+        player.speedCancelReady = false;
+        player.state = 'idle';
+        createImpact(player.x, player.y - 50, '#00ffff'); 
+        playSound('slip');
+    }
+
+    if (canAct) {
+        if (attemptMovement) {
+            if (player.state === 'guarding' && (e.code === 'ArrowUp' || e.code === 'ArrowDown' || e.code === 'ArrowLeft')) player.state = 'idle';
+            executeMovementInput(e.code);
+        }
+        if (e.code === 'KeyA' || e.code === 'KeyS' || e.code === 'KeyD') {
+            // executeAttackInput handles state drops internally
+            executeAttackInput(e.code);
+        }
+    } else if (player.state === 'punching' || player.state === 'recovery') {
+        // Buffering for smooth execution upon recovery
+        if (e.code === 'KeyA' || e.code === 'KeyS' || e.code === 'KeyD') {
+            player.inputBuffer = e.code;
+            player.inputBufferTimer = 12;
+        } else if (attemptMovement) {
+            player.movementBuffer = e.code;
+            player.movementBufferTimer = 12;
+        }
+    }
+});
+
+window.addEventListener('keyup', e => {
+    keys[e.code] = false;
+    if ((e.code === 'ShiftLeft' || e.code === 'ShiftRight') && player.state === 'guarding') player.state = 'idle';
+});
+
+// ==========================================
+// 7. GAME LOGIC
+// ==========================================
+function checkPerfectSlip(oldLane) {
+    let slipQuality = 'none';
+    let bossSlipped = null;
+
+    enemies.forEach(en => {
+        if (en.lane === oldLane && en.stun <= 0) {
+            let isThreat = false;
+            let perfectThresh = en.type === 'zoner' ? 10 : 8;
+            let goodThresh = en.type === 'zoner' ? 24 : 16; 
+            
+            if (en.type === 'zoner' && en.attackCooldown <= 40) {
+                isThreat = true;
+            } else if (Math.abs(en.x - player.x) < 130 && en.attackCooldown <= 22) {
+                isThreat = true;
+            }
+
+            if (isThreat) {
+                let oldCooldown = en.attackCooldown;
+                
+                if (en.tutorialType === 'slip') en.hp = 0; 
+                else en.attackCooldown = Math.max(en.attackCooldown, 18); 
+                
+                if (oldCooldown <= perfectThresh) {
+                    slipQuality = 'perfect';
+                    if (en.isBoss) bossSlipped = en;
+                } else if (oldCooldown <= goodThresh && slipQuality !== 'perfect') {
+                    slipQuality = 'good';
+                }
+            }
+        }
+    });
+    if (slipQuality !== 'none') triggerPerfectSlip(bossSlipped, slipQuality);
+}
+
+function triggerPerfectSlip(bossSlipped, slipQuality) {
+    if (slipQuality === 'perfect') {
+        HUD.slipPopup.innerText = "PERFECT SLIP";
+        HUD.slipPopup.style.color = "#fff";
+        HUD.slipPopup.style.textShadow = "0 0 20px #00ffff";
+        
+        if (!isInstinct) {
+            let gain = 20 * stats.techMult;
+            if (currentAffix && currentAffix.name === 'SURGE') gain *= 1.5;
+            instinctMeter = Math.min(100, instinctMeter + gain);
+        }
+        shake = 10; 
+        doFlash(0.2); 
+        playSound('perfect_slip'); 
+        statTotalSlips++;
+        player.slipBuff = (orbCounts.technique >= 2) ? 2 : 1; 
+        spawnFloatingText(player.x, player.y - 80, "COUNTER READY!", "#ffffff");
+        
+        hitstop += 8; // Screen freeze to emphasize perfect read
+
+        if (orbCounts.speed >= 3) player.speedCancelReady = true;
+        if (bossSlipped && orbCounts.technique >= 3) {
+            bossSlipped.exposedTimer = 90;
+            spawnFloatingText(bossSlipped.x, bossSlipped.y - 140, "EXPOSED!", "#00ffff");
+            playSound('feint_tell');
+        }
+    } else if (slipQuality === 'good') {
+        HUD.slipPopup.innerText = "GOOD SLIP";
+        HUD.slipPopup.style.color = "#ccc";
+        HUD.slipPopup.style.textShadow = "0 0 10px #ff00ff";
+        
+        if (!isInstinct) {
+            let gain = 5 * stats.techMult; // Smaller gain
+            instinctMeter = Math.min(100, instinctMeter + gain);
+        }
+        shake = 3;
+        playSound('slip');
+    }
+    
+    HUD.slipPopup.style.opacity = 1; 
+    setTimeout(() => HUD.slipPopup.style.opacity = 0, 500);
+}
+
+function startPunch(type) {
+    if (player.state === 'guarding') player.state = 'idle'; // Drop guard completely for the action
+    
+    player.state = 'punching'; player.punchType = type; player.didHit = false; player.speedCancelReady = false;
+    player.comboWindow = 0; 
+    
+    let isJab1 = type === 'jab1';
+    let isJab2 = type === 'jab2';
+    let isJab3 = type === 'jab3';
+    let isGuardPunch = type === 'guard_jab' || type === 'check_hook';
+
+    if (isJab1) player.jabStep = 1;
+    else if (isJab2) player.jabStep = 2;
+    else if (isJab3) player.jabStep = 3;
+    else player.jabStep = 0; 
+
+    let speedFactor = (isInstinct ? 0.4 : 1) * (1 / stats.speedMult);
+    let crossSpeedFactor = (isInstinct ? 0.4 : 1) * (1 / (1 + (stats.speedMult - 1) * 0.4));
+    
+    if (isJab1 || isJab2 || type === 'guard_jab') {
+        player.punchTimer = orbCounts.speed >= 2 ? Math.floor(5 * speedFactor) : Math.floor(8 * speedFactor);
+        player.hitFrame = Math.max(1, Math.floor(2 * speedFactor));
+    } else if (isJab3) {
+        player.punchTimer = orbCounts.speed >= 2 ? Math.floor(7 * speedFactor) : Math.floor(12 * speedFactor);
+        player.hitFrame = Math.max(1, Math.floor(3 * speedFactor));
+    } else if (type === 'cross') {
+        player.punchTimer = Math.floor(22 * crossSpeedFactor); 
+        player.hitFrame = Math.max(1, Math.floor(8 * crossSpeedFactor)); 
+    } else if (type === 'hook' || type === 'check_hook') { 
+        player.punchTimer = Math.floor(16 * speedFactor); 
+        player.hitFrame = Math.max(1, Math.floor(6 * speedFactor));
+    }
+
+    if (player.slipBuff > 0) {
+        playSound('vacuum');
+        createVacuum(player.x + 80, player.y - 40);
+    }
+}
+
+function checkHit(type) {
+    let isJab = type.startsWith('jab') || type === 'guard_jab';
+    let isGuardPunch = type === 'guard_jab' || type === 'check_hook';
+    
+    let reach = isJab ? 120 : (type === 'cross' ? (orbCounts.power >= 2 ? 220 : 160) : 140);
+    let hitSomething = false; let buffActive = player.slipBuff > 0;
+    if (player.slipBuff > 0) player.slipBuff--; 
+
+    for (let i = 0; i < enemies.length; i++) {
+        let en = enemies[i];
+        
+        if (en.lane === player.lane && en.x > player.x - 20 && en.x < player.x + reach) {
+            
+            if (en.tutorialType === 'counter') {
+                if (buffActive) {
+                    en.hp = 0;
+                    createShatter(en.x, en.y - 60, '#ffffff');
+                    spawnFloatingText(en.x, en.y - 100, "SHATTERED!", "#ffffff");
+                    statCounterHits++;
+                } else {
+                    spawnFloatingText(player.x, player.y - 50, "USE CHARGED STRIKE!", "#ffaa00");
+                    en.x = player.x + 200; en.attackCooldown = en.maxCooldown;
+                    player.slipBuff = 1; 
+                    playSound('bounce');
+                    continue;
+                }
+            }
+
+            if (en.tutorialType === 'slip') { spawnFloatingText(en.x, en.y - 80, "SLIP IT! (UP/DOWN)", "#ffaa00"); hitSomething = true; continue; }
+            if (en.tutorialType === 'guard') { spawnFloatingText(en.x, en.y - 80, "WAIT & HOLD SHIFT!", "#ffaa00"); hitSomething = true; continue; }
+            
+            if (en.tutorialType === 'shield') {
+                if (type === 'cross') { en.hp = 0; spawnFloatingText(player.x, player.y - 50, "ARMOR BROKEN!", "#00ffff"); } 
+                else {
+                    spawnFloatingText(player.x, player.y - 50, "USE CROSS [S] TO BREAK!", "#ffaa00");
+                    en.x = player.x + 200; en.attackCooldown = en.maxCooldown; playSound('bounce'); continue;
+                }
+            } else if (en.type === 'shield' && type !== 'cross') {
+                createImpact(en.x, en.y - 80, '#ffaa00'); en.x += 5; shake = 2; playSound('bounce'); continue; 
+            }
+
+            let prevPressure = en.pressure || 0;
+
+            let dmg = 0;
+            if (type === 'jab1' || type === 'jab2') dmg = 12;
+            else if (type === 'jab3') dmg = 20;
+            else if (type === 'hook') dmg = 30;
+            else if (type === 'cross') dmg = 45;
+            else if (type === 'guard_jab') dmg = 8;
+            else if (type === 'check_hook') dmg = 20;
+
+            if (buffActive) dmg *= 2; 
+            
+            if (en.type === 'shield' && type === 'cross') {
+                en.type = 'grunt'; en.color = '#ff0055'; dmg *= 1.5;
+            }
+
+            let trueReadActive = false;
+            if (en.isBoss && (en.exposedTimer || 0) > 0 && (type === 'cross' || type === 'hook' || buffActive)) {
+                trueReadActive = true;
+                en.exposedTimer = 0; 
+                dmg = Math.floor(dmg * 1.25);
+                hitstop += 8;
+                instinctPauseTimer = 45;
+                statBossBreaks++;
+                spawnFloatingText(en.x, en.y - 140, "TRUE READ!", "#00ffff");
+                triggerShockwave(en.x, en.y - 60, '#00ffff');
+                playSound('laser');
+            }
+
+            if (!isGuardPunch) {
+                en.pressure = Math.min(3, prevPressure + 1);
+                en.pressureDecay = 45; 
+            }
+
+            // --- LETHAL ANTI-MASH BOSS MECHANICS ---
+            if (en.isBoss) {
+                en.bossMashCount = (en.bossMashCount || 0) + 1;
+                en.mashDecay = 60; 
+                
+                en.hitstunScaling = (en.hitstunScaling || 0) + 1;
+                en.stunDecay = 120;
+
+                if (en.name === 'PHANTOM BOXER') {
+                    if (en.shiftWarning > 0) {
+                        if (trueReadActive) {
+                            en.shiftWarning = 0;
+                            en.shiftCooldown = 150;
+                            en.bossMashCount = 0;
+                        } else {
+                            en.shiftWarning = 0;
+                            en.bossMashCount = 0;
+                            en.shiftCooldown = 150;
+                            
+                            let oldX = en.x; let oldY = en.y;
+                            createShatter(oldX, oldY - 60, '#ffffff');
+                            playSound('shatter');
+                            spawnFloatingText(oldX, oldY - 100, "PHANTOM SHIFT", "#aa00ff");
+
+                            let otherLanes = [0, 1, 2].filter(l => l !== en.lane);
+                            en.lane = otherLanes[Math.floor(Math.random() * otherLanes.length)];
+                            en.y = height * LANE_Y[en.lane];
+                            createImpact(en.x, en.y - 60, '#aa00ff'); 
+                            en.attackCooldown = 18; 
+                            
+                            return false; // WHIFF
+                        }
+                    } else if (en.bossMashCount >= 3 && (en.shiftCooldown || 0) <= 0 && en.hp > 0 && !trueReadActive) {
+                        en.shiftWarning = 20; 
+                        spawnFloatingText(en.x, en.y - 100, "SHIFT READY", "#ffffff");
+                    }
+                }
+
+                if (en.name === 'NEON ENFORCER' && en.phase === 2) {
+                    if (isJab && !trueReadActive && !isGuardPunch) {
+                        dmg = Math.floor(dmg * 0.25); 
+                        health -= 2;
+                        shake += 5;
+                        doFlash(0.2);
+                        combo = 0;
+                        player.state = 'recovery';
+                        player.recoveryTimer = 5;
+                        clearAllPressure();
+                        resetJabString();
+                        statRecoilTaken++;
+                        spawnFloatingText(player.x, player.y - 50, "RECOIL!", "#ff0000");
+                        playSound('bounce');
+                        return false; // WHIFF
+                    }
+                }
+
+                if (en.hp - dmg <= en.maxHp * 0.25 && !en.desperation) {
+                    en.desperation = true;
+                    spawnFloatingText(en.x, en.y - 120, "DESPERATION!", "#ff0000");
+                    shake += 15;
+                    if (en.name === 'PHANTOM BOXER') {
+                        en.shiftCooldown = 0;
+                        en.shiftWarning = 1; 
+                    } else if (en.name === 'NEON ENFORCER') {
+                        en.attackCooldown = 10;
+                        en.currentMove = 'bash';
+                    }
+                }
+
+                if (en.name === 'NEON ENFORCER' && en.phase === 1 && (en.hp - dmg <= en.maxHp * 0.5)) {
+                    en.phase = 2; en.speed = 3.5; shake = 50; doFlash(0.8); hitstop = 10; 
+                    triggerShockwave(en.x, en.y - 60, '#ff0000');
+                    spawnFloatingText(en.x, en.y - 120, "SHIELD SHATTERED!", "#ff0000");
+                    for(let i=0; i<20; i++) createImpact(en.x, en.y - 60, '#ffaa00');
+                    playSound('hit');
+                }
+                
+                if (en.name === 'PHANTOM BOXER' && en.phase === 1 && (en.hp - dmg <= en.maxHp * 0.5)) {
+                    en.phase = 2; en.speed = 3.5; shake = 40; doFlash(0.6); hitstop = 10; 
+                    triggerShockwave(en.x, en.y - 60, '#aa00ff');
+                    createImpact(en.x, en.y - 80, '#aa00ff'); spawnFloatingText(en.x, en.y - 120, "OVERDRIVE", "#aa00ff"); playSound('hit');
+                }
+            }
+
+            // BRANCHING CASH-OUT
+            if (type === 'cross' && !buffActive && !trueReadActive && prevPressure > 0) {
+                dmg += prevPressure * 15;
+                en.pressure = 0; 
+            }
+            
+            en.hp -= dmg; 
+            let powerFactor = stats.powerMult * (isInstinct ? 2 : 1) * (buffActive ? 1.5 : 1);
+            if (trueReadActive) powerFactor *= 1.5;
+            
+            // EARNED KNOCKBACK SCALING
+            let baseKB = 0;
+            if (buffActive || trueReadActive) {
+                baseKB = 40; // Powered/Counter: Big launch
+            } else {
+                if (type === 'jab1' || type === 'jab2') {
+                    baseKB = 1; 
+                } else if (type === 'jab3') {
+                    baseKB = 12; // Tiny shove
+                } else if (type === 'guard_jab') {
+                    baseKB = 2;
+                } else if (type === 'hook') {
+                    baseKB = prevPressure > 0 ? 15 + (prevPressure * 5) : 8; 
+                } else if (type === 'check_hook') {
+                    baseKB = 15; // Solid push, no pressure scaling
+                } else if (type === 'cross') {
+                    if (prevPressure > 0) {
+                        baseKB = 15 + (prevPressure * 10); 
+                    } else if (isInstinct || orbCounts.power >= 3) {
+                        baseKB = 25; 
+                    } else {
+                        baseKB = 2; // Raw cross: heavily planted punish
+                    }
+                }
+            }
+
+            if (en.isBoss) {
+                baseKB = isJab ? 0 : Math.max(2, Math.floor(baseKB * 0.3)); 
+                if (en.name === 'NEON ENFORCER' && en.phase === 2 && !trueReadActive) {
+                    baseKB = (buffActive || (isInstinct && type === 'cross')) ? 10 : 0;
+                }
+            }
+            en.vx += baseKB * powerFactor; 
+
+            // Stagger Logic
+            if (type === 'cross' || type === 'hook' || type === 'check_hook' || buffActive || trueReadActive || isJab) {
+                let canStun = true;
+                let stunAmount = 0;
+                if (isJab) stunAmount = 18; 
+                else if (type === 'guard_jab') stunAmount = 10;
+                else if (type === 'hook') stunAmount = 15 + (prevPressure * 2);
+                else if (type === 'check_hook') stunAmount = 20;
+                else if (type === 'cross') stunAmount = 25 + (prevPressure * 5);
+                
+                if (buffActive) stunAmount += 10;
+
+                if (en.name === 'NEON ENFORCER' && en.phase === 2) {
+                    if (buffActive || trueReadActive) {
+                        canStun = true; 
+                        stunAmount += 10;
+                        statBossBreaks++;
+                        spawnFloatingText(en.x, en.y - 100, "ARMOR SHATTERED!", "#00ffff");
+                    } else if (isInstinct && type === 'cross') {
+                        canStun = true;
+                        stunAmount = 6; 
+                        spawnFloatingText(en.x, en.y - 100, "PARTIAL BREAK", "#ff00ff");
+                    } else {
+                        canStun = false; 
+                    }
+                }
+
+                if (canStun) {
+                    let isResisting = en.isBoss && en.stunResist > 0;
+                    if (!isResisting) {
+                        if (en.isBoss) stunAmount = Math.max(5, stunAmount - ((en.hitstunScaling || 0) * 2));
+                        if (trueReadActive) stunAmount += 15;
+                        en.stun = Math.max(en.stun, stunAmount); 
+                        if (en.isBoss) en.stunResist = en.stun + 30; 
+                    } else {
+                        en.stun = Math.max(en.stun, 2); 
+                    }
+                } else if (!canStun && en.stunResist <= 0) {
+                    spawnFloatingText(en.x, en.y - 80, "ARMORED", "#ff0000");
+                }
+            }
+
+            hitSomething = true; 
+            
+            if (buffActive && en.tutorialType !== 'counter') {
+                createShatter(en.x, en.y - 60, '#ffffff');
+                statCounterHits++;
+            } else if (en.tutorialType !== 'counter') {
+                createImpact(en.x, en.y - 60, isInstinct ? '#ff00ff' : null);
+            }
+
+            if (orbCounts.power >= 3 && en.hp <= 0 && (type === 'cross' || buffActive)) {
+                triggerShockwave(en.x, en.y - 60, '#ff0055');
+            }
+        }
+    }
+
+    if (hitSomething) {
+        if (!isGuardPunch) {
+            combo++; if (combo > statMaxCombo) statMaxCombo = combo;
+        }
+        if (buffActive) spawnFloatingText(player.x + reach/2, player.y - 80, "COUNTER HIT!", "#ffffff");
+        
+        if (!isInstinct) {
+            let gain = 6 * stats.techMult; 
+            if (currentAffix && currentAffix.name === 'SURGE') gain *= 1.5;
+            instinctMeter = Math.min(100, instinctMeter + gain);
+        }
+
+        let stopMult = 1;
+        if (isInstinct) stopMult += 0.5;
+        if (buffActive) stopMult += 0.5;
+        
+        hitstop = isJab ? Math.floor(2 * stopMult) : (type === 'cross' ? Math.floor(5 * stopMult) : Math.floor(3 * stopMult));
+        shake = (type === 'cross' ? 8 : (isJab ? 2 : 4)) * stopMult;
+        if (type === 'cross' || buffActive) doFlash(buffActive ? 0.6 : 0.2);
+        
+        if (type === 'cross' && orbCounts.power >= 2) {
+            createImpact(player.x + reach, player.y - 40, '#ff0055'); 
+            shake += 5;
+        }
+
+        if (orbCounts.speed >= 3 && (isJab || type === 'hook')) {
+            player.speedCancelReady = true;
+        }
+
+        if (!buffActive) playSound('hit'); 
+    }
+    
+    return hitSomething;
+}
+
+function activateInstinct() {
+    isInstinct = true; instinctReadyTimer = 0; HUD.instinctBanner.style.display = 'none';
+    HUD.barCont.classList.add('beast-active'); doFlash(0.5); shake = 20; hitstop = 10;
+    triggerShockwave(player.x, player.y - 50, '#00ffff');
+}
+
+function updateParticlesAndTrails() {
+    for (let i = particles.length - 1; i >= 0; i--) {
+        particles[i].x += particles[i].vx; particles[i].y += particles[i].vy; particles[i].life -= 0.04;
+        if (particles[i].life <= 0) particles.splice(i, 1);
+    }
+    for (let i = floatingTexts.length - 1; i >= 0; i--) {
+        floatingTexts[i].y += floatingTexts[i].velocity; floatingTexts[i].life -= 0.02;
+        if (floatingTexts[i].life <= 0) floatingTexts.splice(i, 1);
+    }
+
+    player.trails.forEach(t => t.opacity -= 0.06); 
+    player.trails = player.trails.filter(t => t.opacity > 0);
+    
+    player.trailTimer--;
+    if (isInstinct || player.state === 'ghost_step') {
+        if (player.trailTimer <= 0) {
+            player.trails.push({ x: player.x, y: player.y, lane: player.lane, opacity: 0.6, state: player.state, punchType: player.punchType, hitFrame: player.hitFrame, slipBuff: player.slipBuff, instinct: isInstinct });
+            player.trailTimer = 4; 
+            if (player.trails.length > 6) player.trails.shift();
+        }
+    }
+}
+
+function updatePlayer() {
+    scrollX += isInstinct ? 20 : 8; 
+    if (player.slipCooldown > 0) player.slipCooldown--;
+    if (player.ghostStepCooldown > 0) player.ghostStepCooldown--;
+    
+    const targetY = height * LANE_Y[player.lane]; player.y += (targetY - player.y) * 0.25;
+
+    // Buffer processing
+    if (player.inputBufferTimer > 0) {
+        player.inputBufferTimer--;
+        if (player.inputBufferTimer <= 0) player.inputBuffer = null;
+    }
+    if (player.movementBufferTimer > 0) {
+        player.movementBufferTimer--;
+        if (player.movementBufferTimer <= 0) player.movementBuffer = null;
+    }
+
+    if (player.state === 'recovery') {
+        player.recoveryTimer--;
+        if (player.recoveryTimer <= 0) player.state = 'idle';
+    } else if (player.state === 'ghost_step') {
+        player.ghostStepTimer--;
+        if (player.ghostStepTimer <= 0) player.state = 'idle';
+    }
+
+    if (keys['ShiftLeft'] || keys['ShiftRight']) {
+        if (player.state === 'idle') { player.state = 'guarding'; resetJabString(); }
+    } else {
+        if (player.state === 'guarding') { player.state = 'idle'; resetJabString(); }
+    }
+
+    if (player.state === 'idle' || player.state === 'guarding') {
+        if (player.comboWindow > 0) {
+            player.comboWindow--;
+            if (player.comboWindow <= 0) resetJabString();
+        }
+        
+        // Execute buffers if available (Movement priority over attack)
+        if (player.movementBuffer) {
+            let code = player.movementBuffer;
+            player.movementBuffer = null;
+            player.movementBufferTimer = 0;
+            executeMovementInput(code);
+        } else if (player.inputBuffer) {
+            let code = player.inputBuffer;
+            player.inputBuffer = null;
+            player.inputBufferTimer = 0;
+            executeAttackInput(code);
+        }
+    }
+
+    if (player.state === 'punching') {
+        player.punchTimer--;
+        if (player.hitFrame > 0) {
+            player.hitFrame--; 
+            if (player.hitFrame === 0) { player.didHit = checkHit(player.punchType); }
+        }
+        if (player.punchTimer <= 0) {
+            if (!player.didHit) {
+                player.state = 'recovery';
+                clearAllPressure();
+                resetJabString();
+                
+                let isJab = player.punchType && player.punchType.startsWith('jab');
+                let isGuardPunch = player.punchType === 'guard_jab' || player.punchType === 'check_hook';
+                player.recoveryTimer = (isJab || player.punchType === 'guard_jab' ? 6 : (player.punchType === 'hook' || player.punchType === 'check_hook' ? 9 : 13));
+                
+                if (isJab && !isGuardPunch) { if (orbCounts.speed < 2) combo = Math.max(0, combo - 1); } 
+                else if (!isGuardPunch) { combo = 0; }
+                
+                let counterDummy = enemies.find(e => e.tutorialType === 'counter');
+                if (counterDummy) {
+                    spawnFloatingText(player.x, player.y - 50, "MISSED! TRY AGAIN!", "#ffaa00");
+                    counterDummy.x = player.x + 250;
+                    counterDummy.attackCooldown = counterDummy.maxCooldown;
+                    player.slipBuff = 1; 
+                }
+            } else {
+                player.state = 'idle';
+                player.comboWindow = 25; // 25 frames to hit the next part of string
+            }
+        }
+    }
+}
+
+function updateEnemies() {
+    enemies.sort((a, b) => a.x - b.x); 
+    
+    let blockedX = [-1000, -1000, -1000];
+    let frontEnemy = [null, null, null];
+    laneFlash[0] = laneFlash[1] = laneFlash[2] = 0;
+    player.dangerLevel = 0;
+
+    enemies.forEach(en => {
+        if (en.x >= player.x - 60) {
+            if (!frontEnemy[en.lane] || en.x < frontEnemy[en.lane].x) {
+                frontEnemy[en.lane] = en;
+            }
+        }
+        
+        if (en.pressureDecay > 0) {
+            en.pressureDecay--;
+            if (en.pressureDecay <= 0) en.pressure = 0;
+        }
+        if (en.mashDecay > 0) {
+            en.mashDecay--;
+            if (en.mashDecay <= 0) en.bossMashCount = 0;
+        }
+        if (en.stunDecay > 0) {
+            en.stunDecay--;
+            if (en.stunDecay <= 0) en.hitstunScaling = 0;
+        }
+            
+        if (en.isBoss) {
+            if (en.shiftWarning > 0) en.shiftWarning--;
+            if (en.shiftCooldown > 0) en.shiftCooldown--;
+            if (en.exposedTimer > 0) en.exposedTimer--;
+        }
+    });
+
+    enemies.forEach(en => {
+        en.isActiveThreat = (frontEnemy[en.lane] === en || en.isBoss || en.tutorialType);
+    });
+    
+    for (let i = 0; i < enemies.length; i++) {
+        const en = enemies[i];
+
+        if (en.tutorialType && !seenTutorials[en.tutorialType] && en.x < player.x + 250) {
+            if (en.tutorialType === 'slip') {
+                let slipText = 'When a lane flashes <span class="text-pink-500 font-bold">RED</span>, an attack is winding up.<br><br>Wait for it to flash <span class="text-white font-bold">WHITE</span>, then press <span class="text-cyan-400 font-bold">[UP]</span> or <span class="text-cyan-400 font-bold">[DOWN]</span> to Perfect Slip!<br><br>' + (runCount <= 1 ? '<i>You must slip the attack to pass!</i>' : '<i>Slip the attack to survive!</i>');
+                triggerTutorial('slip', 'ENEMY ATTACK', slipText);
+            } else if (en.tutorialType === 'counter') {
+                let counterText = 'Your Perfect Slip was successful!<br><br>Notice the <span class="text-white font-bold">White Energy Rings</span> around your fists.<br><br>You are now holding a <span class="text-white font-bold">Counter Charge</span>. Your next strike will deal massive damage, shatter their posture, and cause extra hitstop.<br><br>' + (runCount <= 1 ? '<i>Strike this dummy enemy to unleash it!</i>' : '<i>Strike an enemy to unleash it!</i>');
+                triggerTutorial('counter', 'COUNTER READY', counterText);
+            } else if (en.tutorialType === 'shield') {
+                triggerTutorial('shield', 'GOLD ARMOR', 'Enemies with Gold Armor will block your Jabs.<br><br>Use your <span class="text-cyan-400 font-bold">CROSS [S]</span> to shatter their defense!<br><br><i>Break the armor to pass!</i>');
+            } else if (en.tutorialType === 'guard') {
+                triggerTutorial('guard', 'GUARDING', 'Guard is the stable answer when timing gets crowded, even if a clean slip is possible.<br><br>Hold <span class="text-cyan-400 font-bold">[SHIFT]</span> to Guard and reduce incoming damage by 75%.<br><br><i>Guard the next attack to pass!</i>');
+            }
+            return; 
+        }
+
+        if (en.stun > 0 || bossIntroTimer > 0) {
+            if (en.vx > 0.1) { en.x += en.vx; en.vx *= 0.85; }
+            continue;
+        }
+        
+        if (en.isActiveThreat) {
+            let perfectThresh = en.type === 'zoner' ? 10 : 8;
+            let goodThresh = en.type === 'zoner' ? 24 : 16;
+
+            if (en.type === 'zoner') {
+                if (en.attackCooldown <= perfectThresh) laneFlash[en.lane] = 2;
+                else if (en.attackCooldown <= 40) laneFlash[en.lane] = Math.max(laneFlash[en.lane], 1); 
+            } else {
+                if (Math.abs(en.x - player.x) < 130) {
+                    if (en.attackCooldown <= perfectThresh) laneFlash[en.lane] = 2;
+                    else if (en.attackCooldown <= 22) laneFlash[en.lane] = Math.max(laneFlash[en.lane], 1);
+                }
+            }
+
+            // Calculate Spider Sense Danger Level
+            if (en.lane === player.lane && Math.abs(en.x - player.x) < 130 && en.attackCooldown > 0) {
+                if (en.attackCooldown <= perfectThresh) player.dangerLevel = Math.max(player.dangerLevel, 2);
+                else if (en.attackCooldown <= goodThresh) player.dangerLevel = Math.max(player.dangerLevel, 1);
+            }
+        }
+    }
+
+    const globalJitter = Math.sin(Date.now() * 0.15) * 8;
+
+    for (let i = 0; i < enemies.length; i++) {
+        const en = enemies[i];
+        
+        if (en.trails) {
+            en.trails.forEach(t => t.opacity -= 0.05);
+            en.trails = en.trails.filter(t => t.opacity > 0);
+            if (en.isBoss && en.name === 'PHANTOM BOXER' && (en.currentMove === 'feint' || en.phase === 2) && bossIntroTimer <= 0) {
+                en.trailTimer--;
+                if (en.trailTimer <= 0 || en.trailTimer === undefined) {
+                    en.trails.push({ x: en.x, y: en.y, lane: en.lane, opacity: 0.5 });
+                    en.trailTimer = en.phase === 2 ? 3 : 5;
+                    if (en.trails.length > 5) en.trails.shift();
+                }
+            }
+        }
+
+        if (bossIntroTimer > 0 && en.isBoss) continue;
+
+        if (en.justAttacked > 0) en.justAttacked--;
+
+        if (en.stunResist > 0) en.stunResist--; 
+        if (en.stun > 0) {
+            en.stun--; 
+        } else {
+            let isBlockedByEnemy = false;
+            if (!en.isBoss) { 
+                if (en.x < blockedX[en.lane] + 90) isBlockedByEnemy = true;
+                blockedX[en.lane] = Math.max(blockedX[en.lane], en.x);
+            }
+            
+            let isAtPlayer = (en.lane === player.lane && en.x <= player.x + 90 && en.x >= player.x - 20);
+
+            // GHOST STEP EVADE LOGIC
+            if (player.state === 'ghost_step' && player.ghostStepTimer > 4 && isAtPlayer && en.attackCooldown <= 0 && en.isActiveThreat) {
+                spawnFloatingText(player.x, player.y - 50, "GHOST STEP", "#888888");
+                en.attackCooldown = en.maxCooldown;
+                continue;
+            }
+
+            if (en.vx > 0.1) {
+                en.x += en.vx;
+                en.vx *= 0.85; 
+                
+                let isBowling = (orbCounts.power >= 3 && en.vx > 10);
+
+                enemies.forEach(other => {
+                    if (other !== en && other.lane === en.lane && other.x > en.x && other.x < en.x + 60) {
+                        if (isBowling) {
+                            other.x += en.vx * 0.5;
+                            other.hp -= 15;
+                            if (other.stun <= 0) other.stun = 7;
+                            createImpact(other.x, other.y - 50, '#ff0055');
+                        } else {
+                            if (en.vx > 5) {
+                                other.x += en.vx * 0.5;
+                                if (other.stun <= 0) other.stun = 5;
+                            }
+                        }
+                    }
+                });
+            } else {
+                en.vx = 0;
+                if (en.isBoss && en.x < player.x + 100) en.x = player.x + 100; 
+                else if (!isBlockedByEnemy && !isAtPlayer && tutorialGrace <= 0) en.x -= en.speed;
+            }
+            
+            en.y += ((height * LANE_Y[en.lane]) - en.y) * 0.3;
+
+            if (en.type === 'zoner' && tutorialGrace <= 0 && en.x > player.x - 20) {
+                if (Math.abs(en.x - player.x) < 500) { 
+                    if (en.attackCooldown === 40 && en.isActiveThreat) playSound('zoner_tell'); 
+                    en.attackCooldown--;
+                    if (en.attackCooldown <= 0) {
+                        en.justAttacked = 5;
+                        createImpact(player.x + 50, en.y - 60, '#00ff00'); 
+                        if(en.isActiveThreat) playSound('laser'); 
+                        if (en.lane === player.lane) {
+                            let zDmg = 25;
+                            if (isInstinct) zDmg = Math.floor(zDmg * 0.5);
+
+                            if (player.state === 'guarding') {
+                                health -= Math.floor(zDmg * 0.25);
+                                clearAllPressure();
+                                resetJabString();
+                                if (!isInstinct) { combo = 0; shake = 5; spawnFloatingText(player.x, player.y - 50, "MOMENTUM BROKEN", "#ff0055"); }
+                                playSound('hit');
+                            } else {
+                                health -= zDmg; 
+                                shake = 20;
+                                clearAllPressure();
+                                resetJabString();
+                                if (!isInstinct) { combo = 0; doFlash(0.4); }
+                                playSound('hit');
+                            }
+                            let isDesperationActive = enemies.some(e => e.isBoss && e.desperation);
+                            if (isDesperationActive) statDespDamage++;
+                        }
+                        en.attackCooldown = en.maxCooldown;
+                    }
+                }
+                continue; 
+            }
+
+            if (Math.abs(en.x - player.x) < 130 && !isBlockedByEnemy && tutorialGrace <= 0) { 
+                if (en.attackCooldown === 22 && en.isActiveThreat) {
+                    if (en.isBoss && en.currentMove === 'bash') playSound('bash_tell');
+                    else if (en.isBoss && en.currentMove === 'feint') playSound('feint_tell');
+                    else if (en.type === 'bruiser') playSound('bash_tell');
+                    else playSound('jab_tell');
+                }
+                en.attackCooldown--;
+                if (en.isBoss && en.currentMove === 'feint' && en.attackCooldown === 12 && en.stun <= 0) {
+                    en.lane = player.lane; createImpact(en.x, en.y - 60, '#aa00ff');
+                }
+
+                if (en.attackCooldown <= 0) {
+                    en.justAttacked = 5; 
+                    
+                    if (en.tutorialType) {
+                        if (en.tutorialType === 'slip') {
+                            if (en.hp > 0) { 
+                                spawnFloatingText(player.x, player.y - 50, "WAIT FOR WHITE FLASH TO SLIP!", "#ffaa00");
+                                en.x = player.x + 200; en.attackCooldown = en.maxCooldown;
+                                player.lane = 1; player.y = height * LANE_Y[player.lane]; player.x = 180; 
+                                continue;
+                            }
+                        }
+                        if (en.tutorialType === 'shield') {
+                            spawnFloatingText(player.x, player.y - 50, "USE CROSS [S] TO BREAK!", "#ffaa00");
+                            en.x = player.x + 200; en.attackCooldown = en.maxCooldown; continue;
+                        }
+                        if (en.tutorialType === 'guard') {
+                            if (player.state === 'guarding') {
+                                spawnFloatingText(player.x, player.y - 50, "GUARD SUCCESS!", "#00ffff"); en.hp = 0; playSound('hit');
+                            } else {
+                                spawnFloatingText(player.x, player.y - 50, "HOLD [SHIFT] TO GUARD!", "#ffaa00");
+                                en.x = player.x + 200; en.attackCooldown = en.maxCooldown;
+                                player.lane = 1; player.y = height * LANE_Y[player.lane]; player.x = 180;
+                            }
+                            continue;
+                        }
+                    }
+
+                    if (en.lane === player.lane && Math.abs(en.x - player.x) < 100 && en.tutorialType !== 'counter') { 
+                        let isHeavy = (en.isBoss && en.currentMove === 'bash') || en.type === 'bruiser';
+                        let rawDmg = isHeavy ? 30 : 12;
+                        if (en.isBoss && en.name === 'PHANTOM BOXER') rawDmg = 15;
+                        
+                        if (isInstinct) rawDmg = Math.floor(rawDmg * 0.5);
+                        
+                        if (player.state === 'guarding') {
+                            health -= Math.floor(rawDmg * 0.25);
+                            shake = 2; 
+                            player.x = Math.max(20, player.x - 10); 
+                            clearAllPressure();
+                            resetJabString();
+                            if (!isInstinct) { combo = 0; spawnFloatingText(player.x, player.y - 50, "MOMENTUM BROKEN", "#ff0055"); }
+                            playSound('hit');
+                        } else {
+                            health -= rawDmg; 
+                            shake = isHeavy ? 30 : 15; 
+                            if (isHeavy) player.x = Math.max(20, player.x - 40); 
+                            clearAllPressure();
+                            resetJabString();
+                            if (!isInstinct) { combo = 0; doFlash(0.3); }
+                            playSound('hit');
+                        }
+                        
+                        let isDesperationActive = enemies.some(e => e.isBoss && e.desperation);
+                        if (isDesperationActive) statDespDamage++;
+                        
+                    } else if (en.tutorialType === 'counter' && Math.abs(en.x - player.x) < 100) {
+                        spawnFloatingText(player.x, player.y - 50, "STRIKE BEFORE IT HITS YOU!", "#ffaa00");
+                        en.x = player.x + 200; en.attackCooldown = en.maxCooldown; player.slipBuff = 1;
+                        continue;
+                    }
+                    
+                    if (en.isBoss) {
+                        let roll = Math.random();
+                        if (en.name === 'PHANTOM BOXER') {
+                            if (en.phase === 1) {
+                                en.currentMove = roll > 0.5 ? 'feint' : 'jab'; en.maxCooldown = en.currentMove === 'feint' ? 45 : 30;
+                            } else {
+                                if (en.lastMove === 'feint') en.currentMove = 'jab'; 
+                                else en.currentMove = roll > 0.2 ? 'feint' : 'jab';
+                                en.maxCooldown = en.currentMove === 'feint' ? 35 : 20;
+                            }
+                        } else {
+                            if (en.phase === 1) {
+                                en.currentMove = roll > 0.6 ? 'bash' : 'jab'; en.maxCooldown = en.currentMove === 'bash' ? 70 : 45;
+                            } else {
+                                if (en.lastMove === 'feint') en.currentMove = roll > 0.5 ? 'bash' : 'jab';
+                                else en.currentMove = roll > 0.5 ? 'feint' : (roll > 0.2 ? 'bash' : 'jab');
+                                en.maxCooldown = en.currentMove === 'bash' ? 55 : 35;
+                            }
+                        }
+                        en.lastMove = en.currentMove; en.attackCooldown = en.maxCooldown;
+                    } else if (en.type === 'bruiser') {
+                        en.currentMove = 'bash'; en.attackCooldown = en.maxCooldown;
+                    } else {
+                        en.attackCooldown = en.maxCooldown;
+                    }
+                }
+            }
+        }
+    }
+
+    for (let i = enemies.length - 1; i >= 0; i--) {
+        const en = enemies[i];
+        if (en.hp <= 0) {
+            statTotalKills++;
+            if (en.isBoss) {
+                bossActive = false;
+                stageClearing = false; 
+                statBossKills++;
+                triggerStageClear(true); 
+            } else {
+                enemiesDefeated++;
+                if (enemiesDefeated >= 15 && !stageClearing && !bossActive) stageClearing = true;
+            }
+            if (en.tutorialType) tutorialDelay = 60; 
+            enemies.splice(i, 1);
+        } else if (en.x < -100) {
+            enemies.splice(i, 1);
+        }
+    }
+}
+
+function spawnTutorialEnemy(type) {
+    spawnTotal++; 
+    const lane = 1; 
+    let color, hp, speed, cooldown;
+    let spawnX = width + 100; 
+    
+    player.lane = 1; player.y = height * LANE_Y[player.lane]; player.x = 180; 
+
+    if (type === 'slip') { color = '#ff0055'; hp = 45; speed = 4.0; cooldown = 60; player.slipBuff = 0; } 
+    else if (type === 'counter') { color = '#ffaa00'; hp = 45; speed = 1.5; cooldown = 120; player.slipBuff = 1; spawnX = player.x + 100; } 
+    else if (type === 'shield') { color = '#ffaa00'; hp = 80; speed = 1.5; cooldown = 80; player.slipBuff = 0; spawnX = player.x + 130; } 
+    else if (type === 'guard') { color = '#aa00ff'; hp = 30; speed = 5.5; cooldown = 35; player.slipBuff = 0; } 
+
+    enemies.push({
+        x: spawnX, lane, y: height * LANE_Y[lane], w: 50, h: 110,
+        hp, maxHp: hp, speed, color, type: type === 'shield' ? 'shield' : (type === 'guard' ? 'assassin' : 'grunt'),
+        stun: 0, stunResist: 0, attackCooldown: cooldown, maxCooldown: cooldown, isBoss: false, tutorialType: type, justAttacked: 0, trails: [], trailTimer: 0, vx: 0
+    });
+}
+
+function spawnEnemy() {
+    if (stageClearing || bossActive || bossIntroTimer > 0 || gameState !== 'playing') return; 
+
+    if (currentStage === 1 && tutorialEnabled) {
+        if (spawnTotal < 4) {
+            if (enemies.length > 0 || tutorialDelay > 0) return; 
+
+            if (spawnTotal === 0) {
+                let slipText = 'When a lane flashes <span class="text-pink-500 font-bold">RED</span>, an attack is winding up.<br><br>Wait for it to flash <span class="text-white font-bold">WHITE</span>, then press <span class="text-cyan-400 font-bold">[UP]</span> or <span class="text-cyan-400 font-bold">[DOWN]</span> to Perfect Slip!<br><br>' + (runCount <= 1 ? '<i>You must slip the attack to pass!</i>' : '<i>Slip the attack to survive!</i>');
+                triggerTutorial('slip', 'ENEMY ATTACK', slipText);
+                spawnTutorialEnemy('slip');
+            } else if (spawnTotal === 1) {
+                let counterText = 'Your Perfect Slip was successful!<br><br>Notice the <span class="text-white font-bold">White Energy Rings</span> around your fists.<br><br>You are now holding a <span class="text-white font-bold">Counter Charge</span>. Your next strike will deal massive damage, shatter their posture, and cause extra hitstop.<br><br>' + (runCount <= 1 ? '<i>Strike this dummy enemy to unleash it!</i>' : '<i>Strike an enemy to unleash it!</i>');
+                triggerTutorial('counter', 'COUNTER READY', counterText);
+                spawnTutorialEnemy('counter');
+            } else if (spawnTotal === 2) {
+                triggerTutorial('shield', 'GOLD ARMOR', 'Enemies with Gold Armor will block your Jabs.<br><br>Use your <span class="text-cyan-400 font-bold">CROSS [S]</span> to shatter their defense!<br><br><i>Break the armor to pass!</i>');
+                spawnTutorialEnemy('shield');
+            } else if (spawnTotal === 3) {
+                triggerTutorial('guard', 'GUARDING', 'Guard is the stable answer when timing gets crowded, even if a clean slip is possible.<br><br>Hold <span class="text-cyan-400 font-bold">[SHIFT]</span> to Guard and reduce incoming damage by 75%.<br><br><i>Guard the next attack to pass!</i>');
+                spawnTutorialEnemy('guard');
+            }
+            return; 
+        }
+        if (enemies.some(e => e.tutorialType)) return;
+    }
+
+    if (enemies.length >= 6) return;
+
+    let spawnChance = Math.min(0.045, 0.02 + (currentStage * 0.003));
+    if (currentAffix && currentAffix.name === 'FAST CROWD') spawnChance *= 1.4;
+
+    if (enemies.length === 0 && tutorialDelay <= 0) spawnChance = 1.0; 
+
+    if (Math.random() < spawnChance && tutorialDelay <= 0) {
+        const lane = Math.floor(Math.random() * 3);
+        let laneCount = enemies.filter(e => e.lane === lane).length;
+        if (laneCount >= 2) return;
+
+        spawnTotal++; 
+        let type = 'grunt'; let color = '#ff0055'; let hp = 45 + (currentStage * 15); let speed = 3.0 + Math.random() * 2; let cooldown = 60;
+        let bruiserThresh = 0.9; let shieldThresh = 0.75; let zonerThresh = 0.65; let assassinThresh = 0.5;
+
+        if (currentAffix && currentAffix.name === 'HEAVY HANDS') bruiserThresh = 0.7;
+        if (currentAffix && currentAffix.name === 'IRON WALL') shieldThresh = 0.5;
+        if (currentAffix && currentAffix.name === 'FAST CROWD') assassinThresh = 0.3;
+
+        const roll = Math.random();
+        if (roll > bruiserThresh && currentStage >= 1) { type = 'bruiser'; color = '#cc0000'; hp *= 3; speed *= 0.5; cooldown = 80; } 
+        else if (roll > shieldThresh) { type = 'shield'; color = '#ffaa00'; hp *= 1.8; speed *= 0.8; } 
+        else if (roll > zonerThresh && currentStage >= 2) { type = 'zoner'; color = '#00ff00'; hp *= 0.8; speed = 1.5; cooldown = 100; } 
+        else if (roll > assassinThresh) { type = 'assassin'; color = '#aa00ff'; hp *= 0.6; speed *= 1.8; cooldown = 35; }
+
+        enemies.push({
+            x: width + 50, lane, y: height * LANE_Y[lane], w: type === 'bruiser' ? 70 : 50, h: type === 'bruiser' ? 130 : 110,
+            hp, maxHp: hp, speed, color, type, stun: 0, stunResist: 0, attackCooldown: cooldown, maxCooldown: cooldown, isBoss: false, justAttacked: 0, trails: [], trailTimer: 0, vx: 0
+        });
+
+        if (type === 'zoner' && Math.random() > 0.3 && enemies.length <= 4) {
+            spawnTotal++;
+            enemies.push({
+                x: width + 140, lane, y: height * LANE_Y[lane], w: 50, h: 110,
+                hp: 80 * (1 + currentStage*0.2), maxHp: 80 * (1 + currentStage*0.2), speed: speed * 0.8, color: '#ffaa00', type: 'shield', stun: 0, stunResist: 0, attackCooldown: 80, maxCooldown: 80, isBoss: false, justAttacked: 0, trails: [], trailTimer: 0, vx: 0
+            });
+            enemies[enemies.length - 2].x += 80;
+        }
+    }
+}
+
+function spawnBoss() {
+    bossActive = true; const lane = 1; let hp = 300 + (currentStage * 100); let isPhantom = currentStage % 2 === 0;
+    
+    bossIntroTimer = 120;
+    shake = 15;
+    playSound('bash_tell');
+
+    if (isPhantom) {
+        bossThemeColor = '#aa00ff';
+        bossIntroText = "PHANTOM BOXER";
+        enemies.push({
+            name: 'PHANTOM BOXER', x: width - 150, lane, y: height * LANE_Y[lane], w: 50, h: 130, 
+            hp: hp * 0.75, maxHp: hp * 0.75, speed: 2.5, color: '#aa00ff', type: 'assassin', phase: 1, currentMove: 'feint',
+            lastMove: null, stun: 0, stunResist: 0, attackCooldown: 40, maxCooldown: 40, isBoss: true, justAttacked: 0, trails: [], trailTimer: 0,
+            pressure: 0, pressureDecay: 0, bossMashCount: 0, mashDecay: 0, hitstunScaling: 0, stunDecay: 0, shiftWarning: 0, shiftCooldown: 0, vx: 0, exposedTimer: 0, desperation: false
+        });
+    } else {
+        bossThemeColor = '#ffaa00';
+        bossIntroText = "NEON ENFORCER";
+        enemies.push({
+            name: 'NEON ENFORCER', x: width - 150, lane, y: height * LANE_Y[lane], w: 60, h: 140, 
+            hp, maxHp: hp, speed: 1.2, color: '#ffaa00', type: 'shield', phase: 1, currentMove: 'jab',
+            lastMove: null, stun: 0, stunResist: 0, attackCooldown: 60, maxCooldown: 60, isBoss: true, justAttacked: 0, trails: [], trailTimer: 0,
+            pressure: 0, pressureDecay: 0, bossMashCount: 0, mashDecay: 0, hitstunScaling: 0, stunDecay: 0, vx: 0, exposedTimer: 0, desperation: false
+        });
+    }
+}
+
+function update() {
+    if (gameState !== 'playing') return;
+    
+    if (hitstop > 0) { hitstop--; return; }
+    if (shake > 0) shake *= 0.88;
+
+    updateAtmosphere();
+    updateParticlesAndTrails();
+
+    if (SequenceManager.active) {
+        SequenceManager.update();
+        return; 
+    }
+
+    if (tutorialGrace > 0) tutorialGrace--;
+    if (tutorialDelay > 0) tutorialDelay--;
+    if (bossIntroTimer > 0) bossIntroTimer--;
+
+    if (instinctPauseTimer > 0) {
+        instinctPauseTimer--;
+    } else if (isInstinct) { 
+        instinctMeter -= 0.25; 
+        if (instinctMeter <= 0) { isInstinct = false; HUD.barCont.classList.remove('beast-active'); } 
+    }
+
+    if (player.slipBuff > 0 && !seenTutorials.counter) {
+        triggerTutorial('counter', 'COUNTER READY', 'Your Perfect Slip was successful!<br><br>Notice the <span class="text-white font-bold">White Energy Rings</span> around your fists.<br><br>You are now holding a <span class="text-white font-bold">Counter Charge</span>. Your next strike will deal massive damage, shatter their posture, and cause extra hitstop.<br><br><i>Strike this dummy enemy to unleash it!</i>');
+        return; 
+    }
+
+    if (instinctMeter >= 100 && !isInstinct) {
+        if (!seenTutorials.instinct) {
+            triggerTutorial('instinct', 'INSTINCT MAXED', 'Your meter is full!<br><br>Instinct is gained by landing consecutive hits and executing Perfect Slips.<br><br>Press <span class="text-cyan-400 font-bold">[SPACE]</span> to unleash double knockback and massive hitstop.');
+            return; 
+        } else { HUD.instinctBanner.style.display = 'block'; }
+    } else {
+        HUD.instinctBanner.style.display = 'none'; instinctReadyTimer = 0;
+    }
+
+    updatePlayer();
+    updateEnemies();
+    
+    if (stageClearing && enemies.length === 0 && !bossActive && gameState === 'playing') spawnBoss();
+    
+    if (health <= 0) {
+        gameState = 'gameover'; 
+        HUD.finalStage.innerText = `STAGE REACHED: ${currentStage}`;
+        
+        let title = "SURVIVOR ROUTE";
+        if (orbCounts.speed === 3) title = "VELOCITY ROUTE";
+        else if (orbCounts.power === 3) title = "TYRANT ROUTE";
+        else if (orbCounts.technique === 3) title = "PHANTOM ROUTE";
+        document.getElementById('run-title-ui').innerText = `"${title}"`;
+
+        let score = (statTotalKills * 10) + (statMaxCombo * 50) + (statTotalSlips * 250) + (statBossKills * 250) + (statCounterHits * 200) + (statBossBreaks * 350) - (statRecoilTaken * 150) - (statDespDamage * 200);
+        let grade = 'C';
+        if (score > 3000) grade = 'S';
+        else if (score > 1500) grade = 'A';
+        else if (score > 800) grade = 'B';
+        
+        let reqSlipsForS = Math.min(statBossKills, 3);
+        if (reqSlipsForS === 0) reqSlipsForS = 1;
+        
+        if (grade === 'S' && statTotalSlips < reqSlipsForS) grade = 'A';
+        if (grade === 'A' && statTotalSlips < 1) grade = 'B';
+
+        document.getElementById('stat-grade').innerText = grade;
+        if (grade === 'S') document.getElementById('stat-grade').className = "stat-val text-5xl ml-2 text-yellow-400";
+        else if (grade === 'A') document.getElementById('stat-grade').className = "stat-val text-5xl ml-2 text-pink-500";
+        else document.getElementById('stat-grade').className = "stat-val text-5xl ml-2 text-cyan-400";
+
+        document.getElementById('stat-combo').innerText = statMaxCombo; 
+        document.getElementById('stat-slips').innerText = statTotalSlips;
+        document.getElementById('stat-kills').innerText = statTotalKills; 
+        document.getElementById('stat-bosses').innerText = statBossKills; 
+        document.getElementById('stat-build').innerText = `FINAL BUILD: SPD ${orbCounts.speed} | PWR ${orbCounts.power} | TEC ${orbCounts.technique}`; 
+
+        HUD.screens.gameover.style.display = 'flex';
+    }
+
+    updateHUD();
+    spawnEnemy();
+}
+
+function triggerStageClear(isBossClear = false) {
+    gameState = 'upgrading';
+    document.getElementById('upgrade-title').innerText = isBossClear ? "BOSS DEFEATED" : "GAUNTLET CLEARED";
+    
+    ['speed', 'power', 'technique'].forEach(t => {
+        document.getElementById(`upg-${t}-lvl`).innerText = `CURRENT: LVL ${orbCounts[t]}`;
+        if (orbCounts[t] >= 2) {
+            document.getElementById(`desc-${t}-l3`).style.display = 'block';
+        }
+        if (orbCounts[t] >= 3) {
+            document.getElementById(`btn-${t}`).classList.add('orb-disabled');
+            document.getElementById(`upg-${t}-lvl`).innerText = 'MAX LEVEL';
+            document.getElementById(`upg-${t}-lvl`).style.color = '#ff00ff';
+        }
+    });
+
+    HUD.screens.upgrade.style.display = 'flex';
+}
+
+function applyOrb(type) {
+    if (orbCounts[type] >= 3) return; // Hard cap
+
+    if (type === 'speed') stats.speedMult += 0.25;
+    if (type === 'power') stats.powerMult += 0.35;
+    if (type === 'technique') stats.techMult += 0.3;
+    orbCounts[type]++; 
+    
+    // Update the HUD status bar with the newly incremented orb count
+    document.getElementById(`orb-${type}`).innerText = orbCounts[type];
+
+    if (orbCounts[type] === 2) {
+        if (type === 'speed') showToast("SPEED LVL 2: Missing Jabs won't break combo!");
+        if (type === 'power') showToast("POWER LVL 2: Cross attack gains massive reach!");
+        if (type === 'technique') showToast("TECH LVL 2: Perfect Slips charge 2 Counter hits!");
+    } else if (orbCounts[type] === 3) {
+        if (type === 'speed') showToast("SPEED MAX: Slip Cancel active!");
+        if (type === 'power') showToast("POWER MAX: Bowling Collateral active!");
+        if (type === 'technique') showToast("TECH MAX: True Read active!");
+    }
+
+    currentStage++; currentAffix = AFFIXES[Math.floor(Math.random() * AFFIXES.length)];
+    if (currentAffix && currentAffix.name !== 'NONE') showToast(`STAGE MODIFIER: ${currentAffix.name} - ${currentAffix.desc}`);
+    enemiesDefeated = 0; stageClearing = false; bossActive = false; gameState = 'playing'; HUD.screens.upgrade.style.display = 'none';
+    HUD.stage.innerText = `STAGE ${currentStage}`; HUD.affix.innerText = currentAffix && currentAffix.name !== 'NONE' ? `[${currentAffix.name}] ${currentAffix.desc}` : '';
+    health = Math.min(100, health + 25);
+}
+
+function drawBoxer(ctx, entity, isPlayer, opacity = 1, isTrail = false) {
+    const dir = isPlayer ? 1 : -1; 
+    const baseScale = entity.isBoss ? 1.5 : (entity.type === 'bruiser' ? 1.3 : 1);
+    
+    let t = Date.now();
+    let bounce = 0; let breath = 0;
+    if (entity.state === 'idle' || (!isPlayer && entity.stun <= 0)) {
+        bounce = Math.sin(t * 0.005 + entity.x) * 3; 
+        breath = Math.sin(t * 0.003 + entity.x) * 2; 
+    }
+
+    let h = (entity.h * (entity.isBoss ? 1 : 0.8)) + breath; 
+    const w = entity.w;
+    const headSize = 12 * baseScale; const gloveSize = 10 * baseScale; 
+    
+    let rootX = entity.x + (isPlayer ? w/2 : w/2); 
+    let rootY = entity.y; 
+
+    if (!isTrail) {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.beginPath();
+        ctx.ellipse(rootX, rootY, w * 0.6 * baseScale, 6 * baseScale, 0, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    let poseLean = 0;
+    if (!isPlayer && entity.stun <= 0 && entity.attackCooldown >= 15) {
+        if (entity.type === 'assassin') { poseLean = 20 * dir; } 
+        if (entity.type === 'zoner') { poseLean = -10 * dir; }
+        if (entity.type === 'shield') { poseLean = -5 * dir; }
+        if (entity.type === 'bruiser') { h *= 0.85; poseLean = 15 * dir; } 
+    }
+
+    let hipY = rootY - h * 0.2 + bounce; 
+    let neckY = rootY - h * 0.75 + bounce; 
+    let headY = rootY - h * 0.85 + bounce;
+
+    if (!isPlayer && entity.type === 'bruiser') headY += 10; 
+    if (!isPlayer && entity.type === 'assassin') headY += 5;
+
+    let leanX = poseLean;
+    if (isPlayer && player.slipCooldown > 15) leanX += 15 * dir; 
+    if (isPlayer && entity.state === 'ghost_step') { 
+        let snap = entity.ghostStepTimer > 10 ? (14 - entity.ghostStepTimer)/4 : (entity.ghostStepTimer)/10;
+        opacity *= 0.3 + (1 - snap)*0.7; 
+        leanX -= 35 * snap * dir; 
+    } 
+
+    let stunLean = 0;
+    if (entity.stun > 0) stunLean = -15 * dir;
+
+    leanX += stunLean;
+
+    let leg1X, leg2X;
+    if (isPlayer) {
+        leg1X = 15 * dir; 
+        leg2X = -10 * dir;
+    } else {
+        let walkPhase = 0;
+        if (entity.stun <= 0 && entity.attackCooldown >= 15 && (!entity.isBoss || entity.currentMove !== 'feint')) {
+            walkPhase = entity.x * 0.08; 
+        }
+        leg1X = Math.sin(walkPhase) * 15 * dir;
+        leg2X = Math.sin(walkPhase + Math.PI) * 15 * dir;
+    }
+
+    let drawColor = entity.color;
+    let isCounterReady = false;
+
+    if (isPlayer) {
+        drawColor = '#00ffff'; 
+        if (isTrail) drawColor = '#ffffff'; 
+        else if (!isTrail && player.slipBuff > 0) isCounterReady = true;
+    }
+
+    if (!isPlayer && entity.shiftWarning > 0) {
+        drawColor = Math.floor(Date.now() / 50) % 2 === 0 ? '#ffffff' : '#aa00ff';
+    }
+    
+    // VISUAL SYNC: If enemy is inside Perfect Slip window, turn them bright white!
+    if (!isPlayer && entity.isActiveThreat) {
+        let perfectThresh = entity.type === 'zoner' ? 10 : 8;
+        if (entity.attackCooldown > 0 && entity.attackCooldown <= perfectThresh) {
+            drawColor = '#ffffff';
+        }
+    }
+
+    ctx.globalAlpha = opacity; ctx.strokeStyle = drawColor; ctx.lineWidth = (entity.type === 'bruiser' ? 12 : 8) * baseScale; 
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    
+    if (!isPlayer && entity.isBoss && entity.exposedTimer > 0) {
+        ctx.save();
+        ctx.strokeStyle = Math.floor(Date.now() / 50) % 2 === 0 ? '#00ffff' : '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(rootX + leanX, neckY, 30 + Math.sin(Date.now()*0.01)*5, 0, Math.PI*2); ctx.stroke();
+        ctx.restore();
+    }
+
+    ctx.beginPath(); 
+    ctx.moveTo(rootX + leanX, hipY); ctx.lineTo(rootX + leg1X, rootY); 
+    ctx.moveTo(rootX + leanX, hipY); ctx.lineTo(rootX + leg2X, rootY); 
+    ctx.stroke();
+
+    let shoulderX = rootX + (entity.type === 'bruiser' ? 10*dir : 5*dir) + leanX; 
+    ctx.beginPath(); ctx.moveTo(rootX + leanX, hipY); ctx.lineTo(shoulderX, neckY); ctx.stroke();
+    
+    ctx.fillStyle = entity.stun > 0 ? '#fff' : drawColor; 
+    ctx.beginPath(); ctx.arc(shoulderX + 3 * dir, headY, headSize, 0, Math.PI * 2); ctx.fill();
+
+    if (isPlayer && !isTrail) {
+        let eyeColor = '#ff00ff'; 
+        let flameFlicker = Math.sin(Date.now() * 0.02) * 3;
+        ctx.save();
+        
+        // --- SPIDER SENSE FLAIR ---
+        if (entity.dangerLevel === 1) {
+            // Early Danger: Subtle Shimmer
+            ctx.strokeStyle = `rgba(0, 255, 255, ${0.4 + Math.sin(t*0.02)*0.3})`;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(shoulderX + 3 * dir, headY, headSize + 6, 0, Math.PI * 2);
+            ctx.stroke();
+        } else if (entity.dangerLevel === 2) {
+            // Perfect Window: Sharp Crown Flare
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            for(let i=0; i<5; i++) {
+                let angle = Math.PI + (i * Math.PI/4) - Math.PI/2;
+                if(dir < 0) angle = -angle; 
+                let r1 = headSize + 2;
+                let r2 = headSize + 12 + Math.random()*5;
+                ctx.moveTo(shoulderX + 3*dir + Math.cos(angle)*r1, headY + Math.sin(angle)*r1);
+                ctx.lineTo(shoulderX + 3*dir + Math.cos(angle)*r2, headY + Math.sin(angle)*r2);
+            }
+            ctx.stroke();
+        }
+        
+        ctx.fillStyle = '#fff';
+        
+        ctx.beginPath(); 
+        ctx.ellipse(shoulderX + 5 * dir, headY - 3, 5, 2, Math.PI / 8 * dir, 0, Math.PI * 2); 
+        ctx.fill();
+        
+        ctx.fillStyle = eyeColor;
+        ctx.globalAlpha = 0.8;
+        ctx.beginPath();
+        ctx.moveTo(shoulderX + 5 * dir, headY - 4);
+        ctx.quadraticCurveTo(shoulderX - 1 * dir, headY - 8 + flameFlicker, shoulderX - 11 * dir, headY - 6 + flameFlicker);
+        ctx.quadraticCurveTo(shoulderX + 1 * dir, headY - 1, shoulderX + 5 * dir, headY - 2);
+        ctx.fill();
+        
+        ctx.restore();
+    }
+
+    let leadGloveX = shoulderX + 20 * dir; let leadGloveY = neckY + 10;
+    let rearGloveX = shoulderX - 10 * dir; let rearGloveY = neckY - 5;
+
+    if (isPlayer && entity.state === 'recovery') {
+        leadGloveX += 15 * dir; 
+        rearGloveX += 5 * dir;
+        leanX += 10 * dir;
+    } else if (isPlayer && entity.state === 'ghost_step') {
+        leadGloveX = shoulderX + 15 * dir; leadGloveY = neckY + 10;
+        rearGloveX = shoulderX - 5 * dir; rearGloveY = neckY;
+    } else if (isPlayer && entity.state === 'punching') {
+        const isHitActive = entity.hitFrame <= 2 || entity.didHit; const ext = isHitActive ? 1 : 0.4; 
+        let isJab = entity.punchType && entity.punchType.startsWith('jab');
+        
+        if (isJab) { 
+            if (entity.punchType === 'jab2') {
+                rearGloveX += 50 * ext * dir; 
+                shoulderX += 15 * dir;
+            } else if (entity.punchType === 'jab3') {
+                leadGloveX += 60 * ext * dir; 
+                leadGloveY -= 10 * ext; 
+                leanX += 10 * dir; 
+            } else {
+                leadGloveX += 50 * ext * dir; 
+            }
+        } else if (entity.punchType === 'guard_jab') {
+            leadGloveX += 40 * ext * dir;
+            rearGloveX = shoulderX + 15 * dir; rearGloveY = neckY - 5; // Keeps guard hand up
+        } else if (entity.punchType === 'check_hook') {
+            leadGloveX = shoulderX + 10 * dir; leadGloveY = neckY - 15; // Keeps guard hand up
+            rearGloveX += 30 * ext * dir; rearGloveY -= 15 * ext;
+        } else if (entity.punchType === 'cross') { 
+            let reachMult = (orbCounts.power >= 2) ? 1.5 : 1; rearGloveX += (90 * reachMult) * ext * dir; leadGloveX -= 15 * dir; shoulderX += 10 * dir; 
+        } else if (entity.punchType === 'hook') { 
+            leadGloveX += 40 * ext * dir; leadGloveY -= 30 * ext; rearGloveX -= 10 * dir; 
+        }
+    } else if (isPlayer && entity.state === 'guarding') {
+        leadGloveX = shoulderX + 10 * dir; leadGloveY = neckY - 15; 
+        rearGloveX = shoulderX + 15 * dir; rearGloveY = neckY - 5;
+    } else if (!isPlayer && entity.stun <= 0) {
+        if (entity.justAttacked > 0) {
+            if (entity.currentMove === 'bash' || entity.type === 'shield' || entity.type === 'bruiser') { rearGloveX += 60 * dir; shoulderX += 10 * dir; } 
+            else if (entity.type !== 'zoner') { leadGloveX += 50 * dir; }
+        } else if (entity.attackCooldown < 15) {
+            const windupPct = 1 - (entity.attackCooldown / 15);
+            if (entity.currentMove === 'bash' || entity.type === 'shield' || entity.type === 'bruiser') { rearGloveX -= 30 * windupPct * dir; rearGloveY -= 20 * windupPct; } 
+            else if (entity.type !== 'zoner') { leadGloveX -= 20 * windupPct * dir; }
+        } else {
+            if (entity.type === 'shield') { leadGloveX = shoulderX + 5 * dir; leadGloveY = neckY - 10; rearGloveX = shoulderX - 5 * dir; rearGloveY = neckY - 5; }
+            else if (entity.type === 'zoner') { leadGloveX = shoulderX + 35 * dir; leadGloveY = neckY; rearGloveX = shoulderX - 10 * dir; rearGloveY = neckY + 10; }
+            else if (entity.type === 'assassin') { leadGloveX = shoulderX + 15 * dir; leadGloveY = neckY + 20; rearGloveX = shoulderX - 5 * dir; rearGloveY = neckY + 15; }
+        }
+    } else if (entity.stun > 0) {
+        leadGloveX = shoulderX - 10 * dir; leadGloveY = neckY - 30;
+        rearGloveX = shoulderX - 20 * dir; rearGloveY = neckY - 20;
+    }
+
+    ctx.lineWidth = 4 * baseScale;
+    ctx.beginPath(); ctx.moveTo(shoulderX, neckY); ctx.lineTo(rearGloveX, rearGloveY); ctx.stroke();
+    
+    ctx.fillStyle = drawColor;
+    ctx.beginPath(); ctx.arc(rearGloveX, rearGloveY, gloveSize, 0, Math.PI * 2); ctx.fill();
+
+    ctx.beginPath(); ctx.moveTo(shoulderX, neckY); 
+    if (isPlayer && entity.punchType === 'hook' && entity.state === 'punching') {
+        ctx.quadraticCurveTo(shoulderX + 30 * dir, neckY - 20, leadGloveX, leadGloveY);
+    } else {
+        ctx.lineTo(leadGloveX, leadGloveY); 
+    }
+    ctx.stroke();
+    
+    ctx.fillStyle = drawColor;
+    ctx.beginPath(); ctx.arc(leadGloveX, leadGloveY, gloveSize, 0, Math.PI * 2); ctx.fill();
+
+    if (isPlayer && !isTrail && isCounterReady) {
+        let counterPulse = Math.sin(Date.now() * 0.02) * 2;
+        ctx.save();
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        
+        ctx.beginPath(); ctx.arc(rearGloveX, rearGloveY, gloveSize + 4 + counterPulse, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(leadGloveX, leadGloveY, gloveSize + 4 + counterPulse, 0, Math.PI * 2); ctx.stroke();
+        
+        ctx.restore();
+    }
+
+    ctx.globalAlpha = 1;
+}
+
+function draw() {
+    ctx.shadowBlur = 0; 
+    ctx.clearRect(0, 0, width, height);
+    ctx.save();
+    if (shake > 1) ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+
+    if (bossIntroTimer > 0) {
+        ctx.fillStyle = 'rgba(255, 0, 85, 0.15)';
+        ctx.fillRect(0, 0, width, height);
+    }
+
+    drawAtmosphere(ctx);
+
+    let pLaneY = height * LANE_Y[player.lane];
+    let pGrad = ctx.createLinearGradient(player.x - 150, 0, player.x + 150, 0);
+    pGrad.addColorStop(0, 'rgba(0, 255, 255, 0)');
+    pGrad.addColorStop(0.5, 'rgba(0, 255, 255, 0.15)');
+    pGrad.addColorStop(1, 'rgba(0, 255, 255, 0)');
+    ctx.strokeStyle = pGrad;
+    ctx.lineWidth = 6;
+    ctx.beginPath(); ctx.moveTo(player.x - 150, pLaneY); ctx.lineTo(player.x + 150, pLaneY); ctx.stroke();
+
+    shockwaves.forEach(sw => {
+        ctx.globalAlpha = sw.alpha;
+        ctx.strokeStyle = sw.color;
+        ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.arc(sw.x, sw.y, sw.radius, 0, Math.PI * 2); ctx.stroke();
+    });
+    ctx.globalAlpha = 1.0;
+
+    ctx.strokeStyle = isInstinct ? 'rgba(255, 0, 255, 0.2)' : 'rgba(0, 255, 255, 0.06)';
+    ctx.lineWidth = 1; ctx.beginPath();
+    for(let i=0; i<width + 100; i+=80) { let xPos = (i - (scrollX % 80)); ctx.moveTo(xPos, height * 0.4); ctx.lineTo(xPos, height); }
+    ctx.stroke();
+
+    LANE_Y.forEach((yPct, index) => {
+        const state = laneFlash[index];
+        if (state === 2) { 
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)'; 
+            ctx.lineWidth = 12; 
+            ctx.shadowColor = '#ffffff'; 
+            ctx.shadowBlur = 15; 
+        } 
+        else if (state === 1) { 
+            ctx.strokeStyle = 'rgba(255, 0, 85, 0.65)'; 
+            ctx.lineWidth = 6; 
+            ctx.shadowBlur = 0; 
+        } 
+        else { 
+            ctx.strokeStyle = '#1a1a1a'; 
+            ctx.lineWidth = 4; 
+            ctx.shadowBlur = 0; 
+        }
+        ctx.beginPath(); ctx.moveTo(0, height * yPct); ctx.lineTo(width, height * yPct); ctx.stroke();
+    });
+    ctx.shadowBlur = 0; // Reset blur for other elements
+
+    player.trails.forEach(t => {
+        let ghost = { ...player, x: t.x, y: t.y, lane: t.lane, state: t.state, punchType: t.punchType, hitFrame: t.hitFrame, slipBuff: t.slipBuff, instinct: t.instinct };
+        drawBoxer(ctx, ghost, true, t.opacity, true); 
+    });
+
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+    foregroundLines.forEach(f => { ctx.globalAlpha = f.alpha; ctx.fillRect(f.x, f.y, f.length, 2); });
+    ctx.globalAlpha = 1.0;
+
+    ambientDust.forEach(d => { ctx.fillStyle = `rgba(0, 255, 255, ${d.alpha})`; ctx.fillRect(d.x, d.y, d.size, d.size); });
+    
+    particles.forEach(p => { 
+        ctx.globalAlpha = Math.max(0, p.life);
+        ctx.fillStyle = p.color;
+        if (p.type === 'shard') {
+            ctx.save();
+            ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+            ctx.beginPath(); ctx.moveTo(0, -p.size); ctx.lineTo(p.size/2, p.size); ctx.lineTo(-p.size/2, p.size); ctx.fill();
+            ctx.restore();
+            p.rot += p.rotV;
+        } else if (p.type === 'vacuum') {
+            ctx.fillRect(p.x, p.y, 2, 2);
+            ctx.fillStyle = 'rgba(255,255,255,0.5)';
+            ctx.fillRect(p.x - p.vx, p.y - p.vy, 2, 2); 
+        } else if (p.type === 'dash_line') {
+            ctx.fillRect(p.x, p.y, 20, 2);
+        } else {
+            ctx.fillRect(p.x, p.y, 4, 4); 
+        }
+    });
+    ctx.globalAlpha = 1;
+
+    const globalJitter = Math.sin(Date.now() * 0.15) * 8;
+    const t = Date.now();
+
+    enemies.forEach(en => {
+        if (en.trails && en.trails.length > 0) {
+            en.trails.forEach(tr => {
+                let ghost = { ...en, x: tr.x, y: tr.y, lane: tr.lane };
+                drawBoxer(ctx, ghost, false, tr.opacity, true); 
+            });
+        }
+
+        let enemyOpacity = en.isActiveThreat || en.isBoss ? 1.0 : 0.4;
+        
+        drawBoxer(ctx, en, false, enemyOpacity);
+
+        if (en.isActiveThreat) {
+            let perfectThresh = en.type === 'zoner' ? 10 : 8;
+            if (en.type === 'zoner' && en.attackCooldown < 40 && en.stun <= 0 && bossIntroTimer <= 0) {
+                let intensity = 1 - (en.attackCooldown / 40);
+                ctx.strokeStyle = `rgba(0, 255, 0, ${intensity})`; ctx.lineWidth = 2 + (intensity * 6); 
+                ctx.setLineDash([15, 10]); ctx.lineDashOffset = -t * 0.05;
+                ctx.beginPath(); ctx.moveTo(en.x, en.y - 60); ctx.lineTo(player.x, en.y - 60); ctx.stroke();
+                ctx.setLineDash([]); 
+                
+                ctx.strokeStyle = '#00ff00'; ctx.lineWidth = 2;
+                ctx.beginPath(); ctx.arc(player.x, en.y - 60, 20 - intensity * 15, 0, Math.PI*2); ctx.stroke();
+                ctx.fillStyle = `rgba(0, 255, 0, ${intensity})`; 
+                ctx.beginPath(); ctx.arc(player.x, en.y - 60, 5 + intensity * 10, 0, Math.PI*2); ctx.fill();
+            }
+
+            let xOff = 0;
+            if (en.attackCooldown <= 22 && en.attackCooldown > perfectThresh && en.stun <= 0 && en.type !== 'zoner' && bossIntroTimer <= 0) {
+                xOff = globalJitter; 
+                let telColor = '#fff'; let telText = '!';
+                if (en.isBoss) {
+                    if (en.currentMove === 'bash') { telColor = '#ffaa00'; telText = 'BREAK'; }
+                    if (en.currentMove === 'feint') { telColor = '#aa00ff'; telText = '?'; }
+                } else if (en.type === 'shield' || en.type === 'bruiser') { telColor = '#ffaa00'; telText = 'BREAK'; }
+
+                ctx.fillStyle = telColor; ctx.font = 'bold 20px Orbitron'; ctx.textAlign = 'center'; ctx.fillText(telText, en.x + en.w/2 + xOff, en.y - en.h - 10); ctx.textAlign = 'left';
+            }
+        } else if (en.attackCooldown <= 22 && en.stun <= 0 && en.type !== 'zoner' && bossIntroTimer <= 0) {
+            let telColor = 'rgba(255,255,255,0.3)'; let telText = '!';
+            if (en.isBoss) {
+                if (en.currentMove === 'bash') { telColor = 'rgba(255,170,0,0.3)'; telText = 'BREAK'; }
+                if (en.currentMove === 'feint') { telColor = 'rgba(170,0,255,0.3)'; telText = '?'; }
+            } else if (en.type === 'shield' || en.type === 'bruiser') { telColor = 'rgba(255,170,0,0.3)'; telText = 'BREAK'; }
+            
+            ctx.fillStyle = telColor; ctx.font = 'bold 12px Orbitron'; ctx.textAlign = 'center'; ctx.fillText(telText, en.x + en.w/2, en.y - en.h - 10); ctx.textAlign = 'left';
+        }
+
+        if (en.type === 'shield' && en.stun <= 0) {
+            ctx.strokeStyle = `rgba(255, 255, 255, ${en.isActiveThreat ? 0.8 : 0.3})`; 
+            ctx.lineWidth = 4;
+            ctx.beginPath(); ctx.moveTo(en.x - 5, en.y); ctx.lineTo(en.x - 5, en.y - en.h); ctx.stroke();
+        }
+        
+        ctx.globalAlpha = enemyOpacity;
+        if (!en.isBoss) {
+            ctx.fillStyle = 'rgba(255,255,255,0.1)'; ctx.fillRect(en.x, en.y - en.h - 12, en.w, 3);
+            ctx.fillStyle = en.color; ctx.fillRect(en.x, en.y - en.h - 12, (en.hp/en.maxHp) * en.w, 3);
+        } else {
+            ctx.fillStyle = '#fff'; ctx.font = 'bold 16px Orbitron'; ctx.textAlign = 'center'; ctx.fillText(en.name, en.x + en.w/2, en.y - en.h - 35);
+            if (en.phase === 2) { ctx.fillStyle = '#ff0000'; ctx.fillText(en.name === 'PHANTOM BOXER' ? 'OVERDRIVE' : 'RAGE', en.x + en.w/2, en.y - en.h - 15); }
+            ctx.fillStyle = 'rgba(255,255,255,0.1)'; ctx.fillRect(en.x - 10, en.y - en.h - 5, en.w + 20, 6);
+            ctx.fillStyle = en.phase === 1 ? '#ffaa00' : '#ff0055'; ctx.fillRect(en.x - 10, en.y - en.h - 5, ((en.hp/en.maxHp) * (en.w + 20)), 6); ctx.textAlign = 'left'; 
+        }
+        ctx.globalAlpha = 1.0;
+    });
+
+    drawBoxer(ctx, player, true);
+
+    if (bossIntroTimer > 0) {
+        ctx.fillStyle = `rgba(${bossThemeColor === '#aa00ff' ? '170,0,255' : '255,170,0'}, 0.2)`; ctx.fillRect(0, 0, width, height);
+        ctx.fillStyle = '#000'; ctx.fillRect(0, height/2 - 80, width, 160);
+        let slideIn = Math.min(1, (120 - bossIntroTimer) / 20); 
+        ctx.fillStyle = '#fff'; ctx.font = '900 italic 40px Orbitron'; ctx.textAlign = 'center';
+        ctx.fillText(bossIntroText, width/2 * slideIn + (width/4), height/2 - 10);
+        ctx.fillStyle = bossThemeColor; ctx.font = 'bold 24px Orbitron';
+        ctx.fillText("PREPARE FOR COMBAT", width/2 * slideIn + (width/4), height/2 + 30); ctx.textAlign = 'left';
+    }
+
+    floatingTexts.forEach(ft => {
+        ctx.globalAlpha = Math.max(0, ft.life); ctx.fillStyle = ft.color; ctx.font = 'bold 16px Orbitron'; ctx.textAlign = 'center'; ctx.fillText(ft.text, ft.x, ft.y); ctx.textAlign = 'left';
+    });
+    ctx.globalAlpha = 1;
+    
+    SequenceManager.draw(ctx, width, height);
+
+    ctx.restore();
+}
+
+function loop() { if (gameState === 'playing') update(); draw(); requestAnimationFrame(loop); }
+window.onload = init;
+</script>
+</body>
+</html>

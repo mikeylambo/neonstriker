@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NEON STRIKE: INSTINCT (Modular)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="./styles/main.css">
+</head>
+<body>
+<div id="viewport-shell">
+    <div id="game-container">
+        <div id="screen-flash" class="flash"></div>
+        <div id="perfect-slip-ui">PERFECT SLIP</div>
+        <canvas id="gameCanvas" width="1000" height="600"></canvas>
+        
+        <div class="ui-overlay flex justify-between items-start w-full pr-8">
+            <div class="relative">
+                <div class="text-xs mb-1 uppercase tracking-widest text-cyan-400 font-bold">Instinct</div>
+                <div class="instinct-bar-container" id="bar-cont"><div id="instinct-bar"></div></div>
+                <div class="h-6 mt-1 flex items-center"><div id="instinct-ready-banner">INSTINCT READY [SPACE]</div></div>
+                <div class="mt-1 flex gap-4 text-[0.65rem] uppercase font-bold tracking-widest text-gray-500">
+                    <div>SPD: <span id="orb-speed" class="text-cyan-400">0</span></div>
+                    <div>PWR: <span id="orb-power" class="text-pink-500">0</span></div>
+                    <div>TEC: <span id="orb-technique" class="text-yellow-400">0</span></div>
+                </div>
+                <div id="counter-hud" class="mt-1 text-[0.65rem] font-bold tracking-widest text-gray-600 transition-colors">COUNTER: <span id="counter-status" class="text-gray-600 transition-colors">INACTIVE</span></div>
+                <div class="mt-3 flex items-end gap-4">
+                    <div class="text-4xl font-black italic tracking-tighter transition-all duration-200" id="health-ui">HP: 100</div>
+                    <div class="text-sm font-bold mb-1 flex flex-col"><span class="text-pink-500" id="stage-ui">STAGE 1: SHATTERED CATHEDRAL</span><span class="text-yellow-400 text-xs tracking-widest uppercase" id="affix-ui"></span></div>
+                </div>
+            </div>
+            
+            <div class="text-right">
+                <div class="flex items-center justify-end gap-2 mb-1" style="padding-right: 15px;">
+                    <div id="exp-multiplier" class="text-[10px] text-yellow-400 font-bold opacity-0 transition-opacity duration-200">x1.0</div>
+                    <div class="w-24 h-1.5 bg-gray-900 rounded overflow-hidden border border-gray-700 shadow-[0_0_10px_rgba(255,0,255,0.2)]">
+                        <div id="exp-bar" class="h-full bg-pink-500 w-0 transition-all duration-200 shadow-[0_0_8px_#ff00ff]"></div>
+                    </div>
+                </div>
+                <div class="combo-counter -mt-2" id="combo-ui">0</div>
+                <div class="text-[0.65rem] uppercase text-pink-500 font-bold tracking-widest" style="padding-right: 15px;">Combo</div>
+            </div>
+        </div>
+        
+        <div id="start-screen" class="fullscreen-overlay" style="display: flex;">
+            <div id="best-run"></div>
+            <h1 class="text-6xl mb-1 text-cyan-400 font-black italic tracking-tighter text-shadow-lg">NEON STRIKE</h1>
+            <p class="text-pink-500 tracking-widest uppercase text-xs font-bold opacity-90 mb-3">The Neon Striker</p>
+            <p class="text-white tracking-widest uppercase text-xs opacity-70 mb-8">Press [SPACE] or [A] to Begin Gauntlet</p>
+            <div class="mb-10 flex items-center justify-center gap-3 bg-gray-900 bg-opacity-50 p-3 rounded border border-gray-800 pointer-events-auto">
+                <input type="checkbox" id="tutorial-toggle-cb" checked class="w-5 h-5 cursor-pointer accent-pink-500">
+                <label for="tutorial-toggle-cb" class="text-cyan-400 font-bold uppercase tracking-widest cursor-pointer text-sm">Enable Interactive Tutorial</label>
+            </div>
+            <!-- FIXED: Added explicit clickable Start Button -->
+            <div class="orb-btn" onclick="startGame()">
+                <div class="font-bold text-xl">START GAUNTLET</div>
+                <div class="text-xs opacity-70 mt-1 uppercase">[SPACE] / [ENTER] / [A] / Click</div>
+            </div>
+            <div class="orb-btn" style="border-color:#facc15;" onclick="startDailyChallenge()">
+                <div class="font-bold text-xl" style="color:#facc15;">DAILY CHALLENGE</div>
+                <div class="text-xs opacity-70 mt-1 uppercase" id="daily-sub">Same seed for everyone, today only</div>
+            </div>
+            <div class="orb-btn" onclick="toggleHowTo()">
+                <div class="font-bold text-xl">COMBAT MANUAL</div>
+                <div class="text-xs opacity-70 mt-1 uppercase">Learn the Mechanics [H] / [Y]</div>
+            </div>
+            <div class="orb-btn" style="border-color:#34d399;" onclick="toggleRecords()">
+                <div class="font-bold text-xl" style="color:#34d399;">RECORDS</div>
+                <div class="text-xs opacity-70 mt-1 uppercase">Leaderboard &amp; Strikers</div>
+            </div>
+        </div>
+        
+        <div id="tutorial-screen" class="fullscreen-overlay">
+            <h2 class="text-6xl mb-6 text-pink-500 font-black italic tracking-tighter text-shadow-lg" id="tutorial-title">TUTORIAL</h2>
+            <p class="text-white text-2xl text-center max-w-3xl leading-relaxed mb-10" id="tutorial-text"></p>
+            <div class="orb-btn" onclick="dismissTutorial()"><div class="font-bold text-2xl">GOT IT</div><div class="text-sm opacity-70 mt-2 uppercase">Press [ENTER] or [A] to Continue</div></div>
+        </div>
+        
+        <div id="howto-screen" class="fullscreen-overlay">
+            <div class="manual-container">
+                <h2 class="text-4xl mb-6 text-pink-500 font-black italic tracking-tighter border-b border-gray-800 pb-4">COMBAT MANUAL</h2>
+                <h3 class="manual-h3">1. The Basics</h3><p class="manual-p">Use <span class="manual-highlight">[UP / DOWN ARROWS]</span> to slip between the 3 lanes. <br><span class="manual-highlight">[LEFT ARROW]</span> tap = Ghost Step (emergency evade). Held = give ground. <br><span class="manual-highlight">[RIGHT ARROW]</span> held = press forward, closing distance early. <br><span class="manual-highlight">[A] [A] [A]</span> = Jab Chain (Builds Combo, pins enemies) <br><span class="manual-highlight">[S]</span> = Cross (Heavy hitstop, Stuns, Armor Break) <br><span class="manual-highlight">[D]</span> = Hook (Medium knockback space-maker)<br><span class="manual-highlight">[SHIFT]</span> = Guard (Reduces damage by 75%)</p>
+                <h3 class="manual-h3">2. Footwork &amp; Spacing</h3><p class="manual-p">You are not locked to one spot. Hold <span class="manual-highlight">[RIGHT]</span> to press forward &mdash; you reach enemies sooner and can interrupt their windup before it ever becomes a threat, but more of them converge on you at once. Hold <span class="manual-highlight">[LEFT]</span> past the initial Ghost Step burst to give ground &mdash; buys reaction time against a Bruiser train or a Zoner volley, at the cost of your own tempo. Let go of both and you drift back to a neutral stance on your own.</p>
+                <h3 class="manual-h3">3. Reading The Lanes (Perfect Slips)</h3><p class="manual-p">When an enemy is preparing to attack, their lane will flash <span class="manual-alert">RED</span>. Slipping now grants a <span class="manual-highlight">Good Slip</span>.<br>When the lane flashes <span style="color: #fff; font-weight: bold;">BRIGHT WHITE</span>, you are in the <span class="manual-highlight">Perfect Slip Window</span>. <br>A Perfect Slip completely evades the attack, grants a massive Instinct Meter boost, and <span style="color: #ffff00; font-weight: bold;">CHARGES</span> a devastating Counter Hit for your next strike!</p>
+                <h3 class="manual-h3">4. Guard Offense &amp; Breaking Shields</h3><p class="manual-p">Enemies with <span class="manual-alert">GOLD ARMOR</span> will block Jabs. You MUST use a <span class="manual-highlight">CROSS [S]</span> to shatter their defense.<br>While holding <span class="manual-highlight">GUARD [SHIFT]</span>, you can press <span class="manual-highlight">[A]</span> for a fast Guard Jab, or <span class="manual-highlight">[D]</span> for a space-making Check Hook. These are safe, but won't build Combo.</p>
+                <h3 class="manual-h3">5. Know Your Opponent</h3><p class="manual-p"><span class="manual-highlight">Bruisers</span> shrug off Jabs entirely &mdash; only a Cross (or a Counter Hit) staggers them, though Jabs still chip their health. <span class="manual-highlight">Assassins</span> bite through Guard almost completely &mdash; turtling barely works on them, they have to be read and slipped. <span class="manual-alert">Zoners</span> fire from range on a visible countdown; slip out of their lane before it fires.</p>
+                <h3 class="manual-h3">6. Pressure &amp; Cash-Out</h3><p class="manual-p">Landing any punch pins <span class="manual-highlight">Pressure</span> onto that target &mdash; shown as small pink pips above its health bar, up to 3. <br>Follow up with a <span class="manual-highlight">CROSS [S]</span> before it decays and the built-up pressure converts straight into bonus damage: a real payoff for a Jab string, not just chip damage.<br>Pressure fades on its own if you don't cash it out in time &mdash; bank it now, or keep building and risk losing it all.</p>
+                <h3 class="manual-h3">7. Instinct Mode</h3><p class="manual-p">When the top meter is full, press <span class="manual-highlight">[SPACE]</span> to unleash Instinct Mode. <br>You gain Hyper Armor, take 50% less damage, and your raw attacks gain full knockback. Control the crowd!</p>
+                <h3 class="manual-h3">8. Evolutions</h3><p class="manual-p">Deep into the Technique tree you can draft <span class="manual-highlight">Guard Read</span>: release Guard the instant a hit lands and you charge a full Counter, same reward as a Perfect Slip. Turtling stops being a purely passive fallback and becomes a second, timing-based read of its own.</p><p class="manual-p">Defeating enemies and landing <span class="manual-highlight">Perfect Slips</span> charges your <span class="manual-highlight">Evolution</span> meter (the pink bar, top right).<br>When it fills, the next lull in combat opens a draft of three upgrades — pick with <span class="manual-highlight">[1] [2] [3]</span> or <span class="manual-highlight">[X] [Y] [B]</span>.<br>Max a tree to unlock <span class="manual-highlight">Masteries</span>; combine two maxed trees to unlock run-defining <span class="manual-highlight">Fusions</span>.</p>
+                <h3 class="manual-h3">9. Adversaries</h3><p class="manual-p">Every archetype asks one distinct question &mdash; learn the question, not the enemy.<br><span class="manual-highlight">Grunt</span> &mdash; the metronome. Reads clean, dies clean. Sets your rhythm.<br><span class="manual-highlight">Shield</span> &mdash; the wall. Jabs bounce; only a <span class="manual-highlight">Cross [S]</span> opens it.<br><span class="manual-highlight">Bruiser</span> &mdash; the freight. Shrugs off jabs entirely (they still chip), keeps swinging through your pressure. Cross, Counter, or True Read to stagger. <span class="manual-alert">Leave it alive and it HARDENS</span> &mdash; faster, meaner &mdash; so deal with it early.<br><span class="manual-highlight">Assassin</span> &mdash; the needle. Bites through Guard (~60% still lands). Turtling fails; you must read and <span class="manual-highlight">slip</span>.<br><span class="manual-alert">Zoner</span> &mdash; the rail. Fires down a lane on a visible countdown. Leave the lane before it commits &mdash; and the longer it lives, the faster it charges.</p><p class="manual-p"><span class="manual-highlight">The Bosses</span> escalate their read as you climb the Arcs:<br><span class="manual-highlight">Neon Enforcer</span> &mdash; armored pressure. Punishes jab-spam into its guard, harder each Arc.<br><span class="manual-highlight">Phantom Boxer</span> &mdash; the feint. Shifts lanes, and in later Arcs throws decoy tells and afterimages that cost you only if you take the bait.<br><span class="manual-alert">Static Monk</span> &mdash; the zoner king. Chains longer laser volleys and, deep in, calls support while it recharges.</p>
+                <h3 class="manual-h3">10. System</h3><p class="manual-p"><span class="manual-highlight">[P] / [ESC]</span> Pause &nbsp;·&nbsp; <span class="manual-highlight">[H]</span> Manual &nbsp;·&nbsp; <span class="manual-highlight">[M]</span> Mute Audio &nbsp;·&nbsp; <span class="manual-highlight">[R]</span> Restart (on results screen)</p>
+                <div class="orb-btn mt-8 mx-auto w-full" onclick="toggleHowTo()"><div class="font-bold text-xl">CLOSE MANUAL [H] / [B]</div></div>
+            </div>
+        </div>
+        
+        <div id="records-screen" class="fullscreen-overlay">
+            <div class="records-container">
+                <h2 class="text-4xl mb-1 font-black italic tracking-tighter" style="color:#34d399;">RECORDS</h2>
+                <p id="records-stats" class="text-[0.7rem] uppercase tracking-widest text-gray-400 mb-3 border-b border-gray-800 pb-3">RUNS <b>0</b> · BEST SCORE <b>—</b> · BEST BOSS STREAK <b>0</b></p>
+                <div class="alias-row">
+                    <label for="alias-input" class="alias-label">Leaderboard name</label>
+                    <input id="alias-input" class="alias-input" maxlength="16" placeholder="STRIKER"
+                           onchange="setAlias(this.value)" onblur="setAlias(this.value)">
+                </div>
+                <div class="online-row">
+                    <input type="checkbox" id="online-optin" class="online-checkbox" onchange="setOnlineOptIn(this.checked)">
+                    <label for="online-optin" class="online-label">
+                        Submit my runs to the global leaderboard
+                        <span class="online-note">Off by default. When on, your leaderboard name, score, grade and stage are sent to our server. Your local records always stay on this device.</span>
+                    </label>
+                </div>
+                <div class="global-cols">
+                    <div class="global-col">
+                        <h3 class="records-h3">Global · All-Time</h3>
+                        <div id="global-alltime" class="records-list"></div>
+                    </div>
+                    <div class="global-col">
+                        <h3 class="records-h3">Global · Today's Daily</h3>
+                        <div id="global-daily" class="records-list"></div>
+                    </div>
+                </div>
+                <h3 class="records-h3 mt-4">Your Top Runs</h3>
+                <div id="records-list" class="records-list"></div>
+                <h3 class="records-h3 mt-4">Striker Colours</h3>
+                <div id="striker-picker" class="striker-picker"></div>
+                <div class="orb-btn mt-6 mx-auto w-full" onclick="toggleRecords()"><div class="font-bold text-xl">CLOSE [H] / [ESC]</div></div>
+            </div>
+        </div>
+
+        <div id="upgrade-screen" class="fullscreen-overlay">
+            <h2 class="text-4xl mb-2 text-white font-black italic tracking-tighter" id="upgrade-title">EVOLUTION READY</h2>
+            <p class="text-cyan-400 mb-10 tracking-widest uppercase text-sm">Select Your Next Enhancement</p>
+            
+            <div id="draft-container" class="flex flex-row justify-center items-stretch gap-6 w-full max-w-5xl px-4 pointer-events-auto">
+                <!-- Dynamically populated via Javascript -->
+            </div>
+        </div>
+        
+        <div id="pause-screen" class="fullscreen-overlay">
+            <h2 class="text-6xl mb-4 text-cyan-400 font-black italic tracking-tighter text-shadow-lg">PAUSED</h2><p class="text-white tracking-widest uppercase text-sm opacity-70 mb-8">Press [ESC], [P], or [START] to Resume</p>
+            <div class="orb-btn" onclick="toggleHowTo()"><div class="font-bold text-xl">COMBAT MANUAL [H] / [Y]</div></div><div class="orb-btn" style="border-color:#ef4444;color:#ef4444;" onclick="returnToMenu()"><div class="font-bold text-xl">QUIT TO MENU [B]</div></div>
+        </div>
+        
+        <div id="gameover-screen" class="fullscreen-overlay">
+            <h2 class="text-6xl mb-2 text-pink-500 font-black italic tracking-tighter">GAUNTLET ENDED</h2><p class="text-cyan-400 mb-2 tracking-widest uppercase text-3xl" id="final-stage-ui">STAGE REACHED: 1</p><p class="text-yellow-400 mb-2 font-bold text-xl italic" id="run-title-ui">"SURVIVOR ROUTE"</p>
+            <p class="text-[10px] uppercase tracking-widest text-gray-500 mb-1" id="run-mode-ui"></p>
+            <p class="text-[11px] uppercase tracking-widest font-bold mb-2" style="color:#34d399;" id="run-rank-ui"></p>
+            <div id="new-best" style="display:none;">NEW PERSONAL BEST</div>
+            <div class="mb-8 flex gap-8 text-left bg-black bg-opacity-50 p-6 rounded border border-gray-800">
+                <div><div class="stat-line">Grade: <span class="stat-val text-5xl ml-2" id="stat-grade">C</span></div><div class="stat-line mt-4">Max Combo: <span class="stat-val" id="stat-combo">0</span></div><div class="stat-line">Perfect Slips: <span class="stat-val" id="stat-slips">0</span></div><div class="stat-line">Score: <span class="stat-val" id="stat-score">0</span></div></div>
+                <div><div class="stat-line mt-2">Enemies Defeated: <span class="stat-val" id="stat-kills">0</span></div><div class="stat-line">Bosses Defeated: <span class="stat-val" id="stat-bosses">0</span></div><div class="stat-line">Boss Streak: <span class="stat-val" id="stat-streak">0</span></div><div class="stat-line text-xs mt-4 text-gray-500 font-bold" id="stat-build">FINAL BUILD: SPD 0 | PWR 0 | TEC 0</div></div>
+            </div>
+            <div class="orb-btn" onclick="startGame()"><div class="font-bold text-xl">RESTART RUN</div><div class="text-xs opacity-70 mt-1 uppercase">Press [R], Click, or [A] to Try Again</div></div><div class="orb-btn" style="border-color:#6b7280;color:#9ca3af;" onclick="returnToMenu()"><div class="font-bold text-xl">MAIN MENU [B]</div></div>
+        </div>
+        
+        <div id="instructions"><span class="text-cyan-400">[UP/DOWN]</span> SLIP &nbsp;|&nbsp; <span class="text-cyan-400">[LEFT]</span> GHOST STEP / GIVE GROUND &nbsp;|&nbsp; <span class="text-cyan-400">[RIGHT]</span> PRESS FORWARD &nbsp;|&nbsp; <span class="text-pink-500">[X/A]</span> JAB &nbsp;|&nbsp; <span class="text-pink-500">[Y/S]</span> CROSS &nbsp;|&nbsp; <span class="text-pink-500">[B/D]</span> HOOK &nbsp;|&nbsp; <span class="text-yellow-400">[A/SPACE]</span> INSTINCT &nbsp;|&nbsp; <span class="text-gray-400">[R2/SHIFT]</span> GUARD</div>
+        <div id="audio-state">[M] AUDIO: ON</div>
+    </div>
+</div>
+
+<script src="./dist/game.bundle.js"></script>
+</body>
+</html>
