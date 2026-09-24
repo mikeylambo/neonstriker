@@ -7,6 +7,8 @@ import { random } from '../systems/rng.js';
 import { setMusicIntensity } from '../vfx_audio/audio.js';
 import { telegraphLead, beginPunishWindow, clampCycle } from '../systems/boss_rules.js';
 import { checkBossThresholds, startFinisher } from '../systems/finisher.js';
+import { invertHex, ECHO_DELAY } from '../systems/negative.js';
+import { getBinds } from '../systems/settings.js';
 
 const BOSS_ROSTER = [
     {
@@ -41,8 +43,32 @@ const BOSS_ROSTER = [
         cooldown: 120, 
         baseHpMult: 0.85,
         startMove: 'laser'
+    },
+    // v17: the rotation no longer repeats inside Arcs 1-5.
+    {
+        name: 'LIVE WIRE',
+        color: '#ffe14d',
+        controller: 'live_wire',
+        type: 'bruiser',
+        weight: 2.2,
+        speed: 1.7,
+        cooldown: 50,
+        baseHpMult: 1.05,
+        startMove: 'string'
+    },
+    {
+        name: 'NEGATIVE',
+        color: '#ff0000', // replaced at spawn with the inverse of the Striker's colour
+        controller: 'negative',
+        type: 'grunt',
+        weight: 1.3,
+        speed: 2.2,
+        cooldown: 44,
+        baseHpMult: 1.2,
+        startMove: 'jab'
     }
 ];
+export const BOSS_ROSTER_IDS = BOSS_ROSTER.map(b => b.controller);
 
 // A lone Grunt add summoned by the Static Monk's Arc 3+ recharge (summonSupportPressure).
 // Uses the same stat/scaling shape as a normal wave Grunt so it reads as a familiar
@@ -62,7 +88,7 @@ function spawnMonkAdd() {
 
 export function spawnBoss() {
     st.bossActive = true; 
-    st.bossIntroTimer = 120; 
+    st.bossIntroTimer = 180; // v17: title-fight poster
     st.shake = 15; 
     playSound('bash_tell');
     setMusicIntensity(1);
@@ -73,10 +99,19 @@ export function spawnBoss() {
 
     const rawArcIndex = CONSTANTS.getArcIndex(st.currentStage);
     const bossIndex = (rawArcIndex - 1) % BOSS_ROSTER.length;
-    const template = BOSS_ROSTER[bossIndex];
+    const template = { ...BOSS_ROSTER[bossIndex] };
+    if (template.controller === 'negative') template.color = invertHex(st.strikerColor || '#00ffff');
     
     st.bossThemeColor = template.color; 
     st.bossIntroText = template.name;
+    // v17 ROUND FRAMING: the boss stage opens on a title-fight poster.
+    const arcData = CONSTANTS.ARC_STAGE_TABLES[Math.min(rawArcIndex, 5)] || {};
+    st.bossPoster = {
+        name: template.name, controller: template.controller, color: template.color, arc: rawArcIndex,
+        tagline: (CONSTANTS.BOSS_BILLING[template.controller] || {}).tagline || '',
+        venue: (arcData[7] && arcData[7].stageName) || 'Boss Chamber', round: st.currentStage
+    };
+    playSound('bell');
 
     // --- MACRO PLUMBING: Inject scaling behavioral traits based on current Arc ---
     const arcMods = CONSTANTS.getBossArcMods(template.controller, rawArcIndex);
@@ -123,6 +158,7 @@ export function spawnBoss() {
         // v16 offense audit + finisher bookkeeping
         telegraphed: false, recoverTimer: 0, recoverMax: 0, punishShown: false, feintSwitched: false,
         finisherStage: 0, pendingFinisher: null, koDone: false,
+        stringIdx: 0, stringsThrown: 0, shockTimer: 0, slipCooldown: 0,
         arcMods: arcMods // Assigned directly to the entity!
     });
 }
@@ -378,9 +414,120 @@ function handleStaticMonk(en) {
     }
 }
 
+// ==========================================
+// v17 LIVE WIRE (Arc 4): a pressure fighter. Throws 2-3 hit punch strings (every
+// hit re-targets your lane with its own telegraph), crowds you backwards, and
+// every few strings throws a SHOVE that walks you back hard. His ropes — the ones
+// behind YOU — are electrified: being cornered is the real threat.
+// ==========================================
+function liveWireShocks(en) {
+    const p = st.player;
+    if (!p.cornered) { en.shockTimer = 0; return; }
+    const S = CONSTANTS.ROPES.liveWireShock;
+    if (++en.shockTimer % S.every === 0 && !(p.invuln > 0) && p.state !== 'ghost_step') {
+        takeDamage(S.damage, false, null);
+        playSound('shock'); createImpact(p.x - 10, p.y - 70, '#fff36b'); createImpact(p.x - 10, p.y - 30, '#ffffff');
+        spawnFloatingText(p.x + 10, p.y - 130, 'SHOCKED!', '#fff36b');
+    }
+}
+
+function handleLiveWire(en) {
+    if (en.recoverTimer > 0) { en.recoverTimer--; return; } // OPEN — punish it
+    en.attackCooldown--;
+    const p = st.player;
+    if (en.x > p.x + 100) en.x -= en.speed * 0.6 * (en.arcMods.walkDownMult || 1);
+    // Crowding: toe to toe, he walks you back unless you hold your ground (press forward).
+    const K = getBinds();
+    const holding = st.keys[K.right] || st.pad.rightHeld;
+    if (Math.abs(en.x - p.x) < 112 && !holding && p.state !== 'punching') p.x = Math.max(CONSTANTS.ROPES.playerMinX, p.x - 0.7);
+
+    const inRange = Math.abs(en.x - p.x) < 140 && en.stun <= 0;
+    meleeTelegraph(en, inRange, () => {
+        playSound(en.currentMove === 'shove' ? 'bash_tell' : 'jab_tell');
+        if (en.currentMove === 'shove') createImpact(en.x, en.y - 60, '#ffe14d');
+    });
+    if (!(inRange && en.attackCooldown <= 0)) return;
+
+    en.justAttacked = 5;
+    if (en.currentMove === 'string') {
+        resolveBossStrike(en, 10, false);
+        const len = en.arcMods.stringLength || 2;
+        en.stringIdx = (en.stringIdx || 0) + 1;
+        if (en.stringIdx < len) {
+            // next hit of the string: steps into your lane, full telegraph again
+            if (Math.abs(en.lane - p.lane) === 1) { en.lane = p.lane; en.y = st.height * CONSTANTS.LANE_Y[en.lane]; }
+            en.attackCooldown = telegraphLead(en) + 4; en.telegraphed = false;
+            return;
+        }
+        en.stringIdx = 0; en.stringsThrown = (en.stringsThrown || 0) + 1;
+        const shoveNext = en.stringsThrown % (en.arcMods.shoveEvery || 3) === 0;
+        en.currentMove = shoveNext ? 'shove' : 'string';
+        en.maxCooldown = nextCycle(en, shoveNext ? 60 : 44);
+        en.attackCooldown = en.maxCooldown;
+        beginPunishWindow(en, 'jab');
+    } else { // SHOVE: walks you back hard (guarding only softens it)
+        const connected = en.lane === p.lane && Math.abs(en.x - p.x) <= 100 && p.state !== 'ghost_step';
+        resolveBossStrike(en, 14, true);
+        if (connected) { p.x = Math.max(CONSTANTS.ROPES.playerMinX, p.x - 60); spawnFloatingText(p.x, p.y - 120, 'WALKED BACK', '#ffe14d'); }
+        en.currentMove = 'string';
+        en.maxCooldown = nextCycle(en, 44);
+        en.attackCooldown = en.maxCooldown;
+        beginPunishWindow(en, 'bash');
+    }
+}
+
+// ==========================================
+// v17 NEGATIVE (Arc 5, final): mirror of the Striker. Its reactions to YOUR
+// punches live in systems/negative.js (called from combat.js); here it walks
+// you down, jabs and crosses, and resolves the echo punches its afterimages throw.
+// ==========================================
+function updateEnemyEchoes() {
+    if (!st.enemyEchoes || !st.enemyEchoes.length) return;
+    const p = st.player;
+    for (const e of st.enemyEchoes) {
+        if (!e.fired) {
+            if (e.timer <= 12) st.laneFlash[e.lane] = Math.max(st.laneFlash[e.lane], e.timer <= 6 ? 2 : 1);
+            if (--e.timer <= 0) {
+                e.fired = true;
+                if (p.lane === e.lane && Math.abs(e.x - p.x) < 150) {
+                    if (p.state === 'ghost_step') { spawnFloatingText(p.x, p.y - 50, 'GHOST STEP', '#888888'); registerPerfectGhostStep(); }
+                    else takeDamage(st.isInstinct ? 6 : 12, false, null);
+                }
+                createImpact(e.x - 40, e.y - 60, e.color);
+            }
+        } else e.fade--;
+    }
+    st.enemyEchoes = st.enemyEchoes.filter(e => !e.fired || e.fade > 0);
+}
+
+function handleNegative(en) {
+    if (en.slipCooldown > 0) en.slipCooldown--;
+    if (en.phase === 1 && en.hp < en.maxHp * 0.5) {
+        en.phase = 2; st.shake = 40; doFlash(0.6); triggerShockwave(en.x, en.y - 60, en.color);
+        spawnFloatingText(en.x + 20, en.y - 160, 'THE MIRROR CRACKS', en.color); playSound('hit');
+    }
+    if (en.recoverTimer > 0) { en.recoverTimer--; return; } // OPEN — punish it
+    en.attackCooldown--;
+    const p = st.player;
+    if (en.x > p.x + 100) en.x -= en.speed * 0.6;
+    const inRange = Math.abs(en.x - p.x) < 140 && en.stun <= 0;
+    meleeTelegraph(en, inRange, () => playSound(en.currentMove === 'cross' ? 'bash_tell' : 'jab_tell'));
+    if (!(inRange && en.attackCooldown <= 0)) return;
+    en.justAttacked = 5;
+    const struck = en.currentMove;
+    resolveBossStrike(en, struck === 'cross' ? 18 : 12, struck === 'cross');
+    const roll = random();
+    en.currentMove = en.phase === 2 ? (roll > 0.45 ? 'cross' : 'jab') : (roll > 0.65 ? 'cross' : 'jab');
+    en.maxCooldown = nextCycle(en, en.currentMove === 'cross' ? 48 : 34);
+    en.attackCooldown = en.maxCooldown;
+    beginPunishWindow(en, struck === 'cross' ? 'bash' : 'jab');
+}
+
 export function updateBosses() {
+    updateEnemyEchoes(); // Negative's echoes resolve even while it's stunned
     for (const en of st.enemies) {
         if (!en.isBoss) continue;
+        if (en.controller === 'live_wire' && st.bossIntroTimer <= 0 && !st.finisher) liveWireShocks(en); // the wires are always live
         checkBossThresholds(en); // safety net for non-punch damage
         if (en.pendingFinisher && !st.finisher) {
             const kind = en.pendingFinisher; en.pendingFinisher = null;
@@ -391,5 +538,7 @@ export function updateBosses() {
         if (en.controller === 'neon_enforcer') handleNeonEnforcer(en);
         else if (en.controller === 'phantom_boxer') handlePhantomBoxer(en);
         else if (en.controller === 'static_monk') handleStaticMonk(en);
+        else if (en.controller === 'live_wire') handleLiveWire(en);
+        else if (en.controller === 'negative') handleNegative(en);
     }
 }

@@ -7,6 +7,40 @@ import { triggerTutorial } from '../systems/tutorial.js';
 import { takeDamage, registerPerfectGhostStep } from './player.js';
 import { addScore, killScore } from '../systems/score.js';
 import { setMusicIntensity } from '../vfx_audio/audio.js';
+import { keyName } from '../systems/settings.js';
+import { createKoShatter } from '../vfx_audio/effects.js';
+
+// v17 PUNCH STRINGS: after each hit of a string resolves (landed, slipped,
+// guarded or ghosted), the next hit re-targets the Striker's lane and winds up
+// with a FULL telegraph (gap > the red-flash lead from getSlipThresholds). The
+// last hit hands back to the normal recovery cycle.
+// v17 ROPES: knockback can't carry an enemy through its ropes — it gets PINNED
+// there (can't retreat or advance), primed for a rope-bounce counter.
+export function applyKnockback(en) {
+    const preX = en.x;
+    en.x += en.vx; en.vx *= 0.85;
+    const ROPE = CONSTANTS.ROPES.enemyRopeX;
+    if (en.controller !== 'static_monk' && preX <= ROPE && en.x > ROPE) {
+        en.x = ROPE; en.vx = 0;
+        if ((en.onRopes || 0) <= 0) {
+            playSound('rope_thud'); createImpact(ROPE + 30, en.y - 70, '#ffffff');
+            spawnFloatingText(en.x + 20, en.y - 150, 'ON THE ROPES', '#ffffff');
+        }
+        en.onRopes = CONSTANTS.ROPES.pinFrames;
+    }
+}
+
+function endAttack(en) {
+    if ((en.stringLen || 1) > 1 && (en.stringIdx || 0) < en.stringLen - 1) {
+        en.stringIdx = (en.stringIdx || 0) + 1;
+        en.attackCooldown = CONSTANTS.PUNCH_STRINGS.gap;
+        if (en.lane !== st.player.lane && Math.abs(en.lane - st.player.lane) === 1) en.lane = st.player.lane; // steps after you
+        return;
+    }
+    en.stringIdx = 0;
+    if (en.type === 'bruiser') en.currentMove = 'bash';
+    en.attackCooldown = en.maxCooldown;
+}
 
 // MENACE (target-priority: consequence of ignoring). A lingering Bruiser/Zoner gets
 // worse the longer it lives, so you're pushed to prioritise it — the cost is on
@@ -70,9 +104,9 @@ export function updateEnemies() {
             } else if (en.tutorialType === 'counter') {
                 let counterText = 'Your Perfect Slip was successful!<br><br>Notice the <span class="text-white font-bold">White Energy Rings</span> around your fists.<br><br>You are now holding a <span class="text-white font-bold">Counter Charge</span>. Your next strike will deal massive damage, shatter their posture, and cause extra hitstop.<br><br>' + (st.runCount <= 1 ? '<i>Strike this dummy enemy to unleash it!</i>' : '<i>Strike an enemy to unleash it!</i>');
                 triggerTutorial('counter', 'COUNTER READY', counterText);
-            } else if (en.tutorialType === 'shield') { triggerTutorial('shield', 'GOLD ARMOR', 'Enemies with Gold Armor will block your Jabs.<br><br>Use your <span class="text-cyan-400 font-bold">CROSS [S]</span> to shatter their defense!<br><br><i>Break the armor to pass!</i>'); } 
-            else if (en.tutorialType === 'guard') { triggerTutorial('guard', 'GUARDING', 'Guard is the stable answer when timing gets crowded, even if a clean slip is possible.<br><br>Hold <span class="text-cyan-400 font-bold">[SHIFT]</span> to Guard &mdash; it cuts incoming damage by 75% against <i>most</i> attackers.<br><br>Not all, though. A few enemies bite through Guard far more than that. You will get a specific heads-up the first time one shows up &mdash; watch for it.<br><br><i>Guard the next attack to pass!</i>'); }
-            else if (en.tutorialType === 'ghost_step') { triggerTutorial('ghost_step', 'GHOST STEP', 'This one is too fast to jab, guard, or slip cleanly.<br><br>Tap (don\'t hold) <span class="text-cyan-400 font-bold">[LEFT ARROW]</span> for a Ghost Step &mdash; a short evasive dash with a moment of invincibility.<br><br><i>Ghost Step the next attack to pass!</i>'); }
+            } else if (en.tutorialType === 'shield') { triggerTutorial('shield', 'GOLD ARMOR', `Enemies with Gold Armor will block your Jabs.<br><br>Use your <span class="text-cyan-400 font-bold">CROSS [${keyName('cross')}]</span> to shatter their defense!<br><br><i>Break the armor to pass!</i>`); } 
+            else if (en.tutorialType === 'guard') { triggerTutorial('guard', 'GUARDING', `Guard is the stable answer when timing gets crowded, even if a clean slip is possible.<br><br>Hold <span class="text-cyan-400 font-bold">[${keyName('guard')}]</span> to Guard &mdash; it cuts incoming damage by 75% against <i>most</i> attackers.<br><br>Not all, though. A few enemies bite through Guard far more than that. You will get a specific heads-up the first time one shows up &mdash; watch for it.<br><br><i>Guard the next attack to pass!</i>`); }
+            else if (en.tutorialType === 'ghost_step') { triggerTutorial('ghost_step', 'GHOST STEP', `This one is too fast to jab, guard, or slip cleanly.<br><br>Press <span class="text-cyan-400 font-bold">[${keyName('ghost')}]</span> for a Ghost Step &mdash; a short evasive dash with a moment of invincibility.<br><br><i>Ghost Step the next attack to pass!</i>`); }
             return; 
         }
 
@@ -82,17 +116,21 @@ export function updateEnemies() {
         // wave enemy rather than a scripted stand-in. Excludes bosses (Phantom
         // Boxer is assassin-typed) — that's a separate, later lesson.
         if (!en.tutorialType && en.isActiveThreat && en.x - st.player.x < 400) {
-            if (en.type === 'bruiser' && !st.seenTutorials.bruiser_id) {
-                triggerTutorial('bruiser_id', 'ARMORED BRUISER', 'This one shrugs off Jabs entirely.<br><br>Jabs still chip its health, but only a <span class="text-cyan-400 font-bold">CROSS [S]</span> &mdash; or a Counter Hit &mdash; actually staggers it.');
+            if (en.type === 'bruiser' && !en.isBoss && !st.seenTutorials.bruiser_id) { // (Live Wire is bruiser-typed — bosses get their poster, not this)
+                triggerTutorial('bruiser_id', 'ARMORED BRUISER', `This one shrugs off Jabs entirely.<br><br>Jabs still chip its health, but only a <span class="text-cyan-400 font-bold">CROSS [${keyName('cross')}]</span> &mdash; or a Counter Hit &mdash; actually staggers it.`);
+                return;
+            }
+            if ((en.stringLen || 1) > 1 && !en.isBoss && !st.seenTutorials.string_id) {
+                triggerTutorial('string_id', 'PUNCH STRING', `This one throws <span class="text-white font-bold">${en.stringLen} punches</span> in a row &mdash; the pips above its head count them.<br><br>Each punch follows you into your new lane and gets its own red &rarr; white tell.<br><br><span class="text-cyan-400 font-bold">Slip every one.</span> Answering only the first is how a string catches you.`);
                 return;
             }
             if (en.type === 'assassin' && !en.isBoss && !st.seenTutorials.assassin_id) {
-                triggerTutorial('assassin_id', 'ASSASSIN', 'This is the exception the Guard tutorial warned you about.<br><br>Guard normally blocks 75% of incoming damage. Against an Assassin, only about 40% gets blocked &mdash; the rest bites through.<br><br>You have to actually read it and <span class="text-cyan-400 font-bold">SLIP [UP/DOWN]</span>, not just hold Shift.');
+                triggerTutorial('assassin_id', 'ASSASSIN', 'This is the exception the Guard tutorial warned you about.<br><br>Guard normally blocks 75% of incoming damage. Against an Assassin, only about 40% gets blocked &mdash; the rest bites through.<br><br>You have to actually read it and <span class="text-cyan-400 font-bold">SLIP [UP/DOWN]</span>, not just Guard.');
                 return;
             }
         }
 
-        if (en.stun > 0 || st.bossIntroTimer > 0) { if (en.vx > 0.1) { en.x += en.vx; en.vx *= 0.85; } continue; }
+        if (en.stun > 0 || st.bossIntroTimer > 0) { if (en.vx > 0.1) applyKnockback(en); continue; }
 
 
         if (en.type === 'zoner') {
@@ -122,7 +160,7 @@ export function updateEnemies() {
         }
         
         if (en.isActiveThreat && en.name !== 'STATIC MONK') {
-            const { perfect: perfectThresh, good: goodThresh } = CONSTANTS.getSlipThresholds(en.type, st.progressionMods.perfectSlipWindowBonus);
+            const { perfect: perfectThresh, good: goodThresh } = CONSTANTS.getSlipThresholds(en.type, st.progressionMods.perfectSlipWindowBonus, CONSTANTS.isCornered(st.player));
             // Red telegraph now starts relative to each archetype's own good-window
             // width (a fixed early-warning buffer past it), not a flat "22" that
             // ignored Bruiser's wider window or Assassin's narrower one. Grunt/Shield
@@ -164,8 +202,8 @@ export function updateEnemies() {
             let isAtPlayer = (en.lane === st.player.lane && en.x <= st.player.x + 90 && en.x >= st.player.x - 20);
 
             if (en.vx > 0.1) {
-                en.x += en.vx; en.vx *= 0.85; 
-                let isBowling = (st.orbCounts.power >= 3 && en.vx > 5);
+                applyKnockback(en);
+                let isBowling = (st.orbCounts.power >= 4 && en.vx > 5);
                 st.enemies.forEach(other => {
                     if (other !== en && other.lane === en.lane && other.x > en.x - 20 && other.x < en.x + 120) {
                         if (isBowling) { other.x += en.vx * 0.8; other.hp -= 25; if (other.stun <= 0) other.stun = 15; createImpact(other.x, other.y - 50, '#ff0055'); } 
@@ -175,6 +213,7 @@ export function updateEnemies() {
             } else {
                 en.vx = 0;
                 if (en.isBoss && en.x < st.player.x + 100 && en.name !== 'STATIC MONK') { en.x = st.player.x + 100; } 
+                else if ((en.onRopes || 0) > 0) { en.onRopes--; /* pinned on its ropes */ }
                 else if (!isBlockedByEnemy && !isAtPlayer && st.tutorialGrace <= 0 && en.name !== 'STATIC MONK') { en.x -= en.speed; }
             }
             
@@ -207,7 +246,7 @@ export function updateEnemies() {
                         if (!en.tutorialType) registerPerfectGhostStep();
                         if (st.progressionMods.ghostCounter && st.player.slipBuff === 0) { st.player.slipBuff = 1; playSound('perfect_slip'); spawnFloatingText(st.player.x, st.player.y - 80, "GHOST COUNTER!", "#ffffff"); }
                         if (en.tutorialType === 'ghost_step') { en.hp = 0; }
-                        en.attackCooldown = en.maxCooldown;
+                        endAttack(en);
                         continue;
                     }
 
@@ -234,8 +273,8 @@ export function updateEnemies() {
                                 spawnFloatingText(st.player.x, st.player.y - 50, "WAIT FOR WHITE FLASH TO SLIP!", "#ffaa00"); en.x = st.player.x + 200; en.attackCooldown = en.maxCooldown; st.player.lane = 1; st.player.y = st.height * CONSTANTS.LANE_Y[st.player.lane]; st.player.x = 180; continue;
                             }
                         }
-                        if (en.tutorialType === 'shield') { spawnFloatingText(st.player.x, st.player.y - 50, "USE CROSS [S] TO BREAK!", "#ffaa00"); en.x = st.player.x + 200; en.attackCooldown = en.maxCooldown; continue; }
-                        if (en.tutorialType === 'guard') { if (st.player.state === 'guarding') { spawnFloatingText(st.player.x, st.player.y - 50, "GUARD SUCCESS!", "#00ffff"); en.hp = 0; playSound('hit'); } else { spawnFloatingText(st.player.x, st.player.y - 50, "HOLD [SHIFT] TO GUARD!", "#ffaa00"); en.x = st.player.x + 200; en.attackCooldown = en.maxCooldown; st.player.lane = 1; st.player.y = st.height * CONSTANTS.LANE_Y[st.player.lane]; st.player.x = 180; } continue; }
+                        if (en.tutorialType === 'shield') { spawnFloatingText(st.player.x, st.player.y - 50, `USE CROSS [${keyName('cross')}] TO BREAK!`, "#ffaa00"); en.x = st.player.x + 200; en.attackCooldown = en.maxCooldown; continue; }
+                        if (en.tutorialType === 'guard') { if (st.player.state === 'guarding') { spawnFloatingText(st.player.x, st.player.y - 50, "GUARD SUCCESS!", "#00ffff"); en.hp = 0; playSound('hit'); } else { spawnFloatingText(st.player.x, st.player.y - 50, `HOLD [${keyName('guard')}] TO GUARD!`, "#ffaa00"); en.x = st.player.x + 200; en.attackCooldown = en.maxCooldown; st.player.lane = 1; st.player.y = st.height * CONSTANTS.LANE_Y[st.player.lane]; st.player.x = 180; } continue; }
                     }
 
                     if (en.lane === st.player.lane && Math.abs(en.x - st.player.x) < 100 && en.tutorialType !== 'counter' && en.tutorialType !== 'ghost_step' && en.x > st.player.x - 30) { 
@@ -250,15 +289,14 @@ export function updateEnemies() {
                         // Every other dummy is harmless on a whiff and just redirects
                         // with a hint — this one used to be the odd one out and would
                         // deal real chip damage to a brand-new player. Matched now.
-                        spawnFloatingText(st.player.x, st.player.y - 50, "TAP [LEFT] TO GHOST STEP!", "#ffaa00"); en.x = st.player.x + 200; en.attackCooldown = en.maxCooldown; continue;
+                        spawnFloatingText(st.player.x, st.player.y - 50, `PRESS [${keyName('ghost')}] TO GHOST STEP!`, "#ffaa00"); en.x = st.player.x + 200; en.attackCooldown = en.maxCooldown; continue;
                     }
                     
                     // NOTE: bosses no longer reach this branch at all (see the
                     // `if (en.isBoss) continue;` above) — their move selection lives
                     // exclusively in bosses.js now. This used to duplicate that logic
                     // here too, ticking every boss's attackCooldown twice per frame.
-                    if (en.type === 'bruiser') { en.currentMove = 'bash'; en.attackCooldown = en.maxCooldown; } 
-                    else { en.attackCooldown = en.maxCooldown; }
+                    endAttack(en);
                 }
             }
         }
@@ -300,6 +338,8 @@ export function updateEnemies() {
                 if (!en.tutorialType) addScore(killScore(en.type), en.x + en.w / 2, en.y - 130);
             }
             if (en.tutorialType) st.tutorialDelay = 60; 
+            // v17 KO SHATTER: the body breaks into neon shards that stream into an orb.
+            createKoShatter(en);
             st.enemies.splice(i, 1);
 
         } else if (en.x < -100) { st.enemies.splice(i, 1); }

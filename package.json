@@ -1,11 +1,11 @@
 {
   "name": "neon-strike-instinct",
-  "version": "16.0.0",
+  "version": "17.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "./rebuild.sh",
-    "test": "node tests/harness.mjs && node tests/v16.mjs",
+    "test": "node tests/harness.mjs && node tests/v16.mjs && node tests/v17.mjs",
     "smoke": "node tests/smoke_browser.mjs",
     "smoke:http": "node tests/smoke_browser.mjs http"
   },

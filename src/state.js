@@ -112,7 +112,7 @@ export const gameState = {
     statFinishersClean: 0,
 
     tutorialEnabled: true,
-    seenTutorials: { shield: false, slip: false, guard: false, instinct: false, counter: false, ghost_step: false, bruiser_id: false, assassin_id: false, footwork_tip: false },
+    seenTutorials: { shield: false, slip: false, guard: false, instinct: false, counter: false, ghost_step: false, bruiser_id: false, assassin_id: false, string_id: false, footwork_tip: false },
     tutorialGrace: 0,
     tutorialDelay: 0,
 
@@ -140,7 +140,7 @@ export const gameState = {
     keys: {},
     lastKeys: {},
     lastGamepadState: { buttons: [], axes: [] },
-    pad: { up: false, down: false, left: false, guard: false, jab: false, cross: false, hook: false, instinct: false, pause: false },
+    pad: { up: false, down: false, ghost: false, leftHeld: false, rightHeld: false, guard: false, jab: false, cross: false, crossHeld: false, hook: false, instinct: false, pause: false },
 
     audioCtx: null,
     audioEnabled: false,

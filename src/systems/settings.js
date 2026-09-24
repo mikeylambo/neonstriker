@@ -10,6 +10,54 @@
 const SETTINGS_KEY = 'neon_strike_settings_v1';
 const PROFILE_KEY = 'neon_strike_profile_v1';
 
+// v17 REMAPPABLE CONTROLS. Ghost Step has its own button (was tap-LEFT, which
+// collided with held-LEFT footwork); LEFT/RIGHT are footwork only. Guard moves
+// off Shift to W so the left hand keeps A/S/D + Shift + W + Space.
+export const DEFAULT_BINDS = Object.freeze({
+    up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight',
+    jab: 'KeyA', cross: 'KeyS', hook: 'KeyD',
+    guard: 'KeyW', ghost: 'ShiftLeft', instinct: 'Space'
+});
+export const BIND_LABELS = {
+    up: 'Slip Up', down: 'Slip Down', left: 'Give Ground', right: 'Press Forward',
+    jab: 'Jab', cross: 'Cross', hook: 'Hook', guard: 'Guard', ghost: 'Ghost Step', instinct: 'Instinct'
+};
+// Keys that stay reserved for menus / system and can't be bound to an action.
+export const RESERVED_KEYS = ['Escape', 'KeyP', 'KeyM', 'KeyH', 'Enter', 'Tab', 'Digit1', 'Digit2', 'Digit3', 'KeyQ', 'KeyE', 'KeyR'];
+
+export function keyLabel(code) {
+    if (!code) return '—';
+    const named = { ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→', Space: 'SPACE', ShiftLeft: 'L-SHIFT', ShiftRight: 'R-SHIFT', ControlLeft: 'L-CTRL', ControlRight: 'R-CTRL', AltLeft: 'L-ALT', AltRight: 'R-ALT' };
+    if (named[code]) return named[code];
+    return code.replace(/^Key/, '').replace(/^Digit/, '').replace(/^Numpad/, 'NUM ').toUpperCase();
+}
+
+// PURE: keep a stored binds object valid (known actions only, unique keys, no
+// reserved keys); anything invalid falls back to its default.
+export function sanitizeBinds(raw) {
+    const actions = Object.keys(DEFAULT_BINDS);
+    const out = {};
+    const valid = c => typeof c === 'string' && c.length > 0 && c.length < 32 && !RESERVED_KEYS.includes(c);
+    // 1) keep every valid, non-duplicated custom bind
+    const used = new Set();
+    if (raw && typeof raw === 'object') {
+        for (const a of actions) if (valid(raw[a]) && !used.has(raw[a])) { out[a] = raw[a]; used.add(raw[a]); }
+    }
+    // 2) fill the rest with defaults; if a default key was taken by a custom bind,
+    //    inherit the default of the action that took it (i.e. the two swapped)
+    for (const a of actions) {
+        if (out[a]) continue;
+        let code = DEFAULT_BINDS[a];
+        for (let guard = 0; used.has(code) && guard < actions.length; guard++) {
+            const taker = actions.find(x => out[x] === code);
+            code = taker ? DEFAULT_BINDS[taker] : null;
+        }
+        if (!code || used.has(code)) code = actions.map(x => DEFAULT_BINDS[x]).find(c => !used.has(c));
+        out[a] = code; used.add(code);
+    }
+    return out;
+}
+
 export const SETTINGS_DEFAULTS = Object.freeze({
     masterVolume: 0.8,
     musicVolume: 0.55,
@@ -37,10 +85,11 @@ const clamp01 = (v, d) => {
 
 // PURE: coerce any stored/partial object into a valid settings object.
 export function sanitizeSettings(raw) {
-    const out = { ...SETTINGS_DEFAULTS };
+    const out = { ...SETTINGS_DEFAULTS, binds: { ...DEFAULT_BINDS } };
     if (!raw || typeof raw !== 'object') return out;
     for (const k of UNIT_KEYS) if (k in raw) out[k] = clamp01(raw[k], SETTINGS_DEFAULTS[k]);
     for (const k of BOOL_KEYS) if (k in raw) out[k] = raw[k] === true;
+    out.binds = sanitizeBinds(raw.binds);
     return out;
 }
 
@@ -49,8 +98,25 @@ const listeners = [];
 
 export function getSettings() { return current; }
 
+export function getBinds() { return current.binds || DEFAULT_BINDS; }
+export function keyName(action) { return keyLabel(getBinds()[action]); }
+
+// Bind `code` to `action`; whatever action held that key swaps to this action's
+// old key, so a rebind never leaves an action unbound.
+export function rebind(action, code) {
+    if (!(action in DEFAULT_BINDS) || RESERVED_KEYS.includes(code)) return false;
+    const binds = { ...getBinds() };
+    const prev = binds[action];
+    const other = Object.keys(binds).find(a => a !== action && binds[a] === code);
+    if (other) binds[other] = prev;
+    binds[action] = code;
+    setSetting('binds', binds);
+    return true;
+}
+export function resetBinds() { setSetting('binds', { ...DEFAULT_BINDS }); }
+
 export function setSetting(key, value) {
-    if (!(key in SETTINGS_DEFAULTS)) return current;
+    if (!(key in SETTINGS_DEFAULTS) && key !== 'binds') return current;
     current = sanitizeSettings({ ...current, [key]: value });
     safeSet(SETTINGS_KEY, current);
     applySettingsSideEffects();

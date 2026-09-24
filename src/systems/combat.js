@@ -7,6 +7,9 @@ import { random } from './rng.js';
 import { isBossOpen } from './boss_rules.js';
 import { gateBossDamage } from './finisher.js';
 import { addScore, hitScore } from './score.js';
+import { buildColor } from './colors.js';
+import { negativeReact } from './negative.js';
+import { keyName } from './settings.js';
 
 export function checkHit(type) {
     let isJab = type.startsWith('jab') || type === 'guard_jab';
@@ -16,6 +19,10 @@ export function checkHit(type) {
     let reach = isJab ? 120 : (type === 'cross' ? 140 * reachMult : 140);
     let hitSomething = false; 
     let buffActive = st.player.slipBuff > 0;
+    // v17 POWER R3: a fully loaded Cross (held past chargeFrames, fired on release).
+    const loaded = type === 'cross' && !!st.player.crossLoaded;
+    const spark = buildColor();
+    let ropeBounce = false, novaLanes = [];
     
     if (st.player.slipBuff > 0) st.player.slipBuff--; 
 
@@ -33,12 +40,12 @@ export function checkHit(type) {
             }
 
             if (en.tutorialType === 'slip') { spawnFloatingText(en.x, en.y - 80, "SLIP IT! (UP/DOWN)", "#ffaa00"); hitSomething = true; continue; }
-            if (en.tutorialType === 'guard') { spawnFloatingText(en.x, en.y - 80, "WAIT & HOLD SHIFT!", "#ffaa00"); hitSomething = true; continue; }
-            if (en.tutorialType === 'ghost_step') { spawnFloatingText(en.x, en.y - 80, "USE GHOST STEP [LEFT]!", "#ffaa00"); hitSomething = true; continue; }
+            if (en.tutorialType === 'guard') { spawnFloatingText(en.x, en.y - 80, `WAIT & HOLD [${keyName('guard')}]!`, "#ffaa00"); hitSomething = true; continue; }
+            if (en.tutorialType === 'ghost_step') { spawnFloatingText(en.x, en.y - 80, `GHOST STEP [${keyName('ghost')}]!`, "#ffaa00"); hitSomething = true; continue; }
             
             if (en.tutorialType === 'shield') {
                 if (type === 'cross') { en.hp = 0; spawnFloatingText(st.player.x + jX(), st.player.y - 50 + jY(), "ARMOR BROKEN!", "#00ffff"); } 
-                else { spawnFloatingText(st.player.x + jX(), st.player.y - 50 + jY(), "USE CROSS [S] TO BREAK!", "#ffaa00"); en.x = st.player.x + 200; en.attackCooldown = en.maxCooldown; playSound('bounce'); continue; }
+                else { spawnFloatingText(st.player.x + jX(), st.player.y - 50 + jY(), `USE CROSS [${keyName('cross')}] TO BREAK!`, "#ffaa00"); en.x = st.player.x + 200; en.attackCooldown = en.maxCooldown; playSound('bounce'); continue; }
             } else if (en.type === 'shield' && type !== 'cross') {
                 createImpact(en.x, en.y - 80, '#ffaa00'); en.x += 5; st.shake = 2; playSound('bounce'); continue; 
             }
@@ -69,6 +76,24 @@ export function checkHit(type) {
             }
 
             if (buffActive) dmg *= 2; 
+            if (loaded) dmg = Math.round(dmg * 1.3);
+
+            // v17 ROPES: an enemy pinned on its ropes can't ride a counter out —
+            // a Counter-Charged or Loaded blow ROPE-BOUNCES it for bonus damage.
+            if ((en.onRopes || 0) > 0 && (buffActive || loaded)) {
+                dmg = Math.round(dmg * CONSTANTS.ROPES.bounceDmgMult);
+                ropeBounce = true; en.ropeBounce = 8;
+                spawnFloatingText(en.x + jX(), en.y - 130 + jY(), "ROPE BOUNCE!", spark);
+            }
+
+            // v17 EVOLVED FUSION (Shatter Nova): a Counter-Charged Cross tears a chunk
+            // off a boss (still gated by the stagger thresholds), or shatters the lane.
+            if (st.progressionMods.shatterNova && buffActive && type === 'cross') {
+                if (en.isBoss) dmg += Math.round(en.maxHp * 0.08);
+                else novaLanes.push(en.lane);
+                spawnFloatingText(en.x + jX(), en.y - 150 + jY(), "SHATTER NOVA", CONSTANTS.FUSION_COLORS.evo_shatter_nova);
+            }
+            if (loaded) spawnFloatingText(en.x + jX(), en.y - 110 + jY(), "LOADED!", spark);
             
             if (en.type === 'shield' && type === 'cross') { en.type = 'grunt'; if (!en.isBoss) en.color = '#ff0055'; dmg *= 1.5; } // a boss keeps its own colour when its guard breaks
 
@@ -85,6 +110,10 @@ export function checkHit(type) {
                     playSound('punish');
                 }
             }
+
+            // v17 NEGATIVE: punch it while it isn't OPEN and it may slip you with an
+            // afterimage, or read your Counter and answer it (systems/negative.js).
+            if (en.controller === 'negative' && !bossOpen && negativeReact(en, buffActive)) return false;
 
             let trueReadActive = false;
             if (en.isBoss && (en.exposedTimer || 0) > 0 && (type === 'cross' || type === 'hook' || buffActive)) {
@@ -184,7 +213,8 @@ export function checkHit(type) {
             if (trueReadActive) powerFactor *= 1.5;
             
             let baseKB = 0;
-            if (buffActive || trueReadActive) { baseKB = 45; } 
+            if (loaded) { baseKB = CONSTANTS.VERBS.loadedCross.knockback; }
+            else if (buffActive || trueReadActive) { baseKB = 45; } 
             else {
                 if (type === 'jab1' || type === 'jab2') { baseKB = 1; } 
                 else if (type === 'jab3') { baseKB = 12; } 
@@ -215,6 +245,7 @@ export function checkHit(type) {
                 else if (type === 'cross') stunAmount = 40; 
                 
                 if (buffActive) stunAmount += 15;
+                if (loaded) stunAmount += CONSTANTS.VERBS.loadedCross.stun;
                 if (type === 'cross' && (en.type === 'shield' || en.type === 'bruiser' || (en.isBoss && en.name === 'NEON ENFORCER' && en.phase === 2))) {
                     stunAmount += st.progressionMods.crossArmorStunBonus;
                 }
@@ -226,7 +257,7 @@ export function checkHit(type) {
                 }
 
                 if (en.name === 'NEON ENFORCER' && en.phase === 2) {
-                    if (buffActive || trueReadActive) {
+                    if (buffActive || trueReadActive || loaded) {
                         canStun = true; stunAmount += 10; st.statBossBreaks++; spawnFloatingText(en.x + jX(), en.y - 100 + jY(), "ARMOR SHATTERED!", "#00ffff");
                     } else if (st.isInstinct && type === 'cross') { canStun = true; stunAmount = 6; spawnFloatingText(en.x + jX(), en.y - 100 + jY(), "PARTIAL BREAK", "#ff00ff");
                     } else { canStun = false; }
@@ -246,10 +277,11 @@ export function checkHit(type) {
             }
 
             hitSomething = true; 
-            if (buffActive && en.tutorialType !== 'counter') { createShatter(en.x, en.y - 60, '#ffffff'); } 
-            else if (en.tutorialType !== 'counter') { createImpact(en.x, en.y - 60, st.isInstinct ? '#ff00ff' : null); }
+            // v17 colour identity: hit sparks wear the build colour.
+            if ((buffActive || loaded) && en.tutorialType !== 'counter') { createShatter(en.x, en.y - 60, spark); } 
+            else if (en.tutorialType !== 'counter') { createImpact(en.x, en.y - 60, spark); }
 
-            if (st.orbCounts.power >= 3 && en.hp <= 0 && (type === 'cross' || buffActive)) { triggerShockwave(en.x, en.y - 60, '#ff0055'); }
+            if (st.orbCounts.power >= 4 && en.hp <= 0 && (type === 'cross' || buffActive)) { triggerShockwave(en.x, en.y - 60, spark); }
         }
     }
 
@@ -273,11 +305,14 @@ export function checkHit(type) {
 
         let stopMult = 1 + (st.isInstinct ? 0.5 : 0) + (buffActive ? 0.5 : 0);
         st.hitstop = isJab ? Math.floor(2 * stopMult) : (type === 'cross' ? Math.floor(5 * stopMult) : Math.floor(3 * stopMult));
+        if (loaded) st.hitstop += 6;
+        if (ropeBounce) { st.hitstop += CONSTANTS.ROPES.bounceHitstop; playSound('rope_bounce'); }
         st.shake = (type === 'cross' ? 8 : (isJab ? 2 : 4)) * stopMult;
         if (type === 'cross' || buffActive) doFlash(buffActive ? 0.6 : 0.2);
         
-        if (type === 'cross' && st.orbCounts.power >= 2) { createImpact(st.player.x + reach, st.player.y - 40, '#ff0055'); st.shake += 5; }
-        if (st.orbCounts.speed >= 3 && (isJab || type === 'hook')) { st.player.moveCancelReady = true; }
+        if (type === 'cross' && st.orbCounts.power >= 2) { createImpact(st.player.x + reach, st.player.y - 40, spark); st.shake += 5; }
+        if (novaLanes.length) st.enemies.forEach(o => { if (!o.isBoss && novaLanes.includes(o.lane) && !o.tutorialType) { o.hp = 0; createShatter(o.x, o.y - 60, CONSTANTS.FUSION_COLORS.evo_shatter_nova); } });
+        if (st.orbCounts.speed >= 4 && (isJab || type === 'hook')) { st.player.moveCancelReady = true; }
 
         if (!buffActive) playSound('hit'); 
     }

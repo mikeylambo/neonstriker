@@ -124,7 +124,8 @@ if (startBtn) {
     win.engineSetPauseTab('loadout');
     ok('v16: loadout renders', d.getElementById('loadout-body').innerHTML.includes('Evolution Trees'));
     win.engineSetPauseTab('settings');
-    ok('v16: settings render 7 rows', d.querySelectorAll('#settings-body .set-row').length === 7);
+    ok('v17: settings render 7 comfort rows + 10 control binds + reset', d.querySelectorAll('#settings-body .set-row').length === 18 && d.querySelectorAll('#settings-body .bind-row').length === 10);
+    ok('v17: controls list Ghost Step on L-SHIFT and Guard on W', /GHOST STEP[\s\S]*L-SHIFT/.test(d.getElementById('settings-body').textContent) || (d.getElementById('settings-body').textContent.includes('L-SHIFT') && d.getElementById('settings-body').textContent.includes('W')));
     win.engineSetSetting('reducedMotion', true);
     ok('v16: reduced motion toggles the body class', d.body.classList.contains('reduced-motion'));
     if (storageWorks) {
@@ -136,6 +137,8 @@ if (startBtn) {
     ok('v16: Escape resumes', d.getElementById('pause-screen').style.display === 'none');
     ok('v16: survives 300 more frames after pause round-trip', frame(300));
     ok('v16: no runtime errors', errors.length === 0, errors.slice(0, 3).join(' | '));
+    ok('v17: controls bar is built from the binds', /L-SHIFT/.test(d.getElementById('instructions').textContent));
+    ok('v17: two HUD clusters present', !!d.querySelector('.hud-left') && !!d.querySelector('.hud-right') && !!d.getElementById('hp-bar'));
 }
 
 if (!storageWorks) console.log('  (persistence assertions skipped — jsdom blocks localStorage on file://; covered by the http pass)');

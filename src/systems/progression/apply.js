@@ -14,21 +14,11 @@ function applyEffect(st, effect) {
         case "incOrb": {
             let currentCount = st.orbCounts[effect.tree] !== undefined ? st.orbCounts[effect.tree] : 0;
             let addAmount = effect.amount !== undefined ? effect.amount : 1;
-            st.orbCounts[effect.tree] = currentCount + addAmount;
-            
+            st.orbCounts[effect.tree] = Math.min(CONSTANTS.MAX_RANK, currentCount + addAmount);
+            if (!st.rankOrder) st.rankOrder = [];
+            st.rankOrder.push(effect.tree); // "most recently ranked" tie-breaks colour + teases
             let el = document.getElementById(`orb-${effect.tree}`);
             if (el) el.innerText = st.orbCounts[effect.tree];
-            
-            let newLvl = st.orbCounts[effect.tree];
-            if (newLvl === 2) {
-                if (effect.tree === 'speed') showToast("SPEED LVL 2: Missing Jabs won't break combo!");
-                if (effect.tree === 'power') showToast("POWER LVL 2: Cross attack gains massive reach!");
-                if (effect.tree === 'technique') showToast("TECH LVL 2: Perfect Slips charge 2 Counter hits!");
-            } else if (newLvl === 3) {
-                if (effect.tree === 'speed') showToast("SPEED MAX: Slip Cancel active!");
-                if (effect.tree === 'power') showToast("POWER MAX: Bowling Collateral active!");
-                if (effect.tree === 'technique') showToast("TECH MAX: True Read active!");
-            }
             break;
         }
         case "mulStat": {
@@ -160,6 +150,14 @@ export function openingSubtitle() {
     return CONSTANTS.STAGE_TAGLINES[1];
 }
 
+// v17 ROUND FRAMING: "ROUND N — VENUE" billing card data for a stage.
+export function roundCard(stage, tagline) {
+    const arc = Math.min(CONSTANTS.getArcIndex(stage), 5);
+    const law = CONSTANTS.ARC_LAWS[arc] || CONSTANTS.ARC_LAWS[5];
+    const data = CONSTANTS.ARC_STAGE_TABLES[arc]?.[CONSTANTS.getLevelInArc(stage)] || { stageName: 'Unknown Depths' };
+    return { round: stage, venue: data.stageName, tagline: tagline || '', kicker: `${law.shortName} · ${law.name.toUpperCase()}`, color: ARC_COLORS[arc] || '#22d3ee' };
+}
+
 export function advanceStage() {
     const prevStage = st.currentStage;
     // Stage-clear bonus for the fight just won (wager applies, combo doesn't).
@@ -246,6 +244,8 @@ export function advanceStage() {
     // A new arc gets its own two-beat chapter card first (arc number, then arc
     // name + its theme line), colored to that arc, before the stage card.
     const isNewArc = CONSTANTS.locateStage(st.currentStage).ordinal === 1 && st.currentStage > 1;
+    // v17 TEN-COUNT: the once-per-arc knockdown refreshes with each new arc.
+    if (isNewArc) st.knockdownsThisArc = 0;
     const chapterCardSteps = isNewArc ? [
         { type: 'tint', color: 'rgba(0, 0, 0, 0.82)', duration: 20 },
         { type: 'text', title: `ARC ${safeArcIndex}`, subtitle: law.name.toUpperCase(), duration: 85 },
@@ -260,7 +260,9 @@ export function advanceStage() {
         { type: 'call', fn: () => { playSound('sweep'); refreshStageHud(); } },
         { type: 'sweep', duration: rm ? 24 : 54 },
         ...chapterCardSteps,
-        { type: 'text', title: titleText, subtitle: subtitleText, duration: 120 },
+        // v17 ROUND FRAMING: every fight opens on a bell + billing card; a boss
+        // stage instead gets its title-fight poster when the champion walks out.
+        ...(isBoss ? [] : [{ type: 'billing', duration: 120, card: roundCard(st.currentStage, subtitleText) }]),
         { type: 'wager' },
         ...hotLaneCard,
         { type: 'walkin', duration: rm ? 24 : 44 },

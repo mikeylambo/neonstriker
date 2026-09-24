@@ -4,10 +4,10 @@ import { updateHUD, HUD } from './ui/ui.js';
 import { initAudio, playSound, startMusic, stopMusic, duckMusic, refreshAudioLevels, setMusicIntensity } from './vfx_audio/audio.js';
 import { updateParticlesAndTrails, spawnFloatingText, showToast, triggerShockwave, doFlash, createImpact, createVacuum, createShatter } from './vfx_audio/effects.js';
 import { SequenceManager } from './systems/sequences.js';
-import { applyUpgrade, advanceStage, refreshStageHud, openingSubtitle } from './systems/progression/apply.js';
+import { applyUpgrade, advanceStage, refreshStageHud, openingSubtitle, roundCard } from './systems/progression/apply.js';
 
 // FIXED: Corrected path and filename to match the architectural rename (draft.js)
-import { buildDraft, buildFusionTease } from './systems/progression/draft.js';
+import { buildDraft, buildDraftTease } from './systems/progression/draft.js';
 
 import { UPGRADE_POOL } from './data/upgrades.js';
 import { dismissTutorial, triggerTutorial, spawnTutorialEnemy } from './systems/tutorial.js';
@@ -21,10 +21,11 @@ import { commitRunRecord, loadLeaderboard, loadMeta, selectSkin, selectedStriker
 import { submitScore, fetchTopAllTime, fetchTopDaily, onlineEnabled } from './systems/online.js';
 import { initAtmosphere, updateAtmosphere } from './render/atmosphere.js';
 import { draw } from './render/draw.js';
-import { getSettings, setSetting, hitStopEnabled, applySettingsSideEffects } from './systems/settings.js';
+import { getSettings, setSetting, hitStopEnabled, applySettingsSideEffects, keyName, getBinds, keyLabel, rebind, resetBinds, BIND_LABELS, DEFAULT_BINDS } from './systems/settings.js';
 import { rankForRun, pbDeltaText, comboMultiplier } from './systems/score.js';
 import { acceptWager, declineWager } from './systems/wagers.js';
 import { updateFinisher } from './systems/finisher.js';
+import { startKnockdown, updateKnockdown, canBeKnockedDown } from './systems/knockdown.js';
 import { playUpgradeVignette, updateVignette, skipVignette, upgradeRarity, upgradeColor } from './systems/vignette.js';
 
 export const $ = function(id) { return document.getElementById(id); };
@@ -34,7 +35,12 @@ export const ctx = canvas ? canvas.getContext('2d', { alpha: false }) : null;
 // ==========================================
 // DRAFT SCREEN (v16 rarity visuals + Arc 1 fusion tease)
 // ==========================================
-const RARITY_BADGE = { orb: 'EVOLUTION', mastery: '◆ MASTERY', apex: '★ APEX MASTERY', fusion: '✦ FUSION ✦', overclock: 'OVERCLOCK' };
+const RARITY_BADGE = { orb: 'STAT', verb: '⟡ NEW VERB', mastery: '◆ MASTERY', apex: '★ APEX', fusion: '✦ FUSION ✦', evolved: '✦ EVOLVED FUSION ✦', overclock: 'OVERCLOCK' };
+function cardBadge(option, rarity) {
+    const tree = CONSTANTS.TREES[option.tree];
+    if (option.kind === 'rank') return `${tree ? tree.name : ''} · RANK ${option.rank}${rarity === 'orb' ? '' : ' · ' + RARITY_BADGE[rarity]}`;
+    return RARITY_BADGE[rarity] + (tree ? ` · ${tree.name}` : '');
+}
 
 function escapeAttr(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
@@ -54,7 +60,7 @@ export function triggerUpgradeDraft() {
     }
 
     let draftOptions = buildDraft(st, UPGRADE_POOL);
-    const tease = buildFusionTease(st, UPGRADE_POOL, CONSTANTS.getArcIndex(st.currentStage));
+    const tease = buildDraftTease(st, UPGRADE_POOL, CONSTANTS.getArcIndex(st.currentStage));
     const container = document.getElementById('draft-container');
 
     if (container) {
@@ -64,11 +70,11 @@ export function triggerUpgradeDraft() {
             const rarity = upgradeRarity(option);
             const color = upgradeColor(option);
             const iconText = `[${index + 1}] / [${PAD_LABEL[index] || '?'}]`;
-            const treeTag = option.tree && option.tree !== 'general' ? ` · ${option.tree.toUpperCase()}` : '';
+
             const btnHTML = `
-                <div class="draft-card card-${rarity}" style="--card-color:${color}; animation-delay:${index * 90 + (rarity === 'fusion' || rarity === 'apex' ? 220 : 0)}ms" onclick="window.engineApplyUpgradeState('${escapeAttr(option.id)}')">
+                <div class="draft-card card-${rarity}" style="--card-color:${color}; animation-delay:${index * 90 + (rarity === 'fusion' || rarity === 'evolved' || rarity === 'apex' ? 220 : 0)}ms" onclick="window.engineApplyUpgradeState('${escapeAttr(option.id)}')">
                     <div class="card-inner">
-                        <div class="card-badge">${RARITY_BADGE[rarity]}${treeTag}</div>
+                        <div class="card-badge">${cardBadge(option, rarity)}</div>
                         <div class="card-name">${option.name}</div>
                         <div class="card-desc">${option.desc}</div>
                         <div class="card-key">${iconText}</div>
@@ -78,21 +84,24 @@ export function triggerUpgradeDraft() {
             container.insertAdjacentHTML('beforeend', btnHTML);
         });
         if (tease) {
+            const tr = upgradeRarity(tease), tc = upgradeColor(tease);
+            const tBadge = tease.kind === 'rank' ? `🔒 ${cardBadge(tease, tr)}` : '🔒 FUSION · LOCKED';
             container.insertAdjacentHTML('beforeend', `
-                <div class="draft-card card-fusion card-locked" style="--card-color:#ff0055; animation-delay:${draftOptions.length * 90 + 260}ms" title="Locked — build toward it">
+                <div class="draft-card card-${tr} card-locked" style="--card-color:${tc}; animation-delay:${draftOptions.length * 90 + 260}ms" title="Locked — build toward it">
                     <div class="card-inner">
-                        <div class="card-badge">🔒 FUSION · LOCKED</div>
+                        <div class="card-badge">${tBadge}</div>
                         <div class="card-name">${tease.name}</div>
                         <div class="card-desc">${tease.desc}</div>
-                        <div class="card-key card-req">REQUIRES ${tease.reqText}</div>
+                        <div class="card-key card-req">${tease.kind === 'rank' ? '' : 'REQUIRES '}${tease.reqText}</div>
                     </div>
                 </div>`);
         }
     }
 
     // Rare-card reveal stings, timed to the card's reveal animation.
-    const rarest = draftOptions.map(upgradeRarity).find(r => r === 'fusion' || r === 'apex') || draftOptions.map(upgradeRarity).find(r => r === 'mastery');
-    if (rarest) setTimeout(() => playSound(rarest === 'mastery' ? 'sting_mastery' : 'sting_fusion'), rarest === 'mastery' ? 120 : 300);
+    const rs = draftOptions.map(upgradeRarity);
+    const rarest = rs.find(r => r === 'evolved' || r === 'fusion' || r === 'apex') || rs.find(r => r === 'verb' || r === 'mastery');
+    if (rarest) setTimeout(() => playSound(rarest === 'verb' || rarest === 'mastery' ? 'sting_mastery' : 'sting_fusion'), rarest === 'verb' || rarest === 'mastery' ? 120 : 300);
 
     if (HUD.screens.upgrade) HUD.screens.upgrade.style.display = 'flex';
 }
@@ -112,7 +121,7 @@ export function resetGame() {
     st.hazardsThisStage = 0; st.surpriseBudget = 0;
     st.spawnTotal = st.tutorialEnabled ? 0 : 5; st.stageClearing = false; st.bossActive = false;
     st.bossIntroTimer = 0; st.tutorialDelay = 0; st.tutorialGrace = 0; st.instinctPauseTimer = 0;
-    st.seenTutorials = { shield: false, slip: false, guard: false, instinct: false, counter: false, ghost_step: false, bruiser_id: false, assassin_id: false, footwork_tip: false };
+    st.seenTutorials = { shield: false, slip: false, guard: false, instinct: false, counter: false, ghost_step: false, bruiser_id: false, assassin_id: false, string_id: false, footwork_tip: false };
     st.tutorialSlipFails = 0;
     st.orbCounts = { speed: 0, power: 0, technique: 0 }; st.stats = { speedMult: 1, powerMult: 1, techMult: 1 };
 
@@ -135,6 +144,8 @@ export function resetGame() {
     st.score = 0; st.displayScore = 0; st.scorePops = [];
     st.wagerMult = 1; st.wagerOffer = null; st.currentAffix = CONSTANTS.AFFIXES[0];
     st.finisher = null; st.finisherZoom = 1; st.vignette = null;
+    st.knockdown = null; st.knockdownsThisArc = 0; st.statKnockdowns = 0; st.zoneTimer = 0; st.bossPoster = null; st.enemyEchoes = [];
+    st.afterimages = []; st.koFx = []; st.rankOrder = []; st.orbPulse = 0;
     st.paletteFrom = 1; st.paletteTo = 1; st.paletteT = 1; st.lightSweep = -1;
     setMusicIntensity(0);
 
@@ -168,7 +179,7 @@ function startGame(daily = false, opts = {}) {
     // theme line shows here once per save, then the stage tagline takes over.
     SequenceManager.playDynamic([
         { type: 'walkin', duration: 50 },
-        { type: 'text', title: 'ARC 1 — SHATTERED CATHEDRAL', subtitle: openingSubtitle(), duration: 130 },
+        { type: 'billing', duration: 130, card: roundCard(1, openingSubtitle()) },
         { type: 'resume' }
     ]);
 }
@@ -211,6 +222,21 @@ const SETTINGS_ROWS = [
 ];
 let pauseTab = 'resume';
 let settingsFocus = 0;
+// v17 REMAPPABLE CONTROLS: rows after SETTINGS_ROWS are one per action, then a reset.
+const BIND_ACTIONS = Object.keys(DEFAULT_BINDS);
+let rebindingAction = null;
+const settingsRowCount = () => SETTINGS_ROWS.length + BIND_ACTIONS.length + 1;
+
+// Bottom controls bar, built from the live binds. Hidden once you've finished a
+// run (the manual and Pause -> Settings -> Controls still list everything).
+export function renderInstructions() {
+    const el = document.getElementById('instructions');
+    if (!el) return;
+    const K = getBinds(), L = c => keyLabel(c);
+    el.innerHTML = `<span class="text-cyan-400">[${L(K.up)}/${L(K.down)}]</span> SLIP &nbsp;|&nbsp; <span class="text-cyan-400">[${L(K.ghost)}]</span> GHOST STEP &nbsp;|&nbsp; <span class="text-cyan-400">[${L(K.left)}/${L(K.right)}]</span> FOOTWORK &nbsp;|&nbsp; <span class="text-pink-500">[${L(K.jab)}]</span> JAB &nbsp;|&nbsp; <span class="text-pink-500">[${L(K.cross)}]</span> CROSS &nbsp;|&nbsp; <span class="text-pink-500">[${L(K.hook)}]</span> HOOK &nbsp;|&nbsp; <span class="text-gray-400">[${L(K.guard)}]</span> GUARD &nbsp;|&nbsp; <span class="text-yellow-400">[${L(K.instinct)}]</span> INSTINCT<br><span class="text-gray-500">PAD: X JAB · Y CROSS · B HOOK · LB GHOST · RB GUARD · A INSTINCT</span>`;
+    let done = 0; try { done = loadMeta().totalRuns; } catch (e) {}
+    el.classList.toggle('hidden', done >= 1);
+}
 
 function openPause() {
     if (st.screen !== 'playing') return;
@@ -244,12 +270,7 @@ function cyclePauseTab(dir) {
     setPauseTab(PAUSE_TABS[(i + dir + PAUSE_TABS.length) % PAUSE_TABS.length]);
 }
 
-const ORB_PERKS = {
-    speed: ['Faster strikes', "Missed Jabs don't snap Combo", 'Slip Cancel'],
-    power: ['Heavier knockback', 'Cross gains reach', 'Bowling Collateral'],
-    technique: ['More Instinct from reads', 'Perfect Slips charge 2 Counters', 'True Read on bosses']
-};
-const TREE_COLOR = { speed: '#22d3ee', power: '#ec4899', technique: '#facc15' };
+const TREE_COLOR = { speed: CONSTANTS.TREES.speed.color, power: CONSTANTS.TREES.power.color, technique: CONSTANTS.TREES.technique.color };
 const OC_NAMES = { vitality: 'oc_vital_surge', nerves: 'oc_quick_nerves', focus: 'oc_sharp_eye', instinct: 'oc_calm_engine', clinch: 'oc_clinch_breaker', finish: 'oc_clean_finish' };
 
 function findUpgrade(id) {
@@ -259,12 +280,14 @@ function findUpgrade(id) {
 export function renderLoadout() {
     const el = document.getElementById('loadout-body');
     if (!el) return;
-    const orbRows = ['speed', 'power', 'technique'].map(tree => {
+    const cap = CONSTANTS.rankCap(CONSTANTS.getArcIndex(st.currentStage));
+    const orbRows = CONSTANTS.TREE_ORDER.map(tree => {
         const lvl = st.orbCounts[tree] || 0;
-        const perks = ORB_PERKS[tree].map((p, i) => `<span class="perk ${i < lvl ? 'on' : ''}">${p}</span>`).join('');
-        return `<div class="lo-orb"><span class="lo-orb-name" style="color:${TREE_COLOR[tree]}">${tree.toUpperCase()} ${lvl}/3</span>${perks}</div>`;
+        const ranks = UPGRADE_POOL.orbs.filter(o => o.tree === tree).sort((a, b) => a.rank - b.rank);
+        const perks = ranks.map(r => `<span class="lo-rank ${r.rank <= lvl ? 'on' : ''} ${r.rank > cap ? 'capped' : ''}" title="${escapeAttr(r.desc)}">${r.rank}. ${r.name}${r.rank > cap ? ` · ARC ${CONSTANTS.arcForRank(r.rank)}` : ''}</span>`).join('');
+        return `<div class="lo-orb" style="--tree-color:${TREE_COLOR[tree]}"><span class="lo-orb-name" style="color:${TREE_COLOR[tree]}">${CONSTANTS.TREES[tree].name} ${lvl}/5</span>${perks}</div>`;
     }).join('');
-    const owned = st.acquiredUpgradeIds.map(findUpgrade).filter(Boolean);
+    const owned = st.acquiredUpgradeIds.map(findUpgrade).filter(u => u && u.kind !== 'rank');
     const cards = owned.map(u => {
         const r = upgradeRarity(u);
         return `<div class="lo-card lo-${r}" style="--card-color:${upgradeColor(u)}"><div class="lo-badge">${RARITY_BADGE[r]}</div><div class="lo-name">${u.name}</div><div class="lo-desc">${u.desc}</div></div>`;
@@ -294,7 +317,13 @@ export function renderSettings() {
         }
         const on = s[row.key] === true;
         return `<div class="set-row${focus}" data-i="${i}"><label>${row.label}</label><button class="set-toggle ${on ? 'on' : ''}" onclick="window.engineSetSetting('${row.key}', ${!on})">${on ? 'ON' : 'OFF'}</button></div>`;
-    }).join('') + '<div class="set-hint">[↑/↓] select · [←/→] adjust · [ENTER] toggle · saved automatically</div>';
+    }).join('') + '<h4 class="lo-h" style="margin-top:14px">Controls</h4>' + BIND_ACTIONS.map((a, j) => {
+        const i = SETTINGS_ROWS.length + j;
+        const focus = i === settingsFocus ? ' focused' : '';
+        const waiting = rebindingAction === a;
+        return `<div class="set-row bind-row${focus}" data-i="${i}"><label>${BIND_LABELS[a]}</label><button class="bind-key ${waiting ? 'waiting' : ''}" onclick="window.engineStartRebind('${a}')">${waiting ? 'PRESS A KEY…' : keyLabel(getBinds()[a])}</button></div>`;
+    }).join('') + `<div class="set-row${settingsFocus === settingsRowCount() - 1 ? ' focused' : ''}" data-i="${settingsRowCount() - 1}"><label>Reset Controls</label><button class="set-toggle" onclick="window.engineResetBinds()">RESET</button></div>` +
+    '<div class="set-hint">[↑/↓] select · [←/→] adjust · [ENTER] toggle / rebind · [ESC] cancels a rebind · saved automatically · gamepad layout is fixed</div>';
 }
 
 // `fromSlider` avoids re-rendering (and dropping focus from) a range being dragged.
@@ -308,7 +337,15 @@ window.engineSetSetting = function(key, value, fromSlider = false) {
     } else renderSettings();
 };
 
+window.engineStartRebind = function (action) { rebindingAction = action; renderSettings(); };
+window.engineResetBinds = function () { resetBinds(); rebindingAction = null; renderSettings(); renderInstructions(); };
+
 function adjustFocusedSetting(dir) {
+    if (settingsFocus >= SETTINGS_ROWS.length) {
+        const j = settingsFocus - SETTINGS_ROWS.length;
+        if (j < BIND_ACTIONS.length) window.engineStartRebind(BIND_ACTIONS[j]); else window.engineResetBinds();
+        return;
+    }
     const row = SETTINGS_ROWS[settingsFocus];
     const s = getSettings();
     if (row.type === 'range') setSetting(row.key, Math.round((s[row.key] + dir * 0.05) * 100) / 100);
@@ -321,11 +358,13 @@ function pauseKey(code) {
     if (code === 'KeyQ') { cyclePauseTab(-1); return; }
     if (code === 'KeyE' || code === 'Tab') { cyclePauseTab(1); return; }
     if (pauseTab === 'settings') {
-        if (code === 'ArrowUp') { settingsFocus = (settingsFocus - 1 + SETTINGS_ROWS.length) % SETTINGS_ROWS.length; renderSettings(); }
-        else if (code === 'ArrowDown') { settingsFocus = (settingsFocus + 1) % SETTINGS_ROWS.length; renderSettings(); }
-        else if (code === 'ArrowLeft') adjustFocusedSetting(-1);
-        else if (code === 'ArrowRight') adjustFocusedSetting(1);
-        else if (code === 'Enter' || code === 'Space') { if (SETTINGS_ROWS[settingsFocus].type === 'toggle') adjustFocusedSetting(1); }
+        const n = settingsRowCount();
+        const onRange = settingsFocus < SETTINGS_ROWS.length && SETTINGS_ROWS[settingsFocus].type === 'range';
+        if (code === 'ArrowUp') { settingsFocus = (settingsFocus - 1 + n) % n; renderSettings(); }
+        else if (code === 'ArrowDown') { settingsFocus = (settingsFocus + 1) % n; renderSettings(); }
+        else if (code === 'ArrowLeft' && onRange) adjustFocusedSetting(-1);
+        else if (code === 'ArrowRight' && onRange) adjustFocusedSetting(1);
+        else if (code === 'Enter' || code === 'Space') { if (!onRange) adjustFocusedSetting(1); }
         return;
     }
     if (pauseTab === 'resume' && (code === 'Enter' || code === 'Space')) closePause();
@@ -370,7 +409,11 @@ function pollGamepad() {
         let p = (btn) => gp.buttons[btn] && gp.buttons[btn].pressed; let jp = (btn) => p(btn) && !st.lastGamepadState.buttons[btn];
         let aU = gp.axes[1] < -0.5 || gp.axes[3] < -0.5, aD = gp.axes[1] > 0.5 || gp.axes[3] > 0.5;
         st.pad.up = jp(12) || (aU && !st.lastGamepadState.axes[0]); st.pad.down = jp(13) || (aD && !st.lastGamepadState.axes[1]);
-        st.pad.left = jp(14) || jp(6); st.pad.guard = p(4) || p(5) || p(7); st.pad.jab = jp(2); st.pad.cross = jp(3); st.pad.hook = jp(1); st.pad.instinct = jp(0); st.pad.pause = jp(9) || jp(16);
+        // v17: Ghost Step = LB / L2 (its own button); Guard = RB / R2; D-pad or
+        // left stick LEFT/RIGHT held = footwork only.
+        st.pad.ghost = jp(4) || jp(6); st.pad.guard = p(5) || p(7);
+        st.pad.leftHeld = p(14) || gp.axes[0] < -0.5; st.pad.rightHeld = p(15) || gp.axes[0] > 0.5;
+        st.pad.jab = jp(2); st.pad.cross = jp(3); st.pad.crossHeld = p(3); st.pad.hook = jp(1); st.pad.instinct = jp(0); st.pad.pause = jp(9) || jp(16);
         const anyPress = gp.buttons.some((b, i) => jp(i));
 
         if (st.screen === 'start') { if (st.pad.instinct || st.pad.pause || st.pad.jab) startGame(); }
@@ -411,6 +454,13 @@ window.startGame = window.engineStartGame = startGame; window.toggleHowTo = wind
 window.dismissTutorial = window.engineDismissTutorial = dismissTutorial; window.returnToMenu = window.engineReturnToMenu = returnToMenu;
 
 window.addEventListener('keydown', e => {
+    // v17: capturing a key for a rebind swallows it (Esc cancels).
+    if (rebindingAction) {
+        if (e.preventDefault) e.preventDefault();
+        if (e.code !== 'Escape') { if (!rebind(rebindingAction, e.code)) showToast('THAT KEY IS RESERVED', '#ff8800'); }
+        rebindingAction = null; renderSettings(); renderInstructions();
+        return;
+    }
     st.keys[e.code] = true;
     // Records/leaderboard is a modal opened from the menu — close it (and swallow
     // other keys) rather than letting a stray keypress start a run underneath it.
@@ -424,7 +474,7 @@ window.addEventListener('keydown', e => {
         return;
     }
     if (e.code === 'KeyP' || (e.code === 'Escape' && st.screen !== 'howto' && st.screen !== 'tutorial')) {
-        if (st.screen === 'playing' && !st.finisher) openPause();
+        if (st.screen === 'playing' && !st.finisher && !st.knockdown) openPause();
         else if (st.screen === 'paused') closePause();
         return;
     }
@@ -474,6 +524,16 @@ export function update() {
         return;
     }
 
+    // v17 TEN-COUNT: while the Striker is down the world holds still.
+    if (st.knockdown) {
+        if (st.shake > 0) st.shake *= 0.9;
+        updateParticlesAndTrails();
+        const r = updateKnockdown();
+        if (r === 'out') { endRun(); return; }
+        if (typeof updateHUD === 'function') updateHUD();
+        return;
+    }
+
     if (st.hitstop > 0) {
         if (!hitStopEnabled()) st.hitstop = 0;
         else { st.hitstop--; return; }
@@ -505,15 +565,24 @@ export function update() {
     let banner = document.getElementById('instinct-ready-banner');
     if(st.instinctMeter >= 100 && !st.isInstinct) {
         if(!st.seenTutorials.instinct) {
-            triggerTutorial('instinct','INSTINCT MAXED','Your meter is full!<br><br>Instinct is gained by landing consecutive hits and executing Perfect Slips.<br><br>Press <span class="text-cyan-400 font-bold">[SPACE] / [A]</span> to unleash double knockback and massive hitstop.');
+            triggerTutorial('instinct','INSTINCT MAXED',`Your meter is full!<br><br>Press <span class="text-cyan-400 font-bold">[${keyName('instinct')}] / pad A</span> to unleash Instinct &mdash; double knockback and massive hitstop.<br><br><b>Or hold it:</b> land a <span class="text-white font-bold">Perfect Slip</span> on a full meter and you drop into <span class="text-white font-bold">THE ZONE</span> &mdash; the world slows down around you.`);
             return;
         } else if (banner) banner.style.display = 'block';
     } else if (banner) banner.style.display = 'none';
 
-    updatePlayer(); updateEnemies(); if (typeof updateBosses === 'function') updateBosses();
+    // v17 INSTINCT ZONE: the Striker moves at full speed; the world ticks at a
+    // fraction of it (enemies, bosses, hazards) while the screen is inverted.
+    let worldTick = true;
+    if (st.zoneTimer > 0) {
+        st.zoneTimer--;
+        worldTick = (st.zoneTimer % CONSTANTS.ZONE.enemyTick) === 0;
+        if (st.zoneTimer === 0) spawnFloatingText(st.player.x, st.player.y - 140, 'ZONE OUT', '#9ca3af');
+    }
+    updatePlayer();
+    if (worldTick) { updateEnemies(); if (typeof updateBosses === 'function') updateBosses(); }
     if (st.finisher) { if (typeof updateHUD === 'function') updateHUD(); return; } // a stagger just began
     // LANE HAZARDS: schedule + resolve environmental lane-strikes (Arc 4-5 surprise).
-    maybeScheduleHazard(); updateHazards();
+    if (worldTick) { maybeScheduleHazard(); updateHazards(); }
 
     maybeGrantFirstEvolution();
     // Level-ups are evaluated every tick so EXP from any source converts immediately.
@@ -536,7 +605,11 @@ export function update() {
         }
     }
 
-    if (st.health <= 0) { endRun(); return; }
+    // v17: 0 HP is a KNOCKDOWN (once per arc) — the second one ends the run.
+    if (st.health <= 0) {
+        if (canBeKnockedDown()) { startKnockdown(); if (typeof updateHUD === 'function') updateHUD(); return; }
+        endRun(); return;
+    }
 
     st.health = Math.round(st.health);
     if (typeof updateHUD === 'function') updateHUD();
@@ -545,7 +618,7 @@ export function update() {
     // lesson, guarantees it's actually seen rather than optimistically glimpsed.
     if (!st.seenTutorials.footwork_tip && st.currentStage === 1 && st.enemies.length === 0 &&
         (!st.tutorialEnabled || st.spawnTotal >= 5)) {
-        triggerTutorial('footwork_tip', 'FOOTWORK', 'You are not locked to one spot.<br><br>Hold <span class="text-cyan-400 font-bold">[RIGHT]</span> to press forward &mdash; you reach enemies sooner and can interrupt a windup before it becomes a threat, but more of them converge on you at once.<br><br>Hold <span class="text-cyan-400 font-bold">[LEFT]</span> past the initial Ghost Step burst to give ground &mdash; buys you time, at the cost of tempo.<br><br><i>Let go of both and you drift back to a neutral stance on your own.</i>');
+        triggerTutorial('footwork_tip', 'FOOTWORK', `You are not locked to one spot.<br><br>Hold <span class="text-cyan-400 font-bold">[${keyName('right')}]</span> to press forward &mdash; reach enemies sooner and drive them into <b>their</b> ropes.<br><br>Hold <span class="text-cyan-400 font-bold">[${keyName('left')}]</span> to give ground &mdash; but your own ropes are right behind you. Pinned on them you are <span class="text-pink-500 font-bold">CORNERED</span>: slip windows tighten.<br><br>Ghost Step has its own button: <span class="text-cyan-400 font-bold">[${keyName('ghost')}]</span>.`);
         return;
     }
 
@@ -623,6 +696,7 @@ function endRun() {
         else { nb.innerText = 'NEW PERSONAL BEST'; nb.style.display = runResult.isBest ? 'block' : 'none'; }
     }
 
+    renderInstructions();
     if (HUD.screens.gameover) HUD.screens.gameover.style.display = 'flex';
 }
 
@@ -796,15 +870,24 @@ window.addEventListener('resize', fitViewport);
 
 // Cinematic moments (upgrade vignette, boss Finisher) dim the DOM HUD that sits
 // above the canvas, so the moment owns the frame. Toggled only on change.
-let lastCine = '';
+let lastCine = '', lastZone = false;
 function syncCinematicClass() {
-    const mode = st.screen === 'vignette' ? 'vignette' : (st.finisher ? 'finisher' : '');
+    const mode = st.screen === 'vignette' ? 'vignette' : (st.finisher ? 'finisher' : (st.knockdown ? 'knockdown' : ((st.bossIntroTimer > 0 && st.bossPoster && st.screen === 'playing') ? 'poster' : '')));
+    const zone = st.zoneTimer > 0 && st.screen === 'playing';
+    if (zone !== lastZone) {
+        lastZone = zone;
+        // The full inversion is a big luminance swing: a low Flash Intensity (or
+        // Reduced Motion, via CSS) gets the softer treatment instead.
+        try { document.body.classList.toggle('cine-zone', zone); document.body.classList.toggle('cine-zone-soft', zone && getSettings().flashIntensity < 0.5); } catch (e) {}
+    }
     if (mode === lastCine) return;
     lastCine = mode;
     try {
         const b = document.body;
         b.classList.toggle('cine-vignette', mode === 'vignette');
         b.classList.toggle('cine-finisher', mode === 'finisher');
+        b.classList.toggle('cine-knockdown', mode === 'knockdown');
+        b.classList.toggle('cine-poster', mode === 'poster');
     } catch (e) {}
 }
 
@@ -816,7 +899,7 @@ function loop() {
     st.lastKeys = { ...st.keys };
     requestAnimationFrame(loop);
 }
-function init() { st.width = 1000; st.height = 600; if(canvas) { canvas.width = st.width; canvas.height = st.height; } applySettingsSideEffects(); resetGame(); initAtmosphere(); fitViewport(); renderBest(); applyStrikerColor(); loop(); }
+function init() { st.width = 1000; st.height = 600; if(canvas) { canvas.width = st.width; canvas.height = st.height; } applySettingsSideEffects(); renderInstructions(); resetGame(); initAtmosphere(); fitViewport(); renderBest(); applyStrikerColor(); loop(); }
 init();
 
 // Test hooks for the headless harness / bot sim (tests/*.mjs). Not used in play.
@@ -830,6 +913,26 @@ try {
             st, CONSTANTS, SequenceManager,
             jump(stage) { st.enemies = []; st.currentStage = Math.max(1, stage - 1); st.stageClearing = false; st.bossActive = false; advanceStage(); },
             draft(n = 1) { st.pendingUpgrades += n; triggerUpgradeDraft(); },
+            // Item-11 onboarding mockup: draws in-world teaching callouts over the
+            // live scene. null clears it. Never set outside ?debug.
+            mockOnboarding(scene) { st.onboardingMock = scene || null; draw(); },
+            // Save the current frame (canvas + a painted stand-in for the DOM HUD
+            // clusters) to a local receiver — used to export mockup images.
+            capture(name, url = 'http://127.0.0.1:8124/') {
+                draw();
+                const c = document.createElement('canvas'); c.width = st.width; c.height = st.height;
+                const x = c.getContext('2d'); if (st.zoneTimer > 0) x.filter = 'invert(1)'; x.drawImage(canvas, 0, 0); x.filter = 'none';
+                const hud = (px, py, w, h) => { x.fillStyle = 'rgba(0,0,0,0.5)'; x.fillRect(px, py, w, h); x.strokeStyle = 'rgba(255,255,255,0.08)'; x.strokeRect(px, py, w, h); };
+                hud(16, 14, 290, 74); hud(st.width - 266, 14, 250, 84);
+                x.fillStyle = '#fff'; x.font = '900 italic 24px Orbitron'; x.fillText(String(Math.max(0, Math.round(st.health))), 26, 44);
+                x.fillStyle = 'rgba(255,255,255,0.08)'; x.fillRect(96, 30, 200, 10); x.fillStyle = '#ff3355'; x.fillRect(96, 30, 200 * Math.max(0, st.health) / st.maxHealth, 10);
+                x.fillStyle = 'rgba(255,255,255,0.06)'; x.fillRect(26, 54, 270, 8);
+                const ig = x.createLinearGradient(26, 0, 296, 0); ig.addColorStop(0, '#ff00ff'); ig.addColorStop(1, '#00ffff'); x.fillStyle = ig; x.fillRect(26, 54, 270 * st.instinctMeter / 100, 8);
+                x.font = '900 9px Orbitron'; x.fillStyle = '#6b7280'; x.fillText('SPD ' + st.orbCounts.speed + '   PWR ' + st.orbCounts.power + '   TEC ' + st.orbCounts.technique, 26, 78);
+                x.textAlign = 'right'; x.fillStyle = '#fde68a'; x.font = '900 italic 28px Orbitron'; x.fillText(Math.round(st.score).toLocaleString(), st.width - 26, 46);
+                x.fillStyle = '#22d3ee'; x.font = '900 italic 20px Orbitron'; x.fillText(String(st.combo) + ' COMBO', st.width - 26, 72); x.textAlign = 'left';
+                return fetch(url, { method: 'POST', body: name + '|' + c.toDataURL('image/png') }).then(r => r.ok).catch(() => false);
+            },
             // Advance the real frame loop n times synchronously (works even when the
             // tab is hidden and requestAnimationFrame is paused).
             step(n = 1) { for (let i = 0; i < n; i++) { pollGamepad(); syncCinematicClass(); if (st.screen === 'vignette') updateVignette(); update(); st.lastKeys = { ...st.keys }; } draw(); }

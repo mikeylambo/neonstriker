@@ -346,7 +346,14 @@ export function spawnEnemy() {
 
                 let spawnX = st.width + 50 + (delayFrames * speed);
 
+                // v17 PUNCH STRINGS (seeded -> Daily-identical): some Grunts/Assassins
+                // throw 2-3 hit strings. Never in Arc 1 (chance 0 there).
+                const PS = CONSTANTS.PUNCH_STRINGS, arcI = Math.min(rawArcIndex, 5);
+                let stringLen = 1;
+                if (PS.types.includes(type) && (PS.chanceByArc[arcI] || 0) > 0 && random() < PS.chanceByArc[arcI]) stringLen = PS.lenByArc[arcI] || 2;
+
                 st.enemies.push({
+                    stringLen, stringIdx: 0,
                     x: spawnX, lane, y: st.height * CONSTANTS.LANE_Y[lane],
                     w: type === 'bruiser' ? 70 : 50, h: type === 'bruiser' ? 130 : 110,
                     hp, maxHp: hp, speed, baseSpeed: speed, color, type, weight, stun: 0, stunResist: 0,

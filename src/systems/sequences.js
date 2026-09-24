@@ -1,6 +1,8 @@
 import { gameState as st } from '../state.js';
 import { CONSTANTS } from '../constants.js';
 import { reducedMotion } from './settings.js';
+import { drawBillingCard } from '../render/overlays.js';
+import { playSound } from '../vfx_audio/audio.js';
 
 // v16 STAGE TRANSITIONS: no hard cuts. Tints FADE between colours instead of
 // snapping; text sits on a translucent band over the live arena; and a stage
@@ -105,6 +107,12 @@ export const SequenceManager = {
             if (step.type === 'text') {
                 this.text = { title: step.title, subtitle: step.subtitle || '', alpha: 1, age: 0 };
             }
+            if (step.type === 'billing') {
+                // v17 ROUND FRAMING: bell + "ROUND N — VENUE" billing card.
+                this.text = { title: '', subtitle: '', alpha: 1, age: 0 };
+                this.billing = { ...step.card };
+                playSound('bell');
+            }
             if (step.type === 'walkout' && st.player) {
                 this.walkFromX = st.player.x;
                 st.player.state = 'idle'; st.player.walking = true;
@@ -118,7 +126,7 @@ export const SequenceManager = {
                 this.active = false;
                 this.overlayColor = 'transparent';
                 this.overlayNow = [0, 0, 0, 0]; this.overlayTo = [0, 0, 0, 0];
-                this.text.alpha = 0;
+                this.text.alpha = 0; this.billing = null;
                 st.lightSweep = -1; st.paletteT = 1;
                 if (st.player) { st.player.walking = false; if (st.player.x < 0 || st.player.x > st.width) st.player.x = HOME_X; }
                 return;
@@ -150,15 +158,16 @@ export const SequenceManager = {
                 st.paletteT = ease;
             }
         }
-        if (step && step.type === 'text') this.text.age++;
+        if (step && (step.type === 'text' || step.type === 'billing')) this.text.age++;
 
         if (this.timer > 0) {
             this.timer--;
-            if (this.timer < 30 && this.text.alpha > 0 && step && step.type === 'text') {
+            if (this.timer < 30 && this.text.alpha > 0 && step && (step.type === 'text' || step.type === 'billing')) {
                 this.text.alpha = Math.max(0, this.text.alpha - 0.05);
             }
             if (this.timer <= 0) {
                 if (step && step.type === 'sweep') { st.lightSweep = -1; st.paletteT = 1; }
+                if (step && step.type === 'billing') this.billing = null;
                 if (step && (step.type === 'walkout' || step.type === 'walkin') && st.player) st.player.walking = false;
                 this.stepIndex++;
                 this.startStep();
@@ -173,6 +182,8 @@ export const SequenceManager = {
             ctx.fillStyle = colorStr(this.overlayNow);
             ctx.fillRect(0, 0, w, h);
         }
+
+        if (this.billing && this.text.alpha > 0) drawBillingCard(ctx, this.billing, this.text.age, this.text.alpha);
 
         if (this.text.alpha > 0 && this.text.title) {
             const a = this.text.alpha;

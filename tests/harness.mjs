@@ -155,10 +155,11 @@ function simMonkBursts(stage, frames) {
 // v16: stage numbers come from the arc-structure helpers (Arc 1 is compressed, so
 // "stage 21" no longer means "Arc 3 boss"). Arc 3 & Arc 6 bosses are the Monk.
 const burstsArc3 = simMonkBursts(CONSTANTS.bossStageOfArc(3), 2000);
-const burstsArc6 = simMonkBursts(CONSTANTS.bossStageOfArc(6), 2000);
+// v17: five bosses rotate, so the next Monk after Arc 3 is Arc 8 (mods clamp to Arc 5).
+const burstsArc6 = simMonkBursts(CONSTANTS.bossStageOfArc(8), 2000);
 ok('static monk fires bursts (arc3)', burstsArc3 && burstsArc3.length >= 2, JSON.stringify(burstsArc3));
 ok('arc3 burst length = 3 (1+patternChainLength 2)', burstsArc3 && burstsArc3.every(b => b === 3), JSON.stringify(burstsArc3));
-ok('arc6 burst length = 4 (1+patternChainLength 3)', burstsArc6 && burstsArc6.every(b => b === 4), JSON.stringify(burstsArc6));
+ok('arc8 (arc5-clamped) burst length = 4 (1+patternChainLength 3)', burstsArc6 && burstsArc6.every(b => b === 4), JSON.stringify(burstsArc6));
 
 // summonSupportPressure: at arc6 a Grunt add should appear during the fight.
 ok('summonSupportPressure spawns a Grunt add', st.enemies.some(e => !e.isBoss && e.type === 'grunt'), JSON.stringify(st.enemies.map(e => e.type)));

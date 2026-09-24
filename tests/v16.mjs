@@ -124,7 +124,7 @@ ok('wager decline: stage runs clean', st.currentAffix.name === 'NONE' && st.wage
 
 // ======================= 4. SETTINGS / PROFILE =======================
 localStorage.clear(); settings.reloadSettings();
-eq('settings: defaults load', JSON.stringify(settings.getSettings()), JSON.stringify(settings.SETTINGS_DEFAULTS));
+eq('settings: defaults load', JSON.stringify(settings.getSettings()), JSON.stringify({ ...settings.SETTINGS_DEFAULTS, binds: settings.DEFAULT_BINDS }));
 settings.setSetting('musicVolume', 0.2); settings.setSetting('hitStop', false); settings.setSetting('screenShake', 7);
 settings.reloadSettings();
 ok('settings: persist across reload', settings.getSettings().musicVolume === 0.2 && settings.getSettings().hitStop === false);
@@ -133,7 +133,7 @@ settings.setSetting('reducedMotion', true);
 ok('settings: reduced motion zeroes shake & halves flash', settings.shakeScale() === 0 && settings.flashScale() === 0.5);
 settings.setSetting('bogusKey', 3);
 ok('settings: unknown keys ignored', !('bogusKey' in settings.getSettings()));
-eq('settings: sanitize junk', JSON.stringify(settings.sanitizeSettings('nope')), JSON.stringify(settings.SETTINGS_DEFAULTS));
+eq('settings: sanitize junk', JSON.stringify(settings.sanitizeSettings('nope')), JSON.stringify({ ...settings.SETTINGS_DEFAULTS, binds: settings.DEFAULT_BINDS }));
 localStorage.clear(); settings.reloadSettings();
 const apply = await import('../src/systems/progression/apply.js');
 eq('arc1 theme line: shown on the first run of a save', apply.openingSubtitle(), CONSTANTS.ARC_LAWS[1].theme);
@@ -144,7 +144,7 @@ eq('arc1 theme line: never again after that', apply.openingSubtitle(), CONSTANTS
     let repeated = false;
     for (let i = 0; i < 12; i++) {
         apply.advanceStage();
-        if (SequenceManager.currentSequence.some(s => s.type === 'text' && s.subtitle === CONSTANTS.ARC_LAWS[1].theme)) repeated = true;
+        if (SequenceManager.currentSequence.some(s => (s.type === 'text' && s.subtitle === CONSTANTS.ARC_LAWS[1].theme) || (s.type === 'billing' && s.card.tagline === CONSTANTS.ARC_LAWS[1].theme))) repeated = true;
     }
     ok('arc1 theme line: no stage card repeats it', !repeated);
 }
@@ -165,8 +165,8 @@ eq('vignette: repeat view is 0.6s', vig.vignetteDuration('x', true), 36);
     eq('vignette: same upgrade again is the short cut', st.vignette.duration, 36);
     for (let i = 0; i < 40; i++) vig.updateVignette();
     ok('vignette: plays out and calls back', done === 2 && st.vignette === null);
-    eq('vignette: fusion ignites in fusion colour', vig.upgradeColor(UPGRADE_POOL.fusions[0]), '#ff0055');
-    eq('vignette: mastery ignites in its tree colour', vig.upgradeColor(UPGRADE_POOL.masteries.find(m => m.tree === 'power')), '#ec4899');
+    eq('vignette: fusion wears its mixed colour', vig.upgradeColor(UPGRADE_POOL.fusions[0]), CONSTANTS.FUSION_COLORS[UPGRADE_POOL.fusions[0].id]);
+    eq('vignette: mastery wears its tree colour', vig.upgradeColor(UPGRADE_POOL.masteries.find(m => m.tree === 'power')), CONSTANTS.TREES.power.color);
 }
 
 // ======================= 6. DRAFT TEASE =======================
@@ -176,7 +176,7 @@ eq('vignette: repeat view is 0.6s', vig.vignetteDuration('x', true), 36);
     const tease = draft.buildFusionTease(st, UPGRADE_POOL, 1);
     ok('tease: Arc 1 drafts show one locked Fusion', !!tease && tease.locked === true && tease.kind === 'fusion');
     ok('tease: it is the fusion the build is closest to', tease && (tease.id === 'fuse_dempsey_circuit' || tease.id === 'fuse_ghost_counter'), tease && tease.id);
-    ok('tease: requirement text shows progress', tease && /SPD 1\/2/.test(tease.reqText), tease && tease.reqText);
+    ok('tease: requirement text shows progress (v17: fusions need rank 3)', tease && /SPD 1\/3/.test(tease.reqText), tease && tease.reqText);
     ok('tease: never one of the pickable options', !st.currentDraftOptions.some(o => o.locked));
     eq('tease: not shown after Arc 1', draft.buildFusionTease(st, UPGRADE_POOL, 2), null);
 }
@@ -196,7 +196,7 @@ eq('vignette: repeat view is 0.6s', vig.vignetteDuration('x', true), 36);
     }
     ok('finisher: every sequence stays inside the lanes from mid', allValid);
     ok('finisher: every sequence is 4-6 prompts', lengthsOk);
-    eq('finisher: all 9 sequences are unique (per boss, per stagger)', sigs.size, 9);
+    eq('finisher: all 15 sequences are unique (5 bosses x 3 staggers)', sigs.size, bosses.length * 3);
     ok('finisher: KO sequences are the longest (6)', bosses.every(b => F.sequences[b].ko.length === 6));
     eq('laneValid rejects an out-of-ring path', fin.laneValid(['up', 'up']), false);
 }
@@ -232,7 +232,10 @@ function bossArena(arcBossStage) {
                     impacts++;
                     if (wasOpen) attackedWhileOpen++;
                     minLead = Math.min(minLead, lastTellAt === null ? -1 : lastTellAt);
-                    if (boss.controller !== 'static_monk' && !(boss.recoverTimer > 0)) noOpen++;
+                    // Live Wire's mid-string hits flow straight into the next (each fully
+                    // telegraphed); the string as a whole ends in a punish window.
+                    const midString = boss.controller === 'live_wire' && (boss.stringIdx || 0) > 0;
+                    if (boss.controller !== 'static_monk' && !midString && !(boss.recoverTimer > 0)) noOpen++;
                     lastTellAt = null;
                 }
                 if (boss.justAttacked > 0) boss.justAttacked--;
@@ -353,7 +356,7 @@ const perfectPolicy = pp => (pp.t === 0 ? pp.move : null);
     st.width = 1000; st.height = 600;
     st.enemies = []; st.floatingTexts = []; st.scorePops = [];
     st.player = player.resetPlayerObj(); st.player.y = st.height * CONSTANTS.LANE_Y[1];
-    st.combo = 7; st.statMaxCombo = 7; st.keys = { ArrowLeft: true }; st.lastKeys = {}; st.pad = { up: false, down: false, left: false, guard: false, jab: false, cross: false, hook: false, instinct: false, pause: false };
+    st.combo = 7; st.statMaxCombo = 7; st.keys = { ShiftLeft: true }; // v17: Ghost Step's own button st.lastKeys = {}; st.pad = { up: false, down: false, left: false, guard: false, jab: false, cross: false, hook: false, instinct: false, pause: false };
     player.updatePlayer();
     eq('ghost step: dashing never resets the combo', st.combo, 7);
     eq('ghost step: player is dashing', st.player.state, 'ghost_step');
@@ -382,8 +385,8 @@ function botKeys(tick, opts) {
     if (f) { const pp = fin.promptProgress(); if (pp && pp.t === (opts.finisherOffset || 0)) keys[{ up: 'ArrowUp', down: 'ArrowDown', jab: 'KeyA', cross: 'KeyS', hook: 'KeyD' }[pp.move]] = true; return keys; }
     if (SequenceManager.active) return keys;
     const dummy = st.enemies.find(e => e.tutorialType);
-    if (dummy && dummy.tutorialType === 'guard' && dummy.x - p.x < 160) { keys.ShiftLeft = true; return keys; }
-    if (dummy && dummy.tutorialType === 'ghost_step' && p.dangerLevel >= 1 && tick % 2 === 0) { keys.ArrowLeft = true; return keys; }
+    if (dummy && dummy.tutorialType === 'guard' && dummy.x - p.x < 160) { keys.KeyW = true; return keys; }
+    if (dummy && dummy.tutorialType === 'ghost_step' && p.dangerLevel >= 1 && tick % 2 === 0) { keys.ShiftLeft = true; return keys; }
     if (p.dangerLevel >= 2 || (st.laneFlash[p.lane] > 0 && !st.enemies.some(e => e.lane === p.lane && e.x - p.x < 120 && e.isBoss && rules.isBossOpen(e)))) {
         if (p.slipCooldown <= 0 && tick % 2 === 0) {
             const opts2 = [p.lane - 1, p.lane + 1].filter(l => l >= 0 && l <= 2).sort((a, b) => laneThreat(a) - laneThreat(b));

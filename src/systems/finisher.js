@@ -15,7 +15,7 @@ import { CONSTANTS } from '../constants.js';
 import { playSound } from '../vfx_audio/audio.js';
 import { spawnFloatingText, createShatter, createImpact, triggerShockwave, doFlash } from '../vfx_audio/effects.js';
 import { addScore } from './score.js';
-import { hitStopEnabled, reducedMotion } from './settings.js';
+import { hitStopEnabled, reducedMotion, getBinds } from './settings.js';
 
 const F = CONSTANTS.FINISHER;
 const LANE_STEP = { up: -1, down: 1 };
@@ -93,6 +93,13 @@ export function startFinisher(en, kind) {
     p.state = 'idle'; p.punchTimer = 0; p.hitFrame = 0; p.inputBuffer = null; p.movementBuffer = null;
     p.lane = 1; p.x = Math.min(Math.max(p.x, 160), 300);
     en.lane = 1; en.x = p.x + 118; en.vx = 0; en.stun = 0;
+    // v17 LIVE WIRE — CORNER REVERSAL: you spin him into his own wires. The two
+    // swap sides: he ends up against the electrified ropes, you facing him.
+    if (en.controller === 'live_wire') {
+        en.x = CONSTANTS.ROPES.playerPostX + 34; en.facing = 1;
+        p.x = en.x + 118; p.facing = -1;
+        spawnFloatingText(en.x + 20, en.y - 150, 'CORNER REVERSAL!', '#fff36b');
+    }
     en.recoverTimer = 0; en.telegraphed = false; en.shiftWarning = 0; en.exposedTimer = 0;
     en.decoyTimer = 0; en.targetLanes = []; en.justAttacked = 0;
     st.hazards = [];
@@ -111,11 +118,12 @@ function justPressed(code) { return !!st.keys[code] && !st.lastKeys[code]; }
 
 // One finisher-relevant input per frame (first wins), keyboard or pad.
 export function readFinisherInput() {
-    if (justPressed('ArrowUp') || st.pad.up) return 'up';
-    if (justPressed('ArrowDown') || st.pad.down) return 'down';
-    if (justPressed('KeyA') || st.pad.jab) return 'jab';
-    if (justPressed('KeyS') || st.pad.cross) return 'cross';
-    if (justPressed('KeyD') || st.pad.hook) return 'hook';
+    const K = getBinds();
+    if (justPressed(K.up) || st.pad.up) return 'up';
+    if (justPressed(K.down) || st.pad.down) return 'down';
+    if (justPressed(K.jab) || st.pad.jab) return 'jab';
+    if (justPressed(K.cross) || st.pad.cross) return 'cross';
+    if (justPressed(K.hook) || st.pad.hook) return 'hook';
     return null;
 }
 
@@ -158,6 +166,10 @@ function landPrompt(isPerfect) {
     triggerShockwave(en.x, en.y - 60, isPerfect ? '#ffffff' : (st.bossThemeColor || '#ff0055'));
     createShatter(en.x, en.y - 70, isPerfect ? '#ffffff' : (st.bossThemeColor || '#ff0055'));
     for (let i = 0; i < 3; i++) createImpact(en.x, en.y - 60 - i * 20, '#ffffff');
+    if (en.controller === 'live_wire') { // every blow slams him into the live wires
+        createImpact(CONSTANTS.ROPES.playerPostX, en.y - 80, '#fff36b'); createImpact(CONSTANTS.ROPES.playerPostX, en.y - 40, '#fff36b');
+        playSound('shock');
+    }
     // Hit-stop inside a finisher freezes the PICTURE, never the beat clock — the
     // rhythm grid has to stay honest or the next prompt would drift.
     f.freeze = hitStopEnabled() ? (isPerfect ? 9 : 6) : 0;
@@ -196,6 +208,7 @@ function endPrompts(result) {
 function finishFinisher() {
     const f = st.finisher, en = f.boss, p = st.player;
     p.state = 'idle'; p.punchType = null;
+    if (en.controller === 'live_wire') { delete en.facing; delete p.facing; p.x = 180; en.x = p.x + 260; }
     if (f.kind === 'ko') {
         en.koDone = true; en.hp = 0; // enemies.js resolves the defeat next frame
     } else {

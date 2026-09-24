@@ -86,6 +86,21 @@ export function playSound(type) {
         else if (type === 'punish') { sq = 'triangle'; f1 = 900; f2 = 1400; t = 0.08; v1 = 0.08; }
         else if (type === 'wager') { tone('triangle', 660, 660, 0.1, 0.1, 0.001); tone('triangle', 990, 990, 0.16, 0.1, 0.001, 0.08); return; }
         else if (type === 'sweep') { sq = 'sine'; f1 = 220; f2 = 1760; t = 0.6; v1 = 0.05; v2 = 0.001; }
+        // ---- v17 ----
+        else if (type === 'bell') { // ring bell: inharmonic partials, two strikes
+            for (const at of [0, 0.32]) [[880, 0.16], [2270, 0.07], [3990, 0.04], [5390, 0.025]].forEach(([f, v]) => tone('sine', f, f * 0.998, 1.4, v, 0.0005, at));
+            return;
+        }
+        else if (type === 'ref_count') { sq = 'triangle'; f1 = 330; f2 = 320; t = 0.12; v1 = 0.12; }
+        else if (type === 'ref_count_hi') { sq = 'triangle'; f1 = 520; f2 = 500; t = 0.14; v1 = 0.16; }
+        else if (type === 'knockdown') { tone('square', 120, 30, 0.6, 0.3, 0.01); tone('sine', 60, 25, 0.8, 0.4, 0.01); return; }
+        else if (type === 'rope_buzz') { sq = 'sawtooth'; f1 = 58; f2 = 62; t = 0.18; v1 = 0.05; v2 = 0.01; }
+        else if (type === 'rope_thud') { tone('sine', 90, 40, 0.3, 0.3, 0.01); tone('triangle', 180, 60, 0.25, 0.08, 0.001); return; }
+        else if (type === 'rope_bounce') { tone('sine', 70, 180, 0.2, 0.3, 0.01); tone('square', 900, 200, 0.2, 0.08, 0.001); return; }
+        else if (type === 'shock') { tone('sawtooth', 1200, 90, 0.35, 0.12, 0.001); tone('square', 60, 58, 0.35, 0.1, 0.01); return; }
+        else if (type === 'zone') { tone('sine', 110, 55, 1.2, 0.25, 0.001); tone('triangle', 1760, 440, 0.8, 0.06, 0.001); return; }
+        else if (type === 'charge_ready') { sq = 'triangle'; f1 = 700; f2 = 1400; t = 0.12; v1 = 0.08; }
+        else if (type === 'orb') { sq = 'sine'; f1 = 1500 + Math.random() * 300; f2 = 2400; t = 0.08; v1 = 0.04; v2 = 0.001; }
         tone(sq, f1, f2, t, v1, v2);
     } catch (e) { /* audio is never allowed to crash the game */ }
 }

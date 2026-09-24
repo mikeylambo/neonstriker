@@ -9,30 +9,26 @@
 import { gameState as st } from '../state.js';
 import { playSound } from '../vfx_audio/audio.js';
 import { hasSeenUpgrade, markUpgradeSeen, reducedMotion } from './settings.js';
+import { upgradeColorFor } from './colors.js';
 
 export const VIGNETTE_FULL_FRAMES = 90;   // 1.5s
 export const VIGNETTE_REPEAT_FRAMES = 36; // 0.6s
 const SKIP_GUARD_FRAMES = 6;              // the key that picked the card can't also skip
 
-export const TREE_COLORS = { speed: '#22d3ee', power: '#ec4899', technique: '#facc15' };
-
-export function upgradeColor(u) {
-    if (!u) return '#ffffff';
-    if (u.kind === 'fusion') return '#ff0055';
-    if (u.kind === 'overclock') return '#c084fc';
-    return TREE_COLORS[u.tree] || '#ffffff';
-}
+// v17: colours come from the tree / fusion-mix table (systems/colors.js).
+export function upgradeColor(u) { return upgradeColorFor(u); }
 
 export function upgradeRarity(u) {
     if (!u) return 'orb';
-    if (u.kind === 'fusion') return 'fusion';
+    if (u.kind === 'fusion') return u.evolved ? 'evolved' : 'fusion';
     if (u.draftRole === 'apex') return 'apex';
+    if (u.verb) return 'verb';
     if (u.kind === 'mastery') return 'mastery';
     if (u.kind === 'overclock') return 'overclock';
     return 'orb';
 }
 
-const STING = { fusion: 'sting_fusion', apex: 'sting_fusion', mastery: 'sting_mastery', overclock: 'sting_overclock', orb: 'sting_orb' };
+const STING = { evolved: 'sting_fusion', fusion: 'sting_fusion', apex: 'sting_fusion', verb: 'sting_mastery', mastery: 'sting_mastery', overclock: 'sting_overclock', orb: 'sting_orb' };
 
 // PURE: how long this upgrade's vignette runs.
 export function vignetteDuration(upgradeId, seenBefore, reduced = false) {

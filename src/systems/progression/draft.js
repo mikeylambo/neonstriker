@@ -2,6 +2,17 @@ import { meetsRequirements, isRecentlyOffered, pushRecentlyOffered } from './req
 // FIXED: Path now correctly points up two levels to reach the data folder
 import { UPGRADE_POOL } from '../../data/upgrades.js';
 import { random } from '../rng.js';
+import { CONSTANTS } from '../../constants.js';
+
+// v17: a tree's NEXT rank is offered only while that tree is under the current
+// arc's cap. Ranks are linear, so at most one card per tree.
+export function nextRank(st, pool, tree) {
+    const r = (st.orbCounts && st.orbCounts[tree]) || 0;
+    return pool.orbs.find(o => o.tree === tree && o.rank === r + 1) || null;
+}
+export function currentRankCap(st) {
+    return CONSTANTS.rankCap(CONSTANTS.getArcIndex(st.currentStage || 1));
+}
 
 export function buildEligiblePool(st, pool) {
     const pools = {
@@ -11,10 +22,10 @@ export function buildEligiblePool(st, pool) {
         overclocks: []
     };
 
-    for (const orb of pool.orbs) {
-        if (meetsRequirements(orb, st)) {
-            pools.orbs.push(orb);
-        }
+    const cap = currentRankCap(st);
+    for (const tree of CONSTANTS.TREE_ORDER) {
+        const next = nextRank(st, pool, tree);
+        if (next && next.rank <= cap) pools.orbs.push(next);
     }
 
     for (const mastery of pool.masteries) {
@@ -84,8 +95,10 @@ export function buildDraft(st, pool) {
 
     // Slot Priorities: Ensuring Core > Mastery > Fusion progression
     const slotRules = [
-        ["orbs", "masteries", "fusions", "overclocks"],   // Slot 1: Core Growth
-        ["masteries", "orbs", "fusions", "overclocks"],   // Slot 2: Evolution
+        ["orbs", "masteries", "fusions", "overclocks"],   // Slot 1: a tree rank
+        // v17: slot 2 prefers a SECOND tree's rank, so a draft usually lets you
+        // choose which tree climbs (and a rank-3 verb isn't crowded out).
+        ["orbs", "masteries", "fusions", "overclocks"],   // Slot 2: another tree rank
         ["fusions", "masteries", "orbs", "overclocks"]    // Slot 3: Capstone/Flex
     ];
 
@@ -120,12 +133,36 @@ export function buildDraft(st, pool) {
 // selectable — naming what it does and exactly what it takes to unlock.
 // Picks the not-yet-owned Fusion the current build is closest to.
 const TREE_SHORT = { speed: 'SPD', power: 'PWR', technique: 'TEC' };
+// v17: when a tree has hit this arc's cap, its next rank shows as a LOCKED card
+// ("Unlocks in Arc N") — the promise of the next verb/Apex is what pulls a run
+// forward. Picks the highest-ranked capped tree (most recently ranked on ties).
+export function buildRankTease(st, pool) {
+    const cap = currentRankCap(st);
+    const order = st.rankOrder || [];
+    let best = null;
+    for (const tree of CONSTANTS.TREE_ORDER) {
+        const r = st.orbCounts[tree] || 0;
+        if (r < cap || r >= CONSTANTS.MAX_RANK) continue;
+        if (!best || r > best.r || (r === best.r && order.lastIndexOf(tree) > order.lastIndexOf(best.tree))) best = { tree, r };
+    }
+    if (!best) return null;
+    const next = nextRank(st, pool, best.tree);
+    if (!next) return null;
+    return { ...next, locked: true, reqText: `UNLOCKS IN ARC ${CONSTANTS.arcForRank(next.rank)}` };
+}
+
+// One locked card per draft: a capped tree's next rank first, else (Arc 1 only)
+// the nearest Fusion.
+export function buildDraftTease(st, pool, arcIndex) {
+    return buildRankTease(st, pool) || buildFusionTease(st, pool, arcIndex);
+}
+
 export function buildFusionTease(st, pool, arcIndex) {
     if (arcIndex !== 1) return null;
     if ((st.currentDraftOptions || []).some(o => o.kind === 'fusion')) return null;
     let best = null;
     for (const f of pool.fusions) {
-        if (st.acquiredUpgradeIds.includes(f.id)) continue;
+        if (f.evolved || st.acquiredUpgradeIds.includes(f.id)) continue;
         const need = (f.reqs && f.reqs.orbTreeAtLeast) || {};
         let missing = 0;
         for (const [tree, lvl] of Object.entries(need)) missing += Math.max(0, lvl - (st.orbCounts[tree] || 0));

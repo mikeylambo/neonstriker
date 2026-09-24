@@ -49,12 +49,22 @@ export const CONSTANTS = {
     // here now. Also where Bruiser/Assassin get their own read-rhythm: a Bruiser's
     // haymaker is slow and wide (forgiving to time, hits like a truck once you do);
     // an Assassin's is fast and narrow (matches its "don't you dare turtle" identity).
-    getSlipThresholds: (enemyType, progressionBonus = 0) => {
-        if (enemyType === 'zoner') return { perfect: 10 + progressionBonus, good: 24 };
-        if (enemyType === 'bruiser') return { perfect: 14 + progressionBonus, good: 26 };
-        if (enemyType === 'assassin') return { perfect: 5 + progressionBonus, good: 10 };
-        return { perfect: 8 + progressionBonus, good: 16 };
+    // v17: `cornered` (Striker pinned on his ropes) tightens BOTH windows — and
+    // because gameplay, lane flashes and "!" text all read this one function, the
+    // telegraph tightens with it. The read never lies, it just gets harder.
+    getSlipThresholds: (enemyType, progressionBonus = 0, cornered = false) => {
+        let w;
+        if (enemyType === 'zoner') w = { perfect: 10 + progressionBonus, good: 24 };
+        else if (enemyType === 'bruiser') w = { perfect: 14 + progressionBonus, good: 26 };
+        else if (enemyType === 'assassin') w = { perfect: 5 + progressionBonus, good: 10 };
+        else w = { perfect: 8 + progressionBonus, good: 16 };
+        if (cornered) {
+            const m = CONSTANTS.ROPES.cornerSlipMult;
+            w = { perfect: Math.max(2, Math.round(w.perfect * m)), good: Math.max(4, Math.round(w.good * m)) };
+        }
+        return w;
     },
+    isCornered: (p) => !!p && p.x <= CONSTANTS.ROPES.cornerX,
 
     getBossArcMods: (bossId, arcIndex) => {
         const mods = CONSTANTS.BOSS_ARC_MODS[bossId];
@@ -160,6 +170,22 @@ export const CONSTANTS = {
             4: { reentryDelayVariant: true, fakeLaneFlash: true, afterimageThreat: true, lanePinchBias: 0.35, punishWindowMult: 0.86 },
             5: { reentryDelayVariant: true, fakeLaneFlash: true, afterimageThreat: true, lanePinchBias: 0.45, punishWindowMult: 0.8 }
         },
+        // v17 bosses. They headline Arc 4 / Arc 5; the arc-1..3 rows only matter
+        // for endless rotation and tests.
+        live_wire: {
+            1: { stringLength: 2, walkDownMult: 1.0, punishWindowMult: 1.0, shoveEvery: 3 },
+            2: { stringLength: 2, walkDownMult: 1.05, punishWindowMult: 0.96, shoveEvery: 3 },
+            3: { stringLength: 3, walkDownMult: 1.1, punishWindowMult: 0.94, shoveEvery: 3 },
+            4: { stringLength: 3, walkDownMult: 1.15, punishWindowMult: 0.9, shoveEvery: 2 },
+            5: { stringLength: 3, walkDownMult: 1.2, punishWindowMult: 0.86, shoveEvery: 2 }
+        },
+        negative: {
+            1: { echoChance: 0.35, counterRead: 0.5, punishWindowMult: 1.0 },
+            2: { echoChance: 0.4, counterRead: 0.6, punishWindowMult: 0.96 },
+            3: { echoChance: 0.45, counterRead: 0.7, punishWindowMult: 0.93 },
+            4: { echoChance: 0.5, counterRead: 0.8, punishWindowMult: 0.9 },
+            5: { echoChance: 0.55, counterRead: 0.9, punishWindowMult: 0.86 }
+        },
         static_monk: {
             1: { patternChainLength: 1, teleportRateMult: 1.0, followupPattern: false, deceptiveOrder: false, summonSupportPressure: false },
             2: { patternChainLength: 2, teleportRateMult: 1.05, followupPattern: true, deceptiveOrder: false, summonSupportPressure: false },
@@ -203,7 +229,7 @@ export const CONSTANTS = {
         { name: 'NONE', desc: 'System stable. No anomalies detected.', mods: {} },
         { name: 'SURGE', desc: 'Instinct gain increased by 50%.', mods: { instinctGainMult: 1.5 } },
         { name: 'FAST CROWD', desc: 'Ranks arrive denser and faster — Assassins swell the crowd.', scoreMult: 1.5, mods: { packetDelayMult: 0.7, speedMult: 1.12, gruntSub: 'assassin', gruntSubEvery: 2 } },
-        { name: 'IRON WALL', desc: 'The ranks harden. More Gold Armor — break it with Cross [S].', scoreMult: 1.3, mods: { gruntSub: 'shield', gruntSubEvery: 2 } },
+        { name: 'IRON WALL', desc: 'The ranks harden. More Gold Armor — break it with a Cross.', scoreMult: 1.3, mods: { gruntSub: 'shield', gruntSubEvery: 2 } },
         { name: 'HEAVY HANDS', desc: 'Bruisers hit harder and press in numbers. Keep your footwork.', scoreMult: 1.4, mods: { bruiserDamageMult: 1.4, gruntSub: 'bruiser', gruntSubEvery: 4 } },
         { name: 'ADRENALINE', desc: 'Every Perfect Slip mends a sliver of health.', mods: { perfectSlipHeal: 4 } },
         { name: 'GLASS PROTOCOL', desc: 'You deal 30% more — and take 30% more. No margin for a miss.', scoreMult: 1.75, mods: { playerDamageDealtMult: 1.3, playerDamageTakenMult: 1.3 } }
@@ -252,6 +278,99 @@ export const CONSTANTS = {
         rank: { S: 150000, A: 50000, B: 15000 }
     },
 
+    // --- v17 PROGRESSION: three linear 5-rank trees --------------------------
+    // Ranks 1/2/4 = stat ranks, rank 3 = a VERB change, rank 5 = Apex. How far a
+    // tree can climb is capped by arc, so the run's power curve follows the arcs.
+    // Each tree owns one signature neon colour; Fusions mix two of them. Colour
+    // appears on cards, punch trails, hit sparks and the afterimage — never on the
+    // Striker's body or gloves (his silhouette stays clean).
+    TREES: {
+        speed:     { name: 'SPEED',     short: 'SPD', color: '#22d3ee' }, // cyan
+        power:     { name: 'POWER',     short: 'PWR', color: '#ff2bd6' }, // magenta
+        technique: { name: 'TECHNIQUE', short: 'TEC', color: '#facc15' }  // yellow
+    },
+    TREE_ORDER: ['speed', 'power', 'technique'],
+    MAX_RANK: 5,
+    RANK_CAP_BY_ARC: { 1: 2, 2: 3, 3: 3, 4: 4, 5: 5 },
+    rankCap: (arc) => CONSTANTS.RANK_CAP_BY_ARC[Math.min(Math.max(1, arc), 5)],
+    // First arc in which a given rank becomes reachable ("Unlocks in Arc N").
+    arcForRank: (rank) => {
+        for (let a = 1; a <= 5; a++) if (CONSTANTS.RANK_CAP_BY_ARC[a] >= rank) return a;
+        return 5;
+    },
+    // Fusion colours are the additive mix of their two trees.
+    FUSION_COLORS: {
+        fuse_dempsey_circuit: '#a855f7', // cyan + magenta = violet
+        fuse_ghost_counter:   '#4ade80', // cyan + yellow  = lime
+        fuse_shatter_read:    '#ff7a3d', // magenta + yellow = orange
+        evo_infinite_circuit: '#c9a0ff',
+        evo_phantom_riposte:  '#9dffb8',
+        evo_shatter_nova:     '#ffb07a'
+    },
+    FUSION_TREES: {
+        fuse_dempsey_circuit: ['speed', 'power'],
+        fuse_ghost_counter:   ['speed', 'technique'],
+        fuse_shatter_read:    ['power', 'technique']
+    },
+
+    // --- v17 RANK-3 VERBS --------------------------------------------------------
+    VERBS: {
+        pivotSlip: { advance: 55, instantWindow: 20 },          // Speed R3
+        loadedCross: { chargeFrames: 18, maxFrames: 42, knockback: 70, stun: 45 }, // Power R3
+        afterimage: { delay: 16, damage: 26, stun: 22, reach: 150 } // Technique R3
+    },
+
+    // --- v17 ROPES & CORNERS -----------------------------------------------------
+    ROPES: {
+        playerPostX: 58,        // the post behind the Striker
+        playerMinX: 90,         // can't be pushed / retreat past this
+        cornerX: 100,           // at or behind this = CORNERED
+        cornerSlipMult: 0.6,    // slip windows tighten to 60% when cornered
+        enemyRopeX: 560,        // knockback can't carry an enemy past its ropes
+        enemyPostX: 606,
+        playerMaxX: 420,        // pressing forward can take you to reach of those ropes
+        pinFrames: 75,          // an enemy driven into its ropes stays pinned
+        bounceDmgMult: 1.35,    // counter-charged hit on a pinned enemy
+        bounceHitstop: 10,
+        liveWireShock: { damage: 6, every: 45 }
+    },
+
+    // --- v17 PUNCH STRINGS -------------------------------------------------------
+    // Selected enemies throw 2-3 hit strings. Every hit re-targets your lane and
+    // gets its own full telegraph from getSlipThresholds (the single source of
+    // truth), so a string is a sequence of reads, not one read and a surprise.
+    PUNCH_STRINGS: {
+        types: ['grunt', 'assassin'],
+        chanceByArc: { 1: 0, 2: 0.3, 3: 0.4, 4: 0.5, 5: 0.6 },
+        lenByArc: { 1: 2, 2: 2, 3: 2, 4: 3, 5: 3 },
+        gap: 28                  // frames between string hits (> red telegraph lead)
+    },
+
+    // --- v17 TEN-COUNT (player only) ----------------------------------------------
+    KNOCKDOWN: {
+        framesPerCount: 50,      // 10 counts ~ 8.3s
+        promptsByArc: { 1: 3, 2: 4, 3: 5, 4: 5, 5: 5 },
+        beatFrames: 34,
+        windowEarly: 14, windowLate: 12,
+        getUpHpFrac: 0.5,
+        invulnFrames: 90
+    },
+
+    // --- v17 INSTINCT ZONE ---------------------------------------------------------
+    // A Perfect Slip with a FULL Instinct meter drops the world into slow-mo with a
+    // colour-inverted screen (screen effect only). Enemies tick every `enemyTick`
+    // frames while the Striker moves at full speed.
+    ZONE: { frames: 180, enemyTick: 2 },
+
+    // --- v17 BOSS BILLING (title-fight posters) ----------------------------------
+    BOSS_BILLING: {
+        neon_enforcer: { tagline: 'THE ARMORED LAW' },
+        phantom_boxer: { tagline: 'THE MAN WHO ISN’T THERE' },
+        static_monk:   { tagline: 'THE STATIC SAINT' },
+        live_wire:     { tagline: 'THE CURRENT CHAMPION' },
+        negative:      { tagline: 'YOUR OWN WORST ENEMY' }
+    },
+
     // --- BOSS STAGGER + FINISHER (v16) ---
     // Raw hits deal full damage. Crossing 66% and 33% HP staggers the boss into an
     // authored Finisher; the killing blow opens a final KO Finisher. Prompts are on a
@@ -284,6 +403,17 @@ export const CONSTANTS = {
                 break1: ['down', 'up', 'cross', 'jab'],
                 break2: ['up', 'hook', 'down', 'down', 'cross'],
                 ko:     ['jab', 'down', 'up', 'up', 'hook', 'cross']
+            },
+            // Corner reversal: you spin him into his own electrified wires.
+            live_wire: {
+                break1: ['jab', 'hook', 'down', 'cross'],
+                break2: ['up', 'cross', 'cross', 'down', 'hook'],
+                ko:     ['hook', 'up', 'cross', 'down', 'down', 'cross']
+            },
+            negative: {
+                break1: ['down', 'cross', 'up', 'jab'],
+                break2: ['jab', 'up', 'hook', 'down', 'cross'],
+                ko:     ['up', 'down', 'down', 'up', 'jab', 'cross']
             }
         }
     },

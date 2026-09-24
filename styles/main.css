@@ -548,3 +548,89 @@ body.reduced-motion .draft-card:hover { transform: none; }
 .ui-overlay, #score-hud, #instructions, #audio-state { transition: opacity .18s; }
 body.cine-vignette .ui-overlay, body.cine-vignette #score-hud, body.cine-vignette #instructions, body.cine-vignette #audio-state { opacity: 0.08; }
 body.cine-finisher .ui-overlay, body.cine-finisher #score-hud, body.cine-finisher #instructions, body.cine-finisher #audio-state { opacity: 0.06; }
+
+/* =====================================================================
+   v17 — rank rarities + colour identity on cards
+   ===================================================================== */
+.card-orb { background: color-mix(in srgb, var(--card-color) 55%, #111); }
+/* VERB (rank 3): a tree-coloured double frame with a pulsing inner edge */
+.card-verb { padding: 3px; background: linear-gradient(135deg, var(--card-color), #0b0b10 35%, #0b0b10 65%, var(--card-color)); box-shadow: 0 0 22px color-mix(in srgb, var(--card-color) 45%, transparent); animation: cardReveal .45s cubic-bezier(.2,.9,.25,1.15) both, masteryPulse 1.8s ease-in-out .5s infinite; }
+.card-verb .card-inner { box-shadow: inset 0 0 0 1px var(--card-color), inset 0 0 18px color-mix(in srgb, var(--card-color) 25%, transparent); }
+.card-verb .card-badge { letter-spacing: 1.5px; }
+.card-verb .card-inner::after {
+    content: ''; position: absolute; inset: 0; border-radius: 8px; pointer-events: none;
+    background: linear-gradient(105deg, transparent 35%, rgba(255,255,255,.1) 45%, rgba(255,255,255,.22) 50%, rgba(255,255,255,.1) 55%, transparent 65%);
+    background-size: 250% 100%; animation: foilSheen 3.2s linear infinite;
+}
+/* Fusions: the prismatic foil now spins in the fusion's own mixed colour */
+.card-fusion::before { background: conic-gradient(from 0deg, var(--card-color), #ffffff, var(--card-color), #111, var(--card-color)); }
+.card-fusion .card-inner { background: radial-gradient(120% 90% at 50% 0%, color-mix(in srgb, var(--card-color) 22%, transparent), #08070b 60%); }
+.card-fusion .card-badge { background: none; -webkit-background-clip: initial; background-clip: initial; color: var(--card-color); }
+.card-fusion { box-shadow: 0 0 26px color-mix(in srgb, var(--card-color) 40%, transparent); }
+/* EVOLVED: double-speed white-hot foil */
+.card-evolved { padding: 3px; background: #111; box-shadow: 0 0 34px color-mix(in srgb, var(--card-color) 60%, transparent); animation: fusionReveal .7s cubic-bezier(.2,.9,.2,1.2) both; }
+.card-evolved::before {
+    content: ''; position: absolute; z-index: 0; left: 50%; top: 50%; width: 220%; aspect-ratio: 1; transform: translate(-50%, -50%);
+    background: conic-gradient(from 0deg, #fff, var(--card-color), #fff, var(--card-color), #fff);
+    animation: foilSpin 1.6s linear infinite;
+}
+.card-evolved .card-inner { background: radial-gradient(120% 90% at 50% 0%, color-mix(in srgb, var(--card-color) 30%, transparent), #08070b 62%); }
+.card-evolved .card-badge { color: #fff; text-shadow: 0 0 8px var(--card-color); }
+.card-evolved .card-inner::after {
+    content: ''; position: absolute; inset: 0; border-radius: 8px; pointer-events: none;
+    background: linear-gradient(105deg, transparent 35%, rgba(255,255,255,.18) 45%, rgba(255,255,255,.4) 50%, rgba(255,255,255,.18) 55%, transparent 65%);
+    background-size: 250% 100%; animation: foilSheen 1.8s linear infinite;
+}
+.card-locked.card-verb, .card-locked.card-apex { animation: cardReveal .45s both; }
+body.reduced-motion .card-evolved, body.reduced-motion .card-evolved::before, body.reduced-motion .card-verb { animation: none !important; }
+.lo-rank { font-size: .62rem; padding: 2px 7px; border-radius: 3px; border: 1px solid #1f2937; color: #4b5563; }
+.lo-rank.on { color: #0b0b10; background: var(--tree-color); border-color: var(--tree-color); font-weight: 700; }
+.lo-rank.capped { border-style: dashed; }
+
+/* v17 — INSTINCT ZONE: colour-inverted screen (screen effect only) */
+#gameCanvas { transition: filter .22s ease; }
+body.cine-zone #gameCanvas { filter: invert(1); }
+body.cine-zone.reduced-motion #gameCanvas { filter: grayscale(.7) contrast(1.2); transition: none; }
+body.cine-knockdown .ui-overlay, body.cine-knockdown #score-hud, body.cine-knockdown #instructions, body.cine-knockdown #audio-state { opacity: 0.15; }
+
+/* =====================================================================
+   v17 — HUD: two clusters (left = your state, right = your performance)
+   ===================================================================== */
+.hud-row { display: flex; justify-content: space-between; align-items: flex-start; top: 14px; left: 16px; right: 16px; }
+.hud-cluster { background: linear-gradient(180deg, rgba(0,0,0,.55), rgba(0,0,0,.25)); border: 1px solid rgba(255,255,255,.07); border-radius: 6px; padding: 8px 12px; }
+.hud-left { width: 290px; }
+.hud-right { width: 250px; text-align: right; }
+.hud-hp-row { display: flex; align-items: center; gap: 10px; }
+.hud-hp-num { font-size: 1.6rem; font-weight: 900; font-style: italic; min-width: 58px; transition: transform .2s, color .2s; font-variant-numeric: tabular-nums; }
+.hud-hp-track { flex: 1; height: 10px; background: rgba(255,255,255,.07); border: 1px solid #333; border-radius: 3px; overflow: hidden; }
+.hud-hp-fill { height: 100%; width: 100%; background: linear-gradient(90deg, #ff3355, #ff8a8a); transition: width .15s; }
+.hud-hp-fill.low { background: #ff3355; animation: pulse .35s infinite alternate; }
+.hud-inst-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.hud-inst-row .instinct-bar-container { width: 100%; height: 8px; }
+#instinct-ready-banner { font-size: .6rem; white-space: nowrap; }
+.hud-meta { display: flex; gap: 10px; margin-top: 6px; font-size: .58rem; font-weight: 900; letter-spacing: 1.5px; color: #6b7280; }
+.hud-rank b { color: var(--c); }
+.hud-counter b { color: #4b5563; }
+.hud-counter.ready b { color: #ffffff; text-shadow: 0 0 8px #fff; }
+#score-ui { font-size: 1.9rem; font-weight: 900; font-style: italic; color: #fde68a; text-shadow: 0 0 14px rgba(250, 204, 21, .5); line-height: 1; font-variant-numeric: tabular-nums; }
+.hud-combo-row { display: flex; justify-content: flex-end; align-items: baseline; gap: 6px; margin-top: 2px; }
+.hud-combo-row .combo-counter { font-size: 1.5rem; padding-right: 0; }
+.hud-combo-label { font-size: .55rem; font-weight: 900; letter-spacing: 2px; color: #ec4899; }
+#score-mult { font-size: .62rem; font-weight: 900; letter-spacing: 1.5px; color: #6b7280; }
+#score-mult.hot { color: #22d3ee; text-shadow: 0 0 8px #22d3ee; }
+#wager-badge { font-size: .55rem; font-weight: 900; letter-spacing: 1.5px; color: #000; background: #facc15; padding: 1px 5px; border-radius: 3px; }
+.hud-exp-row { display: flex; justify-content: flex-end; align-items: center; gap: 6px; margin-top: 4px; }
+#exp-multiplier { font-size: .6rem; color: #facc15; font-weight: 900; transition: opacity .2s; }
+.hud-exp-track { width: 150px; height: 5px; background: #111; border: 1px solid #333; border-radius: 3px; overflow: hidden; }
+#exp-bar { height: 100%; width: 0; background: #ec4899; box-shadow: 0 0 8px #ff00ff; transition: width .2s; }
+#exp-bar.pulse { background: #ffffff; }
+.hud-stage { margin-top: 5px; font-size: .58rem; font-weight: 700; letter-spacing: 1px; }
+#stage-ui { font-size: .58rem; }
+#affix-ui { color: #facc15; }
+#instructions.hidden { display: none; }
+body.cine-vignette .hud-row, body.cine-finisher .hud-row, body.cine-knockdown .hud-row { opacity: .06; }
+.bind-key { grid-column: 2 / 4; justify-self: start; font-family: 'Orbitron', sans-serif; font-weight: 900; font-size: .7rem; letter-spacing: 1.5px; min-width: 110px; padding: 5px 14px; border: 1px solid #22d3ee; background: #0b0b10; color: #22d3ee; cursor: pointer; }
+.bind-key.waiting { background: #22d3ee; color: #000; animation: pulse .4s infinite alternate; }
+.pause-panel { max-height: 380px; }
+body.cine-poster .hud-row, body.cine-poster #instructions, body.cine-poster #audio-state { opacity: 0.05; }
+body.cine-zone.cine-zone-soft #gameCanvas { filter: grayscale(.7) contrast(1.2); }

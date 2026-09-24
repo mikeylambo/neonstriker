@@ -5,7 +5,9 @@ import { drawAtmosphere, drawLightSweep } from './atmosphere.js';
 import { drawBoxer } from './boxer.js';
 import { SequenceManager } from '../systems/sequences.js';
 import { shakeScale } from '../systems/settings.js';
-import { drawScorePops, drawBossTells, drawBossHud, drawFinisherDim, drawFinisherUI, drawVignette } from './overlays.js';
+import { buildColor } from '../systems/colors.js';
+import { drawOnboardingMock } from './onboarding_mock.js';
+import { drawBossPoster, drawRopes, drawAfterimages, drawKnockdownUI, drawKoFx, drawScorePops, drawBossTells, drawBossHud, drawFinisherDim, drawFinisherUI, drawVignette } from './overlays.js';
 
 const dl = (x1, y1, x2, y2) => { ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); };
 
@@ -138,7 +140,9 @@ export function draw() {
     });
     ctx.globalAlpha = 1.0;
 
+    drawRopes(ctx);
     drawFinisherDim(ctx);
+    drawAfterimages(ctx);
 
     st.player.trails.forEach(t => { 
         let ghost = { lane: t.lane, x: t.x, y: t.y, w: 50, h: 110, state: t.state, punchType: t.punchType, hitFrame: t.hitFrame, slipBuff: t.slipBuff, color: '#00ffff' }; 
@@ -152,7 +156,7 @@ export function draw() {
 
         // --- RESTORED: Zoner Telegraph & Shield Visuals ---
         if (en.isActiveThreat) {
-            const { perfect: perfectThresh, good: goodThresh } = CONSTANTS.getSlipThresholds(en.type, st.progressionMods.perfectSlipWindowBonus);
+            const { perfect: perfectThresh, good: goodThresh } = CONSTANTS.getSlipThresholds(en.type, st.progressionMods.perfectSlipWindowBonus, CONSTANTS.isCornered(st.player));
             if (en.type === 'zoner' && en.attackCooldown < 40 && en.stun <= 0 && st.bossIntroTimer <= 0) {
                 let intensity = 1 - (en.attackCooldown / 40);
                 ctx.strokeStyle = `rgba(0, 255, 0, ${intensity})`; ctx.lineWidth = 2 + (intensity * 6); 
@@ -177,7 +181,7 @@ export function draw() {
 
                 ctx.fillStyle = telColor; ctx.font = 'bold 20px Orbitron'; ctx.textAlign = 'center'; ctx.fillText(telText, en.x + en.w/2 + xOff, en.y - en.h - 10); ctx.textAlign = 'left';
             }
-        } else if (en.attackCooldown <= (CONSTANTS.getSlipThresholds(en.type, 0).good + 6) && en.stun <= 0 && en.type !== 'zoner' && st.bossIntroTimer <= 0) {
+        } else if (en.attackCooldown <= (CONSTANTS.getSlipThresholds(en.type, 0, CONSTANTS.isCornered(st.player)).good + 6) && en.stun <= 0 && en.type !== 'zoner' && st.bossIntroTimer <= 0) {
             let telColor = 'rgba(255,255,255,0.3)'; let telText = '!';
             if (en.isBoss) {
                 if (en.currentMove === 'bash') { telColor = 'rgba(255,170,0,0.3)'; telText = 'BREAK'; }
@@ -200,6 +204,13 @@ export function draw() {
             ctx.globalAlpha = opacity;
             ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(en.x, barY, barW, 3);
             ctx.fillStyle = en.color; ctx.fillRect(en.x, barY, barW * Math.max(0, en.hp / en.maxHp), 3);
+            // v17 PUNCH STRING pips: one per punch in the string, lit once thrown.
+            if ((en.stringLen || 1) > 1) {
+                for (let i = 0; i < en.stringLen; i++) {
+                    ctx.fillStyle = i < (en.stringIdx || 0) ? '#ffffff' : 'rgba(255,255,255,0.3)';
+                    ctx.beginPath(); ctx.arc(en.x + barW - 4 - i * 9, barY - 7, 3, 0, Math.PI * 2); ctx.fill();
+                }
+            }
             const pressure = en.pressure || 0;
             if (pressure > 0) {
                 for (let i = 0; i < pressure; i++) {
@@ -217,7 +228,18 @@ export function draw() {
         // the windup meter and OPEN tag have clean space.
     });
 
-    drawBoxer(ctx, st.player, true);
+    // v17: build colour rides the punch trail (never the body/gloves).
+    st.player.trailColor = buildColor();
+    if (st.knockdown) {
+        // TEN-COUNT: the Striker lies flat, rising back up as he gets to his feet.
+        const k = st.knockdown.fall, p = st.player;
+        ctx.save(); ctx.translate(p.x + 25, p.y); ctx.rotate(-Math.PI / 2 * k); ctx.translate(-(p.x + 25), -p.y);
+        drawBoxer(ctx, { ...p, state: 'hurt' }, true);
+        ctx.restore();
+    } else {
+        const inv = (st.player.invuln || 0) > 0 && Math.floor(Date.now() / 80) % 2 === 0;
+        drawBoxer(ctx, st.player, true, inv ? 0.45 : 1);
+    }
 
     st.floatingTexts.forEach(ft => { 
         ctx.globalAlpha = Math.max(0, ft.life); 
@@ -228,21 +250,17 @@ export function draw() {
         ctx.textAlign = 'left'; 
     });
     ctx.globalAlpha = 1;
+    drawKoFx(ctx);
     drawScorePops(ctx);
-
-    if (st.bossIntroTimer > 0) {
-        ctx.fillStyle = '#000'; ctx.fillRect(0, st.height/2 - 80, st.width, 160);
-        let slideIn = Math.min(1, (120 - st.bossIntroTimer) / 20); 
-        ctx.fillStyle = '#fff'; ctx.font = '900 italic 40px Orbitron'; ctx.textAlign = 'center';
-        ctx.fillText(st.bossIntroText, st.width/2 * slideIn + (st.width/4), st.height/2 - 10);
-        ctx.textAlign = 'left';
-    }
 
     ctx.restore();
 
     // ---- screen-space overlays (never zoomed or shaken) ----
     if (st.screen !== 'start') drawBossHud(ctx);
     drawFinisherUI(ctx);
+    drawKnockdownUI(ctx);
+    drawBossPoster(ctx);
+    if (st.onboardingMock) drawOnboardingMock(ctx); // item-11 mockup (debug hook only)
     SequenceManager.draw(ctx, st.width, st.height);
     drawVignette(ctx);
 }

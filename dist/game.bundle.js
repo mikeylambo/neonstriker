@@ -52,12 +52,22 @@
     // here now. Also where Bruiser/Assassin get their own read-rhythm: a Bruiser's
     // haymaker is slow and wide (forgiving to time, hits like a truck once you do);
     // an Assassin's is fast and narrow (matches its "don't you dare turtle" identity).
-    getSlipThresholds: (enemyType, progressionBonus = 0) => {
-      if (enemyType === "zoner") return { perfect: 10 + progressionBonus, good: 24 };
-      if (enemyType === "bruiser") return { perfect: 14 + progressionBonus, good: 26 };
-      if (enemyType === "assassin") return { perfect: 5 + progressionBonus, good: 10 };
-      return { perfect: 8 + progressionBonus, good: 16 };
+    // v17: `cornered` (Striker pinned on his ropes) tightens BOTH windows — and
+    // because gameplay, lane flashes and "!" text all read this one function, the
+    // telegraph tightens with it. The read never lies, it just gets harder.
+    getSlipThresholds: (enemyType, progressionBonus = 0, cornered = false) => {
+      let w;
+      if (enemyType === "zoner") w = { perfect: 10 + progressionBonus, good: 24 };
+      else if (enemyType === "bruiser") w = { perfect: 14 + progressionBonus, good: 26 };
+      else if (enemyType === "assassin") w = { perfect: 5 + progressionBonus, good: 10 };
+      else w = { perfect: 8 + progressionBonus, good: 16 };
+      if (cornered) {
+        const m = CONSTANTS.ROPES.cornerSlipMult;
+        w = { perfect: Math.max(2, Math.round(w.perfect * m)), good: Math.max(4, Math.round(w.good * m)) };
+      }
+      return w;
     },
+    isCornered: (p) => !!p && p.x <= CONSTANTS.ROPES.cornerX,
     getBossArcMods: (bossId, arcIndex) => {
       const mods = CONSTANTS.BOSS_ARC_MODS[bossId];
       return mods[Math.min(arcIndex, 5)] || mods[5];
@@ -169,6 +179,22 @@
         4: { reentryDelayVariant: true, fakeLaneFlash: true, afterimageThreat: true, lanePinchBias: 0.35, punishWindowMult: 0.86 },
         5: { reentryDelayVariant: true, fakeLaneFlash: true, afterimageThreat: true, lanePinchBias: 0.45, punishWindowMult: 0.8 }
       },
+      // v17 bosses. They headline Arc 4 / Arc 5; the arc-1..3 rows only matter
+      // for endless rotation and tests.
+      live_wire: {
+        1: { stringLength: 2, walkDownMult: 1, punishWindowMult: 1, shoveEvery: 3 },
+        2: { stringLength: 2, walkDownMult: 1.05, punishWindowMult: 0.96, shoveEvery: 3 },
+        3: { stringLength: 3, walkDownMult: 1.1, punishWindowMult: 0.94, shoveEvery: 3 },
+        4: { stringLength: 3, walkDownMult: 1.15, punishWindowMult: 0.9, shoveEvery: 2 },
+        5: { stringLength: 3, walkDownMult: 1.2, punishWindowMult: 0.86, shoveEvery: 2 }
+      },
+      negative: {
+        1: { echoChance: 0.35, counterRead: 0.5, punishWindowMult: 1 },
+        2: { echoChance: 0.4, counterRead: 0.6, punishWindowMult: 0.96 },
+        3: { echoChance: 0.45, counterRead: 0.7, punishWindowMult: 0.93 },
+        4: { echoChance: 0.5, counterRead: 0.8, punishWindowMult: 0.9 },
+        5: { echoChance: 0.55, counterRead: 0.9, punishWindowMult: 0.86 }
+      },
       static_monk: {
         1: { patternChainLength: 1, teleportRateMult: 1, followupPattern: false, deceptiveOrder: false, summonSupportPressure: false },
         2: { patternChainLength: 2, teleportRateMult: 1.05, followupPattern: true, deceptiveOrder: false, summonSupportPressure: false },
@@ -209,7 +235,7 @@
       { name: "NONE", desc: "System stable. No anomalies detected.", mods: {} },
       { name: "SURGE", desc: "Instinct gain increased by 50%.", mods: { instinctGainMult: 1.5 } },
       { name: "FAST CROWD", desc: "Ranks arrive denser and faster \u2014 Assassins swell the crowd.", scoreMult: 1.5, mods: { packetDelayMult: 0.7, speedMult: 1.12, gruntSub: "assassin", gruntSubEvery: 2 } },
-      { name: "IRON WALL", desc: "The ranks harden. More Gold Armor \u2014 break it with Cross [S].", scoreMult: 1.3, mods: { gruntSub: "shield", gruntSubEvery: 2 } },
+      { name: "IRON WALL", desc: "The ranks harden. More Gold Armor \u2014 break it with a Cross.", scoreMult: 1.3, mods: { gruntSub: "shield", gruntSubEvery: 2 } },
       { name: "HEAVY HANDS", desc: "Bruisers hit harder and press in numbers. Keep your footwork.", scoreMult: 1.4, mods: { bruiserDamageMult: 1.4, gruntSub: "bruiser", gruntSubEvery: 4 } },
       { name: "ADRENALINE", desc: "Every Perfect Slip mends a sliver of health.", mods: { perfectSlipHeal: 4 } },
       { name: "GLASS PROTOCOL", desc: "You deal 30% more \u2014 and take 30% more. No margin for a miss.", scoreMult: 1.75, mods: { playerDamageDealtMult: 1.3, playerDamageTakenMult: 1.3 } }
@@ -262,6 +288,112 @@
       // clean Arc 1 clear ~45k (B), deep Arc 2-3 runs 150k+ (S). S also needs reads.
       rank: { S: 15e4, A: 5e4, B: 15e3 }
     },
+    // --- v17 PROGRESSION: three linear 5-rank trees --------------------------
+    // Ranks 1/2/4 = stat ranks, rank 3 = a VERB change, rank 5 = Apex. How far a
+    // tree can climb is capped by arc, so the run's power curve follows the arcs.
+    // Each tree owns one signature neon colour; Fusions mix two of them. Colour
+    // appears on cards, punch trails, hit sparks and the afterimage — never on the
+    // Striker's body or gloves (his silhouette stays clean).
+    TREES: {
+      speed: { name: "SPEED", short: "SPD", color: "#22d3ee" },
+      // cyan
+      power: { name: "POWER", short: "PWR", color: "#ff2bd6" },
+      // magenta
+      technique: { name: "TECHNIQUE", short: "TEC", color: "#facc15" }
+      // yellow
+    },
+    TREE_ORDER: ["speed", "power", "technique"],
+    MAX_RANK: 5,
+    RANK_CAP_BY_ARC: { 1: 2, 2: 3, 3: 3, 4: 4, 5: 5 },
+    rankCap: (arc) => CONSTANTS.RANK_CAP_BY_ARC[Math.min(Math.max(1, arc), 5)],
+    // First arc in which a given rank becomes reachable ("Unlocks in Arc N").
+    arcForRank: (rank) => {
+      for (let a = 1; a <= 5; a++) if (CONSTANTS.RANK_CAP_BY_ARC[a] >= rank) return a;
+      return 5;
+    },
+    // Fusion colours are the additive mix of their two trees.
+    FUSION_COLORS: {
+      fuse_dempsey_circuit: "#a855f7",
+      // cyan + magenta = violet
+      fuse_ghost_counter: "#4ade80",
+      // cyan + yellow  = lime
+      fuse_shatter_read: "#ff7a3d",
+      // magenta + yellow = orange
+      evo_infinite_circuit: "#c9a0ff",
+      evo_phantom_riposte: "#9dffb8",
+      evo_shatter_nova: "#ffb07a"
+    },
+    FUSION_TREES: {
+      fuse_dempsey_circuit: ["speed", "power"],
+      fuse_ghost_counter: ["speed", "technique"],
+      fuse_shatter_read: ["power", "technique"]
+    },
+    // --- v17 RANK-3 VERBS --------------------------------------------------------
+    VERBS: {
+      pivotSlip: { advance: 55, instantWindow: 20 },
+      // Speed R3
+      loadedCross: { chargeFrames: 18, maxFrames: 42, knockback: 70, stun: 45 },
+      // Power R3
+      afterimage: { delay: 16, damage: 26, stun: 22, reach: 150 }
+      // Technique R3
+    },
+    // --- v17 ROPES & CORNERS -----------------------------------------------------
+    ROPES: {
+      playerPostX: 58,
+      // the post behind the Striker
+      playerMinX: 90,
+      // can't be pushed / retreat past this
+      cornerX: 100,
+      // at or behind this = CORNERED
+      cornerSlipMult: 0.6,
+      // slip windows tighten to 60% when cornered
+      enemyRopeX: 560,
+      // knockback can't carry an enemy past its ropes
+      enemyPostX: 606,
+      playerMaxX: 420,
+      // pressing forward can take you to reach of those ropes
+      pinFrames: 75,
+      // an enemy driven into its ropes stays pinned
+      bounceDmgMult: 1.35,
+      // counter-charged hit on a pinned enemy
+      bounceHitstop: 10,
+      liveWireShock: { damage: 6, every: 45 }
+    },
+    // --- v17 PUNCH STRINGS -------------------------------------------------------
+    // Selected enemies throw 2-3 hit strings. Every hit re-targets your lane and
+    // gets its own full telegraph from getSlipThresholds (the single source of
+    // truth), so a string is a sequence of reads, not one read and a surprise.
+    PUNCH_STRINGS: {
+      types: ["grunt", "assassin"],
+      chanceByArc: { 1: 0, 2: 0.3, 3: 0.4, 4: 0.5, 5: 0.6 },
+      lenByArc: { 1: 2, 2: 2, 3: 2, 4: 3, 5: 3 },
+      gap: 28
+      // frames between string hits (> red telegraph lead)
+    },
+    // --- v17 TEN-COUNT (player only) ----------------------------------------------
+    KNOCKDOWN: {
+      framesPerCount: 50,
+      // 10 counts ~ 8.3s
+      promptsByArc: { 1: 3, 2: 4, 3: 5, 4: 5, 5: 5 },
+      beatFrames: 34,
+      windowEarly: 14,
+      windowLate: 12,
+      getUpHpFrac: 0.5,
+      invulnFrames: 90
+    },
+    // --- v17 INSTINCT ZONE ---------------------------------------------------------
+    // A Perfect Slip with a FULL Instinct meter drops the world into slow-mo with a
+    // colour-inverted screen (screen effect only). Enemies tick every `enemyTick`
+    // frames while the Striker moves at full speed.
+    ZONE: { frames: 180, enemyTick: 2 },
+    // --- v17 BOSS BILLING (title-fight posters) ----------------------------------
+    BOSS_BILLING: {
+      neon_enforcer: { tagline: "THE ARMORED LAW" },
+      phantom_boxer: { tagline: "THE MAN WHO ISN\u2019T THERE" },
+      static_monk: { tagline: "THE STATIC SAINT" },
+      live_wire: { tagline: "THE CURRENT CHAMPION" },
+      negative: { tagline: "YOUR OWN WORST ENEMY" }
+    },
     // --- BOSS STAGGER + FINISHER (v16) ---
     // Raw hits deal full damage. Crossing 66% and 33% HP staggers the boss into an
     // authored Finisher; the killing blow opens a final KO Finisher. Prompts are on a
@@ -299,6 +431,17 @@
           break1: ["down", "up", "cross", "jab"],
           break2: ["up", "hook", "down", "down", "cross"],
           ko: ["jab", "down", "up", "up", "hook", "cross"]
+        },
+        // Corner reversal: you spin him into his own electrified wires.
+        live_wire: {
+          break1: ["jab", "hook", "down", "cross"],
+          break2: ["up", "cross", "cross", "down", "hook"],
+          ko: ["hook", "up", "cross", "down", "down", "cross"]
+        },
+        negative: {
+          break1: ["down", "cross", "up", "jab"],
+          break2: ["jab", "up", "hook", "down", "cross"],
+          ko: ["up", "down", "down", "up", "jab", "cross"]
         }
       }
     },
@@ -518,7 +661,7 @@
     statFinisherHits: 0,
     statFinishersClean: 0,
     tutorialEnabled: true,
-    seenTutorials: { shield: false, slip: false, guard: false, instinct: false, counter: false, ghost_step: false, bruiser_id: false, assassin_id: false, footwork_tip: false },
+    seenTutorials: { shield: false, slip: false, guard: false, instinct: false, counter: false, ghost_step: false, bruiser_id: false, assassin_id: false, string_id: false, footwork_tip: false },
     tutorialGrace: 0,
     tutorialDelay: 0,
     purifyTimer: 0,
@@ -543,7 +686,7 @@
     keys: {},
     lastKeys: {},
     lastGamepadState: { buttons: [], axes: [] },
-    pad: { up: false, down: false, left: false, guard: false, jab: false, cross: false, hook: false, instinct: false, pause: false },
+    pad: { up: false, down: false, ghost: false, leftHeld: false, rightHeld: false, guard: false, jab: false, cross: false, crossHeld: false, hook: false, instinct: false, pause: false },
     audioCtx: null,
     audioEnabled: false,
     audioMuted: false,
@@ -565,6 +708,61 @@
   // src/systems/settings.js
   var SETTINGS_KEY = "neon_strike_settings_v1";
   var PROFILE_KEY = "neon_strike_profile_v1";
+  var DEFAULT_BINDS = Object.freeze({
+    up: "ArrowUp",
+    down: "ArrowDown",
+    left: "ArrowLeft",
+    right: "ArrowRight",
+    jab: "KeyA",
+    cross: "KeyS",
+    hook: "KeyD",
+    guard: "KeyW",
+    ghost: "ShiftLeft",
+    instinct: "Space"
+  });
+  var BIND_LABELS = {
+    up: "Slip Up",
+    down: "Slip Down",
+    left: "Give Ground",
+    right: "Press Forward",
+    jab: "Jab",
+    cross: "Cross",
+    hook: "Hook",
+    guard: "Guard",
+    ghost: "Ghost Step",
+    instinct: "Instinct"
+  };
+  var RESERVED_KEYS = ["Escape", "KeyP", "KeyM", "KeyH", "Enter", "Tab", "Digit1", "Digit2", "Digit3", "KeyQ", "KeyE", "KeyR"];
+  function keyLabel(code) {
+    if (!code) return "\u2014";
+    const named = { ArrowUp: "\u2191", ArrowDown: "\u2193", ArrowLeft: "\u2190", ArrowRight: "\u2192", Space: "SPACE", ShiftLeft: "L-SHIFT", ShiftRight: "R-SHIFT", ControlLeft: "L-CTRL", ControlRight: "R-CTRL", AltLeft: "L-ALT", AltRight: "R-ALT" };
+    if (named[code]) return named[code];
+    return code.replace(/^Key/, "").replace(/^Digit/, "").replace(/^Numpad/, "NUM ").toUpperCase();
+  }
+  function sanitizeBinds(raw) {
+    const actions = Object.keys(DEFAULT_BINDS);
+    const out = {};
+    const valid = (c) => typeof c === "string" && c.length > 0 && c.length < 32 && !RESERVED_KEYS.includes(c);
+    const used = /* @__PURE__ */ new Set();
+    if (raw && typeof raw === "object") {
+      for (const a of actions) if (valid(raw[a]) && !used.has(raw[a])) {
+        out[a] = raw[a];
+        used.add(raw[a]);
+      }
+    }
+    for (const a of actions) {
+      if (out[a]) continue;
+      let code = DEFAULT_BINDS[a];
+      for (let guard = 0; used.has(code) && guard < actions.length; guard++) {
+        const taker = actions.find((x) => out[x] === code);
+        code = taker ? DEFAULT_BINDS[taker] : null;
+      }
+      if (!code || used.has(code)) code = actions.map((x) => DEFAULT_BINDS[x]).find((c) => !used.has(c));
+      out[a] = code;
+      used.add(code);
+    }
+    return out;
+  }
   var SETTINGS_DEFAULTS = Object.freeze({
     masterVolume: 0.8,
     musicVolume: 0.55,
@@ -597,10 +795,11 @@
     return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : d;
   };
   function sanitizeSettings(raw) {
-    const out = { ...SETTINGS_DEFAULTS };
+    const out = { ...SETTINGS_DEFAULTS, binds: { ...DEFAULT_BINDS } };
     if (!raw || typeof raw !== "object") return out;
     for (const k of UNIT_KEYS) if (k in raw) out[k] = clamp01(raw[k], SETTINGS_DEFAULTS[k]);
     for (const k of BOOL_KEYS) if (k in raw) out[k] = raw[k] === true;
+    out.binds = sanitizeBinds(raw.binds);
     return out;
   }
   var current = sanitizeSettings(safeGet(SETTINGS_KEY));
@@ -608,8 +807,27 @@
   function getSettings() {
     return current;
   }
+  function getBinds() {
+    return current.binds || DEFAULT_BINDS;
+  }
+  function keyName(action) {
+    return keyLabel(getBinds()[action]);
+  }
+  function rebind(action, code) {
+    if (!(action in DEFAULT_BINDS) || RESERVED_KEYS.includes(code)) return false;
+    const binds = { ...getBinds() };
+    const prev = binds[action];
+    const other = Object.keys(binds).find((a) => a !== action && binds[a] === code);
+    if (other) binds[other] = prev;
+    binds[action] = code;
+    setSetting("binds", binds);
+    return true;
+  }
+  function resetBinds() {
+    setSetting("binds", { ...DEFAULT_BINDS });
+  }
   function setSetting(key, value) {
-    if (!(key in SETTINGS_DEFAULTS)) return current;
+    if (!(key in SETTINGS_DEFAULTS) && key !== "binds") return current;
     current = sanitizeSettings({ ...current, [key]: value });
     safeSet(SETTINGS_KEY, current);
     applySettingsSideEffects();
@@ -828,6 +1046,61 @@
         t = 0.6;
         v1 = 0.05;
         v2 = 1e-3;
+      } else if (type === "bell") {
+        for (const at of [0, 0.32]) [[880, 0.16], [2270, 0.07], [3990, 0.04], [5390, 0.025]].forEach(([f, v]) => tone("sine", f, f * 0.998, 1.4, v, 5e-4, at));
+        return;
+      } else if (type === "ref_count") {
+        sq = "triangle";
+        f1 = 330;
+        f2 = 320;
+        t = 0.12;
+        v1 = 0.12;
+      } else if (type === "ref_count_hi") {
+        sq = "triangle";
+        f1 = 520;
+        f2 = 500;
+        t = 0.14;
+        v1 = 0.16;
+      } else if (type === "knockdown") {
+        tone("square", 120, 30, 0.6, 0.3, 0.01);
+        tone("sine", 60, 25, 0.8, 0.4, 0.01);
+        return;
+      } else if (type === "rope_buzz") {
+        sq = "sawtooth";
+        f1 = 58;
+        f2 = 62;
+        t = 0.18;
+        v1 = 0.05;
+        v2 = 0.01;
+      } else if (type === "rope_thud") {
+        tone("sine", 90, 40, 0.3, 0.3, 0.01);
+        tone("triangle", 180, 60, 0.25, 0.08, 1e-3);
+        return;
+      } else if (type === "rope_bounce") {
+        tone("sine", 70, 180, 0.2, 0.3, 0.01);
+        tone("square", 900, 200, 0.2, 0.08, 1e-3);
+        return;
+      } else if (type === "shock") {
+        tone("sawtooth", 1200, 90, 0.35, 0.12, 1e-3);
+        tone("square", 60, 58, 0.35, 0.1, 0.01);
+        return;
+      } else if (type === "zone") {
+        tone("sine", 110, 55, 1.2, 0.25, 1e-3);
+        tone("triangle", 1760, 440, 0.8, 0.06, 1e-3);
+        return;
+      } else if (type === "charge_ready") {
+        sq = "triangle";
+        f1 = 700;
+        f2 = 1400;
+        t = 0.12;
+        v1 = 0.08;
+      } else if (type === "orb") {
+        sq = "sine";
+        f1 = 1500 + Math.random() * 300;
+        f2 = 2400;
+        t = 0.08;
+        v1 = 0.04;
+        v2 = 1e-3;
       }
       tone(sq, f1, f2, t, v1, v2);
     } catch (e) {
@@ -977,6 +1250,7 @@
     playSound("shatter");
   }
   function updateParticlesAndTrails() {
+    updateKoFx();
     for (let i = gameState.particles.length - 1; i >= 0; i--) {
       gameState.particles[i].x += gameState.particles[i].vx;
       gameState.particles[i].y += gameState.particles[i].vy;
@@ -1011,6 +1285,56 @@
       }
     }
   }
+  function createKoShatter(en) {
+    if (!gameState.koFx) gameState.koFx = [];
+    if (gameState.koFx.length > 14) gameState.koFx.shift();
+    const cx = en.x + (en.w || 50) / 2, cy = en.y - (en.h || 110) * 0.55;
+    const shards = [];
+    const n = en.isBoss ? 28 : 14;
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2, sp = 3 + Math.random() * 7;
+      shards.push({ x: cx + (Math.random() - 0.5) * 30, y: cy + (Math.random() - 0.5) * 70, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 2, rot: Math.random() * 6, rv: (Math.random() - 0.5) * 0.4, size: 4 + Math.random() * 7 });
+    }
+    gameState.koFx.push({ shards, color: en.color || "#ff0055", cx, cy, t: 0, orb: null, big: !!en.isBoss });
+    playSound("shatter");
+  }
+  function updateKoFx() {
+    if (!gameState.koFx || !gameState.koFx.length) return;
+    const p = gameState.player;
+    for (const fx of gameState.koFx) {
+      fx.t++;
+      if (fx.t < 14) {
+        fx.shards.forEach((s) => {
+          s.x += s.vx;
+          s.y += s.vy;
+          s.vx *= 0.9;
+          s.vy *= 0.9;
+          s.rot += s.rv;
+        });
+      } else if (!fx.orb) {
+        fx.shards.forEach((s) => {
+          s.x += (fx.cx - s.x) * 0.22;
+          s.y += (fx.cy - s.y) * 0.22;
+          s.rot += s.rv * 2;
+        });
+        if (fx.t >= 26) fx.orb = { x: fx.cx, y: fx.cy, vx: 0, vy: -3, life: 1 };
+      } else {
+        const o = fx.orb, tx = p ? p.x + 25 : 180, ty = p ? p.y - 70 : 300;
+        const dx = tx - o.x, dy = ty - o.y, d = Math.hypot(dx, dy) || 1;
+        o.vx = o.vx * 0.82 + dx / d * 2.6;
+        o.vy = o.vy * 0.82 + dy / d * 2.6;
+        o.x += o.vx;
+        o.y += o.vy;
+        if (d < 26 || fx.t > 110) {
+          fx.done = true;
+          gameState.orbPulse = 12;
+          playSound("orb");
+        }
+      }
+    }
+    gameState.koFx = gameState.koFx.filter((fx) => !fx.done);
+    if (gameState.orbPulse > 0) gameState.orbPulse--;
+  }
 
   // src/systems/score.js
   var SC = CONSTANTS.SCORE;
@@ -1044,11 +1368,11 @@
     return SC.kill[type] || SC.kill.grunt;
   }
   function rankForRun({ score, slips = 0, bossKills = 0 }) {
-    const R = SC.rank;
+    const R2 = SC.rank;
     let grade = "C";
-    if (score >= R.S) grade = "S";
-    else if (score >= R.A) grade = "A";
-    else if (score >= R.B) grade = "B";
+    if (score >= R2.S) grade = "S";
+    else if (score >= R2.A) grade = "A";
+    else if (score >= R2.B) grade = "B";
     const reqSlipsForS = Math.max(1, Math.min(bossKills, 3));
     if (grade === "S" && slips < reqSlipsForS) grade = "A";
     if (grade === "A" && slips < 1) grade = "B";
@@ -1133,7 +1457,7 @@
     if (gameState.lastHUD.wager !== key) {
       const m = $("score-mult");
       if (m) {
-        m.innerText = `\xD7${cm.toFixed(2)} COMBO`;
+        m.innerText = `\xD7${cm.toFixed(2)}`;
         m.classList.toggle("hot", cm > 1);
       }
       const w = $("wager-badge");
@@ -1171,15 +1495,1515 @@
       HUD.instinctBar.style.width = roundInstinct + "%";
       gameState.lastHUD.instinct = roundInstinct;
     }
-    let displayHP = Math.max(0, gameState.health);
+    let displayHP = Math.max(0, Math.round(gameState.health));
     if (gameState.lastHUD.hp !== displayHP) {
-      HUD.health.innerText = `HP: ${displayHP}`;
+      HUD.health.innerText = `${displayHP}`;
       gameState.lastHUD.hp = displayHP;
+      const bar = $("hp-bar");
+      if (bar) {
+        const pct = Math.max(0, Math.min(100, displayHP / (gameState.maxHealth || 100) * 100));
+        bar.style.width = pct + "%";
+        bar.classList.toggle("low", pct <= 25);
+      }
     }
     if (gameState.player && gameState.lastHUD.slipBuff !== gameState.player.slipBuff) {
-      HUD.counterStatus.innerText = gameState.player.slipBuff > 0 ? "READY" : "INACTIVE";
+      HUD.counterStatus.innerText = gameState.player.slipBuff > 0 ? gameState.player.slipBuff > 1 ? "READY \xD72" : "READY" : "\u2014";
+      if (HUD.counterHud) HUD.counterHud.classList.toggle("ready", gameState.player.slipBuff > 0);
       gameState.lastHUD.slipBuff = gameState.player.slipBuff;
     }
+    if (HUD.expBar) HUD.expBar.classList.toggle("pulse", (gameState.orbPulse || 0) > 6);
+  }
+
+  // src/render/boxer.js
+  function silhouetteOf(entity, isPlayer) {
+    if (entity.shape) return entity.shape;
+    if (isPlayer) return "striker";
+    if (entity.controller === "neon_enforcer") return "shield";
+    if (entity.controller === "phantom_boxer") return "assassin";
+    if (entity.controller === "static_monk") return "zoner";
+    if (entity.controller === "live_wire") return "live_wire";
+    if (entity.controller === "negative") return "negative";
+    return entity.type || "grunt";
+  }
+  function drawHead(ctx3, shape, x, y, r, d, fill, stroke) {
+    ctx3.save();
+    ctx3.fillStyle = fill;
+    ctx3.strokeStyle = stroke;
+    ctx3.beginPath();
+    if (shape === "shield") {
+      const w = r * 2, h = r * 2.1;
+      ctx3.roundRect ? ctx3.roundRect(x - w / 2, y - h / 2, w, h, r * 0.45) : ctx3.rect(x - w / 2, y - h / 2, w, h);
+      ctx3.fill();
+      ctx3.fillStyle = "#000";
+      ctx3.fillRect(x - r * 0.1 * d - (d > 0 ? 0 : r * 0.8), y - r * 0.25, r * 0.9, r * 0.35);
+    } else if (shape === "bruiser" || shape === "live_wire") {
+      const w = r * 2.5, h = r * 1.9;
+      ctx3.moveTo(x - w / 2, y - h / 2);
+      ctx3.lineTo(x + w / 2, y - h / 2);
+      ctx3.lineTo(x + w / 2 * 0.85, y + h / 2);
+      ctx3.lineTo(x - w / 2 * 0.85, y + h / 2);
+      ctx3.closePath();
+      ctx3.fill();
+      if (shape === "live_wire") {
+        ctx3.strokeStyle = "#fff36b";
+        ctx3.lineWidth = 3;
+        for (const sx of [-0.55, 0.55]) {
+          const bx = x + sx * w * 0.5;
+          ctx3.beginPath();
+          ctx3.moveTo(bx, y - h / 2);
+          ctx3.lineTo(bx - 5, y - h / 2 - 9);
+          ctx3.lineTo(bx + 4, y - h / 2 - 12);
+          ctx3.lineTo(bx - 2, y - h / 2 - 22);
+          ctx3.stroke();
+        }
+      }
+    } else if (shape === "assassin") {
+      ctx3.arc(x, y + 2, r * 0.95, 0, Math.PI * 2);
+      ctx3.fill();
+      ctx3.beginPath();
+      ctx3.moveTo(x + r * 0.9 * d, y - r * 0.6);
+      ctx3.lineTo(x - r * 2.1 * d, y - r * 1.6);
+      ctx3.lineTo(x - r * 0.6 * d, y + r * 0.6);
+      ctx3.closePath();
+      ctx3.fill();
+    } else if (shape === "zoner") {
+      ctx3.arc(x, y, r * 0.9, 0, Math.PI * 2);
+      ctx3.fill();
+      ctx3.lineWidth = 3;
+      ctx3.beginPath();
+      ctx3.ellipse(x, y - r * 1.7, r * 1.3, r * 0.4, 0, 0, Math.PI * 2);
+      ctx3.stroke();
+    } else if (shape === "negative") {
+      const n = 6;
+      for (let i = 0; i <= n * 2; i++) {
+        const a = -Math.PI / 2 + i * Math.PI / n, rr = i % 2 === 0 ? r * 1.55 : r * 0.9;
+        const px = x + Math.cos(a) * rr, py = y + Math.sin(a) * rr;
+        if (i === 0) ctx3.moveTo(px, py);
+        else ctx3.lineTo(px, py);
+      }
+      ctx3.closePath();
+      ctx3.fillStyle = "#000";
+      ctx3.fill();
+      ctx3.lineWidth = 3;
+      ctx3.stroke();
+    } else {
+      ctx3.arc(x, y, r, 0, Math.PI * 2);
+      ctx3.fill();
+    }
+    ctx3.restore();
+  }
+  function drawBoxer(ctx3, entity, isPlayer, opacity = 1, isTrail = false) {
+    const dl2 = (x1, y1, x2, y2) => {
+      ctx3.beginPath();
+      ctx3.moveTo(x1, y1);
+      ctx3.lineTo(x2, y2);
+      ctx3.stroke();
+    };
+    const dc = (x, y, r, f, s) => {
+      ctx3.beginPath();
+      ctx3.arc(x, y, r, 0, Math.PI * 2);
+      if (f) ctx3.fill();
+      if (s) ctx3.stroke();
+    };
+    const d = entity.facing !== void 0 ? entity.facing : isPlayer ? 1 : -1;
+    const shape = silhouetteOf(entity, isPlayer);
+    const bS = entity.isBoss ? 1.5 : entity.type === "bruiser" ? 1.3 : 1;
+    let t = Date.now(), bn = 0, br = 0;
+    if (entity.state === "idle" || !isPlayer && entity.stun <= 0) {
+      bn = Math.sin(t * 5e-3 + entity.x) * 3;
+      br = Math.sin(t * 3e-3 + entity.x) * 2;
+    }
+    if (isPlayer && entity.state === "hurt") bn -= 10;
+    let h = entity.h * (entity.isBoss ? 1 : 0.8) + br;
+    const w = entity.w;
+    const hS = 12 * bS, gS = 10 * bS;
+    let rX = entity.x + w / 2, rY = entity.y;
+    if (!isTrail) {
+      ctx3.fillStyle = "rgba(0,0,0,0.7)";
+      ctx3.beginPath();
+      ctx3.ellipse(rX, rY, w * 0.6 * bS, 6 * bS, 0, 0, Math.PI * 2);
+      ctx3.fill();
+    }
+    let pL = 0;
+    if (!isPlayer && entity.stun <= 0 && entity.attackCooldown >= 15) {
+      if (entity.type === "assassin") pL = 20 * d;
+      if (entity.type === "zoner") pL = -10 * d;
+      if (entity.type === "shield") pL = -5 * d;
+      if (entity.type === "bruiser") {
+        h *= 0.85;
+        pL = 15 * d;
+      }
+    }
+    let hY = rY - h * 0.2 + bn, nY = rY - h * 0.75 + bn, hdY = rY - h * 0.85 + bn;
+    if (!isPlayer && entity.type === "bruiser") hdY += 10;
+    if (!isPlayer && entity.type === "assassin") hdY += 5;
+    let lX = pL;
+    if (isPlayer && gameState.player.slipCooldown > 15) lX += 15 * d;
+    if (isPlayer && entity.state === "ghost_step") {
+      let sn = entity.ghostStepTimer > 10 ? (14 - entity.ghostStepTimer) / 4 : entity.ghostStepTimer / 10;
+      opacity *= 0.3 + (1 - sn) * 0.7;
+      lX -= 35 * sn * d;
+    } else if (isPlayer && entity.state === "hurt") {
+      lX -= 25 * d;
+    }
+    let sL = 0;
+    if (entity.stun > 0) sL = -15 * d;
+    lX += sL;
+    let lg1X, lg2X;
+    if (isPlayer && entity.walking) {
+      const wc = Math.sin(t * 0.018) * 16;
+      lg1X = wc * d;
+      lg2X = -wc * d;
+      bn += Math.abs(Math.sin(t * 0.018)) * -3;
+    } else if (isPlayer) {
+      lg1X = 15 * d;
+      lg2X = -10 * d;
+    } else {
+      let wP = 0;
+      if (entity.stun <= 0 && entity.attackCooldown >= 15 && (!entity.isBoss || entity.currentMove !== "feint")) wP = entity.x * 0.08;
+      lg1X = Math.sin(wP) * 15 * d;
+      lg2X = Math.sin(wP + Math.PI) * 15 * d;
+    }
+    let dC = entity.color, isCounterReady = false;
+    if (isPlayer) {
+      dC = entity.state === "hurt" ? "#ff0000" : gameState.strikerColor || "#00ffff";
+      if (isTrail) dC = "#ffffff";
+      else if (!isTrail && gameState.player.slipBuff > 0) isCounterReady = true;
+    }
+    if (!isPlayer && entity.shiftWarning > 0) dC = Math.floor(Date.now() / 50) % 2 === 0 ? "#ffffff" : "#aa00ff";
+    if (!isPlayer && entity.isActiveThreat) {
+      let pT = entity.type === "zoner" ? 10 : 8;
+      if (entity.attackCooldown > 0 && entity.attackCooldown <= pT) dC = "#ffffff";
+    }
+    if (entity.overrideColor) dC = entity.overrideColor;
+    ctx3.globalAlpha = opacity;
+    ctx3.strokeStyle = dC;
+    ctx3.lineWidth = (entity.type === "bruiser" ? 12 : 8) * bS;
+    ctx3.lineCap = "round";
+    ctx3.lineJoin = "round";
+    if (!isPlayer && entity.isBoss && entity.exposedTimer > 0) {
+      ctx3.save();
+      ctx3.strokeStyle = Math.floor(Date.now() / 50) % 2 === 0 ? "#00ffff" : "#ffffff";
+      ctx3.lineWidth = 2;
+      ctx3.beginPath();
+      ctx3.arc(rX + lX, nY, 30 + Math.sin(Date.now() * 0.01) * 5, 0, Math.PI * 2);
+      ctx3.stroke();
+      ctx3.restore();
+    }
+    dl2(rX + lX, hY, rX + lg1X, rY);
+    dl2(rX + lX, hY, rX + lg2X, rY);
+    let sX = rX + (entity.type === "bruiser" ? 10 * d : 5 * d) + lX;
+    dl2(rX + lX, hY, sX, nY);
+    if (shape === "bruiser" || shape === "live_wire") {
+      ctx3.save();
+      ctx3.lineWidth = 6 * bS;
+      dl2(sX - 22 * d, nY + 4, sX + 18 * d, nY + 2);
+      ctx3.restore();
+    }
+    if (shape === "assassin") {
+      ctx3.save();
+      ctx3.lineWidth = 3;
+      const wv = Math.sin(t * 0.012 + entity.x) * 6;
+      ctx3.beginPath();
+      ctx3.moveTo(sX, nY - 4);
+      ctx3.quadraticCurveTo(sX - 26 * d, nY - 8 + wv, sX - 48 * d, nY + 4 - wv);
+      ctx3.stroke();
+      ctx3.restore();
+    }
+    if (shape === "negative") {
+      ctx3.save();
+      ctx3.lineWidth = 3;
+      ctx3.beginPath();
+      ctx3.moveTo(sX - 12 * d, nY);
+      ctx3.lineTo(sX - 20 * d, nY - 18);
+      ctx3.lineTo(sX - 6 * d, nY - 4);
+      ctx3.moveTo(sX + 10 * d, nY);
+      ctx3.lineTo(sX + 18 * d, nY - 16);
+      ctx3.lineTo(sX + 4 * d, nY - 4);
+      ctx3.stroke();
+      ctx3.restore();
+    }
+    drawHead(ctx3, shape, sX + 3 * d, hdY, hS, d, entity.stun > 0 ? "#fff" : dC, dC);
+    if (isPlayer && !isTrail) {
+      let eC = "#ff00ff", fF = Math.sin(Date.now() * 0.02) * 3;
+      ctx3.save();
+      if (gameState.player.dangerLevel === 1) {
+        ctx3.strokeStyle = `rgba(0,255,255,${0.4 + Math.sin(t * 0.02) * 0.3})`;
+        ctx3.lineWidth = 2;
+        dc(sX + 3 * d, hdY, hS + 6, false, true);
+      } else if (gameState.player.dangerLevel === 2) {
+        ctx3.strokeStyle = "#ffffff";
+        ctx3.lineWidth = 3;
+        ctx3.beginPath();
+        for (let i = 0; i < 5; i++) {
+          let a = Math.PI + i * Math.PI / 4 - Math.PI / 2;
+          if (d < 0) a = -a;
+          let r1 = hS + 2, r2 = hS + 12 + Math.random() * 5;
+          ctx3.moveTo(sX + 3 * d + Math.cos(a) * r1, hdY + Math.sin(a) * r1);
+          ctx3.lineTo(sX + 3 * d + Math.cos(a) * r2, hdY + Math.sin(a) * r2);
+        }
+        ctx3.stroke();
+      }
+      ctx3.fillStyle = "#fff";
+      ctx3.beginPath();
+      ctx3.ellipse(sX + 5 * d, hdY - 3, 5, 2, Math.PI / 8 * d, 0, Math.PI * 2);
+      ctx3.fill();
+      ctx3.fillStyle = eC;
+      ctx3.globalAlpha = 0.8;
+      ctx3.beginPath();
+      ctx3.moveTo(sX + 5 * d, hdY - 4);
+      ctx3.quadraticCurveTo(sX - 1 * d, hdY - 8 + fF, sX - 11 * d, hdY - 6 + fF);
+      ctx3.quadraticCurveTo(sX + 1 * d, hdY - 1, sX + 5 * d, hdY - 2);
+      ctx3.fill();
+      ctx3.restore();
+    }
+    let ldX = sX + 20 * d, ldY = nY + 10, rrX = sX - 10 * d, rrY = nY - 5;
+    if (isPlayer && (entity.state === "recovery" || entity.state === "ghost_step" || entity.state === "hurt")) {
+      ldX += 15 * d;
+      rrX += 5 * d;
+      lX += 10 * d;
+    } else if (isPlayer && entity.state === "punching") {
+      let iH = entity.hitFrame <= 2 || entity.didHit, ex = iH ? 1 : 0.4, iJ = entity.punchType && entity.punchType.startsWith("jab");
+      if (iJ) {
+        if (entity.punchType === "jab2") {
+          rrX += 50 * ex * d;
+          sX += 15 * d;
+        } else if (entity.punchType === "jab3") {
+          ldX += 60 * ex * d;
+          ldY -= 10 * ex;
+          lX += 10 * d;
+        } else ldX += 50 * ex * d;
+      } else if (entity.punchType === "guard_jab") {
+        ldX += 40 * ex * d;
+        rrX = sX + 15 * d;
+        rrY = nY - 5;
+      } else if (entity.punchType === "check_hook") {
+        ldX = sX + 10 * d;
+        ldY = nY - 15;
+        rrX += 30 * ex * d;
+        rrY -= 15 * ex;
+      } else if (entity.punchType === "cross") {
+        let rM = gameState.orbCounts.power >= 2 ? 1.25 : 1;
+        rrX += 90 * rM * ex * d;
+        ldX -= 15 * d;
+        sX += 10 * d;
+      } else if (entity.punchType === "hook") {
+        ldX += 40 * ex * d;
+        ldY -= 30 * ex;
+        rrX -= 10 * d;
+      }
+    } else if (isPlayer && entity.state === "guarding") {
+      ldX = sX + 10 * d;
+      ldY = nY - 15;
+      rrX = sX + 15 * d;
+      rrY = nY - 5;
+    } else if (!isPlayer && entity.isBoss && entity.stun <= 0 && (entity.recoverTimer > 0 || entity.currentMove === "recharge")) {
+      ldX = sX + 12 * d;
+      ldY = nY + 38;
+      rrX = sX - 6 * d;
+      rrY = nY + 34;
+    } else if (!isPlayer && entity.stun <= 0) {
+      if (entity.justAttacked > 0) {
+        if (entity.currentMove === "bash" || entity.type === "shield" || entity.type === "bruiser") {
+          rrX += 60 * d;
+          sX += 10 * d;
+        } else if (entity.type !== "zoner") ldX += 50 * d;
+      } else if (entity.attackCooldown < 15 && entity.attackCooldown >= 0) {
+        let wp = 1 - entity.attackCooldown / 15;
+        if (entity.currentMove === "bash" || entity.type === "shield" || entity.type === "bruiser") {
+          rrX -= 30 * wp * d;
+          rrY -= 20 * wp;
+        } else if (entity.type !== "zoner") ldX -= 20 * wp * d;
+      } else {
+        if (entity.type === "shield") {
+          ldX = sX + 5 * d;
+          ldY = nY - 10;
+          rrX = sX - 5 * d;
+          rrY = nY - 5;
+        } else if (entity.type === "zoner") {
+          ldX = sX + 35 * d;
+          ldY = nY;
+          rrX = sX - 10 * d;
+          rrY = nY + 10;
+        } else if (entity.type === "assassin") {
+          ldX = sX + 15 * d;
+          ldY = nY + 20;
+          rrX = sX - 5 * d;
+          rrY = nY + 15;
+        } else {
+          ldX = sX + 15 * d;
+          ldY = nY + 10;
+          rrX = sX - 5 * d;
+          rrY = nY + 5;
+        }
+      }
+    } else if (entity.stun > 0) {
+      ldX = sX - 10 * d;
+      ldY = nY - 30;
+      rrX = sX - 20 * d;
+      rrY = nY - 20;
+    }
+    if (isPlayer && !isTrail && entity.trailColor && entity.state === "punching") {
+      const fx = entity.punchType === "cross" || entity.punchType === "jab2" ? rrX : ldX;
+      const fy = entity.punchType === "cross" || entity.punchType === "jab2" ? rrY : ldY;
+      const heat = entity.trailHeat === void 0 ? 1 : entity.trailHeat;
+      const g = ctx3.createLinearGradient(sX - 30 * d, nY, fx, fy);
+      g.addColorStop(0, "rgba(0,0,0,0)");
+      g.addColorStop(1, entity.trailColor);
+      ctx3.save();
+      ctx3.globalAlpha = opacity * 0.85 * heat;
+      ctx3.strokeStyle = g;
+      ctx3.lineWidth = 16 * bS;
+      ctx3.lineCap = "round";
+      ctx3.shadowColor = entity.trailColor;
+      ctx3.shadowBlur = 18;
+      dl2(sX - 30 * d, nY + 2, fx - 6 * d, fy);
+      ctx3.restore();
+      ctx3.strokeStyle = dC;
+      entity.glovePositions = [[ldX, ldY], [rrX, rrY]];
+    }
+    if (shape === "shield" && entity.stun <= 0 && !entity.recoverTimer) {
+      ctx3.save();
+      ctx3.globalAlpha = opacity * 0.35;
+      ctx3.fillStyle = dC;
+      const sx0 = sX + 24 * d - (d > 0 ? 0 : 12 * bS);
+      ctx3.fillRect(sx0, nY - 22 * bS, 12 * bS, hY - nY + 40 * bS);
+      ctx3.globalAlpha = opacity;
+      ctx3.lineWidth = 2;
+      ctx3.strokeRect(sx0, nY - 22 * bS, 12 * bS, hY - nY + 40 * bS);
+      ctx3.restore();
+    }
+    ctx3.lineWidth = 4 * bS;
+    dl2(sX, nY, rrX, rrY);
+    ctx3.fillStyle = dC;
+    dc(rrX, rrY, gS, true, false);
+    ctx3.beginPath();
+    ctx3.moveTo(sX, nY);
+    if (isPlayer && entity.punchType === "hook" && entity.state === "punching") ctx3.quadraticCurveTo(sX + 30 * d, nY - 20, ldX, ldY);
+    else ctx3.lineTo(ldX, ldY);
+    ctx3.stroke();
+    ctx3.fillStyle = dC;
+    dc(ldX, ldY, gS, true, false);
+    if (shape === "zoner") {
+      ctx3.save();
+      ctx3.lineWidth = 9 * bS;
+      ctx3.lineCap = "butt";
+      dl2(ldX - 6 * d, ldY, ldX + 20 * d, ldY);
+      ctx3.fillStyle = "#fff";
+      dc(ldX + 21 * d, ldY, 3, true, false);
+      ctx3.restore();
+    }
+    if (shape === "live_wire") {
+      ctx3.save();
+      ctx3.strokeStyle = "#fff36b";
+      ctx3.lineWidth = 2;
+      for (const [ax, ay] of [[ldX, ldY], [rrX, rrY]]) {
+        ctx3.beginPath();
+        ctx3.moveTo(sX, nY);
+        const mx = (sX + ax) / 2, my = (nY + ay) / 2;
+        ctx3.lineTo(mx - 5, my - 6);
+        ctx3.lineTo(mx + 5, my + 4);
+        ctx3.lineTo(ax, ay);
+        ctx3.stroke();
+      }
+      ctx3.restore();
+    }
+    if (isPlayer && !isTrail && isCounterReady) {
+      let cP = Math.sin(Date.now() * 0.02) * 2;
+      ctx3.save();
+      ctx3.strokeStyle = "#ffffff";
+      ctx3.lineWidth = 2;
+      dc(rrX, rrY, gS + 4 + cP, false, true);
+      dc(ldX, ldY, gS + 4 + cP, false, true);
+      ctx3.restore();
+    }
+    ctx3.globalAlpha = 1;
+  }
+
+  // src/systems/boss_rules.js
+  var BO = CONSTANTS.BOSS_OFFENSE;
+  function telegraphLead(en) {
+    const mult = en && en.arcMods && en.arcMods.punishWindowMult || 1;
+    return Math.max(BO.minTelegraphLead, Math.floor(BO.telegraphLead * mult));
+  }
+  function punishFrames(en, move) {
+    const mult = en && en.arcMods && en.arcMods.punishWindowMult || 1;
+    const base = BO.punishFrames[move] || BO.punishFrames.jab;
+    return Math.max(BO.minPunishFrames, Math.floor(base * mult));
+  }
+  function beginPunishWindow(en, move) {
+    const f = punishFrames(en, move);
+    en.recoverTimer = f;
+    en.recoverMax = f;
+    en.punishShown = false;
+    en.telegraphed = false;
+  }
+  function isBossOpen(en) {
+    if (!en || !en.isBoss) return false;
+    if ((en.recoverTimer || 0) > 0) return true;
+    return en.controller === "static_monk" && en.currentMove === "recharge";
+  }
+  function clampCycle(frames) {
+    return Math.max(BO.minTelegraphLead + 2, Math.round(frames));
+  }
+
+  // src/systems/finisher.js
+  var F = CONSTANTS.FINISHER;
+  var LANE_STEP = { up: -1, down: 1 };
+  function finisherSequence(controller, kind) {
+    const set = F.sequences[controller] || F.sequences.neon_enforcer;
+    return set[kind] || set.break1;
+  }
+  function gateBossDamage(en, dmg) {
+    if (!en || !en.isBoss || en.koDone || gameState.finisher || en.pendingFinisher) return dmg;
+    const stage = en.finisherStage || 0;
+    if (stage < F.thresholds.length) {
+      const line = en.maxHp * F.thresholds[stage];
+      if (en.hp - dmg <= line) {
+        en.finisherStage = stage + 1;
+        en.pendingFinisher = "break" + (stage + 1);
+        return Math.max(0, en.hp - line);
+      }
+    }
+    if (en.hp - dmg <= 0) {
+      en.pendingFinisher = "ko";
+      return Math.max(0, en.hp - 1);
+    }
+    return dmg;
+  }
+  function checkBossThresholds(en) {
+    if (!en || !en.isBoss || en.koDone || gameState.finisher || en.pendingFinisher) return;
+    const stage = en.finisherStage || 0;
+    if (en.hp <= 0) {
+      en.hp = 1;
+      en.pendingFinisher = "ko";
+      return;
+    }
+    if (stage < F.thresholds.length && en.hp <= en.maxHp * F.thresholds[stage]) {
+      en.finisherStage = stage + 1;
+      en.pendingFinisher = "break" + (stage + 1);
+    }
+  }
+  function startFinisher(en, kind) {
+    const seq = finisherSequence(en.controller, kind).slice();
+    let dmgPerHit = 0;
+    if (kind !== "ko") {
+      const nextStage = en.finisherStage || 0;
+      const floorFrac = nextStage < F.thresholds.length ? F.thresholds[nextStage] + 0.02 : 0.02;
+      const budget = Math.max(0, Math.min(en.maxHp * F.breakDamageFrac, en.hp - en.maxHp * floorFrac));
+      dmgPerHit = budget / seq.length;
+    }
+    gameState.finisher = {
+      boss: en,
+      kind,
+      seq,
+      idx: 0,
+      phase: "intro",
+      frame: 0,
+      timer: F.introFrames,
+      nextBeat: 0,
+      hits: 0,
+      perfects: 0,
+      result: null,
+      dmgPerHit,
+      zoom: 1,
+      bars: 0,
+      freeze: 0,
+      poseTimer: 0,
+      judge: null,
+      judgeTimer: 0,
+      jabAlt: false
+    };
+    const p = gameState.player;
+    p.state = "idle";
+    p.punchTimer = 0;
+    p.hitFrame = 0;
+    p.inputBuffer = null;
+    p.movementBuffer = null;
+    p.lane = 1;
+    p.x = Math.min(Math.max(p.x, 160), 300);
+    en.lane = 1;
+    en.x = p.x + 118;
+    en.vx = 0;
+    en.stun = 0;
+    if (en.controller === "live_wire") {
+      en.x = CONSTANTS.ROPES.playerPostX + 34;
+      en.facing = 1;
+      p.x = en.x + 118;
+      p.facing = -1;
+      spawnFloatingText(en.x + 20, en.y - 150, "CORNER REVERSAL!", "#fff36b");
+    }
+    en.recoverTimer = 0;
+    en.telegraphed = false;
+    en.shiftWarning = 0;
+    en.exposedTimer = 0;
+    en.decoyTimer = 0;
+    en.targetLanes = [];
+    en.justAttacked = 0;
+    gameState.hazards = [];
+    gameState.hitstop = 0;
+    const label = kind === "ko" ? "FINAL BLOW" : "STAGGERED!";
+    spawnFloatingText(en.x + en.w / 2, en.y - 190, label, kind === "ko" ? "#ff0055" : "#ffffff");
+    playSound("stagger");
+    doFlash(kind === "ko" ? 0.7 : 0.5);
+    triggerShockwave(en.x, en.y - 60, gameState.bossThemeColor || "#ffffff");
+    createShatter(en.x, en.y - 60, gameState.bossThemeColor || "#ffffff");
+    gameState.shake = Math.max(gameState.shake, 20);
+  }
+  function justPressed(code) {
+    return !!gameState.keys[code] && !gameState.lastKeys[code];
+  }
+  function readFinisherInput() {
+    const K2 = getBinds();
+    if (justPressed(K2.up) || gameState.pad.up) return "up";
+    if (justPressed(K2.down) || gameState.pad.down) return "down";
+    if (justPressed(K2.jab) || gameState.pad.jab) return "jab";
+    if (justPressed(K2.cross) || gameState.pad.cross) return "cross";
+    if (justPressed(K2.hook) || gameState.pad.hook) return "hook";
+    return null;
+  }
+  var ease = (t) => 1 - Math.pow(1 - Math.min(1, Math.max(0, t)), 3);
+  function judge(text, color) {
+    const f = gameState.finisher;
+    f.judge = { text, color };
+    f.judgeTimer = 34;
+  }
+  function landPrompt(isPerfect) {
+    const f = gameState.finisher, en = f.boss, p = gameState.player;
+    const move = f.seq[f.idx];
+    if (move in LANE_STEP) {
+      const old = { x: en.x, y: en.y };
+      p.lane += LANE_STEP[move];
+      p.slipCooldown = 20;
+      en.lane = p.lane;
+      en.y = gameState.height * CONSTANTS.LANE_Y[en.lane];
+      createShatter(old.x, old.y - 60, gameState.bossThemeColor || "#ffffff");
+      p.state = "punching";
+      p.punchType = "cross";
+      p.hitFrame = 0;
+      p.didHit = true;
+    } else {
+      p.state = "punching";
+      p.punchType = move === "jab" ? (f.jabAlt = !f.jabAlt) ? "jab1" : "jab2" : move;
+      p.hitFrame = 0;
+      p.didHit = true;
+    }
+    f.poseTimer = 12;
+    if (f.kind !== "ko") en.hp = Math.max(1, en.hp - f.dmgPerHit);
+    f.hits++;
+    gameState.statFinisherHits = (gameState.statFinisherHits || 0) + 1;
+    if (isPerfect) f.perfects++;
+    gameState.combo++;
+    if (gameState.combo > gameState.statMaxCombo) gameState.statMaxCombo = gameState.combo;
+    addScore(CONSTANTS.SCORE.finisherHit + (isPerfect ? CONSTANTS.SCORE.finisherPerfect : 0), en.x + en.w / 2, en.y - 150, { big: true });
+    judge(isPerfect ? "PERFECT" : "GREAT", isPerfect ? "#ffffff" : "#22d3ee");
+    playSound("finisher_hit");
+    doFlash(isPerfect ? 0.45 : 0.3);
+    gameState.shake = Math.max(gameState.shake, isPerfect ? 26 : 18);
+    triggerShockwave(en.x, en.y - 60, isPerfect ? "#ffffff" : gameState.bossThemeColor || "#ff0055");
+    createShatter(en.x, en.y - 70, isPerfect ? "#ffffff" : gameState.bossThemeColor || "#ff0055");
+    for (let i = 0; i < 3; i++) createImpact(en.x, en.y - 60 - i * 20, "#ffffff");
+    if (en.controller === "live_wire") {
+      createImpact(CONSTANTS.ROPES.playerPostX, en.y - 80, "#fff36b");
+      createImpact(CONSTANTS.ROPES.playerPostX, en.y - 40, "#fff36b");
+      playSound("shock");
+    }
+    f.freeze = hitStopEnabled() ? isPerfect ? 9 : 6 : 0;
+    f.idx++;
+    if (f.idx >= f.seq.length) endPrompts("clean");
+    else f.nextBeat += F.beatFrames;
+  }
+  function missPrompt(reason) {
+    judge(reason, "#ff8800");
+    playSound("finisher_miss");
+    endPrompts("broken");
+  }
+  function endPrompts(result) {
+    const f = gameState.finisher;
+    f.result = result;
+    f.phase = "outro";
+    f.timer = F.outroFrames;
+    const en = f.boss;
+    if (result === "clean") {
+      gameState.statFinishersClean = (gameState.statFinishersClean || 0) + 1;
+      addScore(CONSTANTS.SCORE.finisherClean, en.x + en.w / 2, en.y - 210, { big: true });
+      spawnFloatingText(en.x + en.w / 2, en.y - 230, f.kind === "ko" ? "FLAWLESS FINISH" : "FULL BREAK!", "#facc15");
+    } else if (f.kind !== "ko") {
+      spawnFloatingText(en.x + en.w / 2, en.y - 230, "STAGGER BROKEN", "#ff8800");
+    }
+    if (f.kind === "ko") {
+      playSound("finisher_ko");
+      doFlash(0.8);
+      gameState.shake = Math.max(gameState.shake, 40);
+      for (let i = 0; i < 3; i++) triggerShockwave(en.x, en.y - 60 - i * 10, i === 1 ? "#ffffff" : gameState.bossThemeColor || "#ff0055");
+      spawnFloatingText(en.x + en.w / 2, en.y - 260, "K.O.", "#ffffff");
+    }
+  }
+  function finishFinisher() {
+    const f = gameState.finisher, en = f.boss, p = gameState.player;
+    p.state = "idle";
+    p.punchType = null;
+    if (en.controller === "live_wire") {
+      delete en.facing;
+      delete p.facing;
+      p.x = 180;
+      en.x = p.x + 260;
+    }
+    if (f.kind === "ko") {
+      en.koDone = true;
+      en.hp = 0;
+    } else {
+      en.x = Math.min(gameState.width - 150, en.x + 150);
+      en.stun = 0;
+      en.stunResist = 60;
+      en.recoverTimer = 0;
+      en.telegraphed = false;
+      en.attackCooldown = (en.maxCooldown || 60) + 40;
+      if (en.controller === "static_monk") {
+        en.currentMove = "laser";
+        en.attackCooldown = 110;
+        en.bossMashCount = 0;
+      }
+    }
+    gameState.finisher = null;
+    gameState.finisherZoom = 1;
+  }
+  function updateFinisher() {
+    const f = gameState.finisher;
+    if (!f) return;
+    f.frame++;
+    if (f.judgeTimer > 0) f.judgeTimer--;
+    if (f.freeze > 0) f.freeze--;
+    if (f.poseTimer > 0 && --f.poseTimer === 0) gameState.player.state = "idle";
+    gameState.player.y += (gameState.height * CONSTANTS.LANE_Y[gameState.player.lane] - gameState.player.y) * 0.35;
+    if (gameState.player.slipCooldown > 0) gameState.player.slipCooldown--;
+    if (f.phase === "intro") {
+      f.timer--;
+      const k = ease(1 - f.timer / F.introFrames);
+      f.zoom = 1 + (F.zoom - 1) * k;
+      f.bars = k;
+      if (f.timer <= 0) {
+        f.phase = "prompts";
+        f.nextBeat = f.frame + F.beatFrames * F.leadBeats;
+      }
+    } else if (f.phase === "prompts") {
+      f.zoom = F.zoom;
+      f.bars = 1;
+      const t = f.frame - f.nextBeat;
+      if (t === 0) playSound("beat_tick");
+      const input = readFinisherInput();
+      const want = f.seq[f.idx];
+      if (input) {
+        if (t < -F.windowEarly) missPrompt("TOO EARLY");
+        else if (input !== want) missPrompt("WRONG MOVE");
+        else landPrompt(Math.abs(t) <= F.perfectWindow);
+      } else if (t > F.windowLate) {
+        missPrompt("MISSED");
+      }
+    } else if (f.phase === "outro") {
+      f.timer--;
+      const k = ease(f.timer / F.outroFrames);
+      f.zoom = 1 + (F.zoom - 1) * k;
+      f.bars = k;
+      if (f.timer <= 0) {
+        finishFinisher();
+        return;
+      }
+    }
+    gameState.finisherZoom = reducedMotion() ? 1 : f.zoom;
+  }
+  function promptProgress() {
+    const f = gameState.finisher;
+    if (!f || f.phase !== "prompts") return null;
+    const lead = F.beatFrames * F.leadBeats;
+    const t = f.frame - f.nextBeat;
+    return { move: f.seq[f.idx], progress: Math.min(1.2, Math.max(0, (t + lead) / lead)), t };
+  }
+
+  // src/systems/knockdown.js
+  var K = CONSTANTS.KNOCKDOWN;
+  function canBeKnockedDown() {
+    return (gameState.knockdownsThisArc || 0) === 0;
+  }
+  function knockdownSequence(n, rnd = Math.random) {
+    const seq = [];
+    for (let i = 0; i < n; i++) {
+      let m = rnd() < 0.5 ? "up" : "down";
+      if (i > 0 && m === seq[i - 1] && rnd() < 0.6) m = m === "up" ? "down" : "up";
+      seq.push(m);
+    }
+    return seq;
+  }
+  function startKnockdown() {
+    const arc = Math.min(CONSTANTS.getArcIndex(gameState.currentStage), 5);
+    const n = K.promptsByArc[arc] || 3;
+    gameState.knockdown = {
+      frame: 0,
+      count: 0,
+      seq: knockdownSequence(n),
+      idx: 0,
+      nextBeat: K.framesPerCount + K.beatFrames,
+      phase: "down",
+      fall: 0,
+      judge: null,
+      judgeTimer: 0,
+      upTimer: 0
+    };
+    gameState.knockdownsThisArc = (gameState.knockdownsThisArc || 0) + 1;
+    gameState.statKnockdowns = (gameState.statKnockdowns || 0) + 1;
+    gameState.health = 0;
+    gameState.combo = 0;
+    gameState.isInstinct = false;
+    gameState.zoneTimer = 0;
+    const p = gameState.player;
+    p.state = "down";
+    p.charging = false;
+    p.inputBuffer = null;
+    p.movementBuffer = null;
+    gameState.shake = 30;
+    doFlash(0.6);
+    playSound("knockdown");
+    spawnFloatingText(p.x + 20, p.y - 150, "KNOCKDOWN!", "#ff3355");
+  }
+  function justPressed2(code) {
+    return !!gameState.keys[code] && !gameState.lastKeys[code];
+  }
+  function readLaneInput() {
+    const B = getBinds();
+    if (justPressed2(B.up) || gameState.pad.up) return "up";
+    if (justPressed2(B.down) || gameState.pad.down) return "down";
+    if (justPressed2(B.jab) || justPressed2(B.cross) || justPressed2(B.hook) || gameState.pad.jab || gameState.pad.cross || gameState.pad.hook) return "other";
+    return null;
+  }
+  function judge2(text, color) {
+    const k = gameState.knockdown;
+    k.judge = { text, color };
+    k.judgeTimer = 26;
+  }
+  function getUp() {
+    const k = gameState.knockdown, p = gameState.player;
+    k.phase = "up";
+    k.upTimer = 36;
+    gameState.health = Math.round(gameState.maxHealth * K.getUpHpFrac);
+    gameState.combo = 0;
+    p.invuln = K.invulnFrames;
+    for (const en of gameState.enemies) {
+      if (Math.abs(en.x - p.x) < 220) {
+        en.x = Math.max(en.x, p.x + 180);
+        en.attackCooldown = Math.max(en.attackCooldown, en.maxCooldown || 60);
+        en.telegraphed = false;
+        en.stringIdx = 0;
+      }
+    }
+    gameState.hazards = [];
+    playSound("stagger");
+    doFlash(0.4);
+    triggerShockwave(p.x + 25, p.y - 60, "#ffffff");
+    spawnFloatingText(p.x + 20, p.y - 160, "BACK ON YOUR FEET!", "#22d3ee");
+  }
+  function updateKnockdown() {
+    const k = gameState.knockdown;
+    if (!k) return null;
+    k.frame++;
+    if (k.judgeTimer > 0) k.judgeTimer--;
+    if (k.phase === "up") {
+      k.fall = Math.max(0, k.fall - 0.06);
+      if (--k.upTimer <= 0) {
+        gameState.player.state = "idle";
+        gameState.knockdown = null;
+        return "up";
+      }
+      return "down";
+    }
+    k.fall = Math.min(1, k.fall + 0.12);
+    if (k.frame % K.framesPerCount === 0) {
+      k.count++;
+      playSound(k.count >= 8 ? "ref_count_hi" : "ref_count");
+      if (k.count >= 10) {
+        k.phase = "out";
+        playSound("bell");
+        return "out";
+      }
+    }
+    const t = k.frame - k.nextBeat;
+    if (t >= -K.beatFrames) {
+      const input = readLaneInput();
+      const want = k.seq[k.idx];
+      const advance = () => {
+        k.nextBeat += K.beatFrames;
+      };
+      if (input) {
+        if (t < -K.windowEarly || input !== want) {
+          judge2("STUMBLE", "#ff8800");
+          playSound("finisher_miss");
+          advance();
+        } else {
+          judge2("UP!", "#22d3ee");
+          playSound("perfect_slip");
+          k.idx++;
+          if (k.idx >= k.seq.length) {
+            getUp();
+            return "down";
+          }
+          advance();
+        }
+      } else if (t > K.windowLate) {
+        judge2("TOO SLOW", "#ff8800");
+        advance();
+      }
+    }
+    return "down";
+  }
+  function knockdownPrompt() {
+    const k = gameState.knockdown;
+    if (!k || k.phase !== "down") return null;
+    const t = k.frame - k.nextBeat;
+    if (t < -K.beatFrames) return null;
+    return { move: k.seq[k.idx], progress: Math.min(1.2, Math.max(0, (t + K.beatFrames) / K.beatFrames)), t };
+  }
+
+  // src/render/overlays.js
+  var MOVE_STYLE = {
+    bash: { label: "BASH", color: "#ffaa00" },
+    jab: { label: "JAB", color: "#ffffff" },
+    feint: { label: "FEINT", color: "#c084fc" },
+    laser: { label: "LASER", color: "#39ff14" }
+  };
+  function drawScorePops(ctx3) {
+    if (!gameState.scorePops || !gameState.scorePops.length) return;
+    ctx3.save();
+    ctx3.textAlign = "center";
+    gameState.scorePops.forEach((p) => {
+      ctx3.globalAlpha = Math.max(0, Math.min(1, p.life * 1.4));
+      ctx3.font = p.big ? "900 italic 26px Orbitron" : "bold 13px Orbitron";
+      ctx3.fillStyle = p.big ? "#facc15" : "#fde68a";
+      ctx3.shadowColor = "#facc15";
+      ctx3.shadowBlur = p.big ? 12 : 4;
+      ctx3.fillText(p.text, p.x, p.y);
+    });
+    ctx3.restore();
+  }
+  function drawBossTells(ctx3, en) {
+    if (!en.isBoss || gameState.bossIntroTimer > 0) return;
+    const cx = en.x - 34, top = en.y - en.h * 0.95;
+    ctx3.save();
+    if (isBossOpen(en)) {
+      const max = en.recoverMax || 1;
+      const left = en.controller === "static_monk" && en.currentMove === "recharge" ? Math.max(0, en.attackCooldown) / Math.max(1, Math.floor(180 / (en.arcMods && en.arcMods.teleportRateMult || 1))) : (en.recoverTimer || 0) / max;
+      const pulse = 0.6 + 0.4 * Math.sin(Date.now() * 0.02);
+      ctx3.strokeStyle = `rgba(34, 211, 238, ${pulse})`;
+      ctx3.lineWidth = 3;
+      const bx = en.x - 22, by = en.y - en.h * 1.5 - 10, bw = en.w + 44, bh = en.h * 1.5 + 16, k = 14;
+      ctx3.beginPath();
+      ctx3.moveTo(bx, by + k);
+      ctx3.lineTo(bx, by);
+      ctx3.lineTo(bx + k, by);
+      ctx3.moveTo(bx + bw - k, by);
+      ctx3.lineTo(bx + bw, by);
+      ctx3.lineTo(bx + bw, by + k);
+      ctx3.moveTo(bx, by + bh - k);
+      ctx3.lineTo(bx, by + bh);
+      ctx3.lineTo(bx + k, by + bh);
+      ctx3.moveTo(bx + bw - k, by + bh);
+      ctx3.lineTo(bx + bw, by + bh);
+      ctx3.lineTo(bx + bw, by + bh - k);
+      ctx3.stroke();
+      ctx3.fillStyle = "#22d3ee";
+      ctx3.font = "900 italic 18px Orbitron";
+      ctx3.textAlign = "center";
+      ctx3.shadowColor = "#22d3ee";
+      ctx3.shadowBlur = 12;
+      ctx3.fillText("OPEN", cx, top + 8);
+      ctx3.shadowBlur = 0;
+      ctx3.fillStyle = "rgba(34, 211, 238, 0.25)";
+      ctx3.fillRect(cx - 40, top + 16, 80, 4);
+      ctx3.fillStyle = "#22d3ee";
+      ctx3.fillRect(cx - 40, top + 16, 80 * Math.max(0, Math.min(1, left)), 4);
+    } else if (en.telegraphed && en.stun <= 0 && en.attackCooldown > 0) {
+      const move = en.controller === "static_monk" ? "laser" : en.currentMove || "jab";
+      const style = MOVE_STYLE[move] || MOVE_STYLE.jab;
+      const lead = Math.max(1, en.telegraphAt || 30);
+      const k = Math.max(0, Math.min(1, 1 - en.attackCooldown / lead));
+      const r = 16;
+      ctx3.lineWidth = 4;
+      ctx3.strokeStyle = "rgba(255,255,255,0.15)";
+      ctx3.beginPath();
+      ctx3.arc(cx, top - 4, r, 0, Math.PI * 2);
+      ctx3.stroke();
+      ctx3.strokeStyle = k > 0.8 ? "#ffffff" : style.color;
+      ctx3.shadowColor = style.color;
+      ctx3.shadowBlur = 10;
+      ctx3.beginPath();
+      ctx3.arc(cx, top - 4, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * k);
+      ctx3.stroke();
+      ctx3.shadowBlur = 0;
+      ctx3.fillStyle = style.color;
+      ctx3.font = "bold 12px Orbitron";
+      ctx3.textAlign = "center";
+      ctx3.fillText(style.label, cx, top + 28);
+    }
+    ctx3.restore();
+  }
+  function drawBossHud(ctx3) {
+    const boss = gameState.enemies.find((e) => e.isBoss);
+    if (!boss) return;
+    const W = 380, H = 12, x = (gameState.width - W) / 2, y = gameState.finisher ? 80 : 38;
+    const pct = Math.max(0, boss.hp / boss.maxHp);
+    const inFinisher = !!gameState.finisher;
+    ctx3.save();
+    ctx3.fillStyle = "rgba(0,0,0,0.6)";
+    ctx3.fillRect(x - 4, y - 22, W + 8, H + 30);
+    ctx3.fillStyle = "#fff";
+    ctx3.font = "bold 12px Orbitron";
+    ctx3.textAlign = "left";
+    ctx3.fillText(boss.name, x, y - 7);
+    ctx3.textAlign = "right";
+    ctx3.fillStyle = isBossOpen(boss) ? "#22d3ee" : boss.desperation ? "#ff3355" : "#9ca3af";
+    ctx3.fillText(isBossOpen(boss) ? "OPEN \u2014 PUNISH" : boss.desperation ? "DESPERATION" : "", x + W, y - 7);
+    ctx3.fillStyle = "rgba(255,255,255,0.08)";
+    ctx3.fillRect(x, y, W, H);
+    const flash = inFinisher ? 0.7 + 0.3 * Math.sin(Date.now() * 0.03) : 1;
+    ctx3.globalAlpha = flash;
+    ctx3.fillStyle = gameState.bossThemeColor || "#ff0055";
+    ctx3.fillRect(x, y, W * pct, H);
+    ctx3.globalAlpha = 1;
+    CONSTANTS.FINISHER.thresholds.forEach((th, i) => {
+      const used = (boss.finisherStage || 0) > i;
+      const nx = x + W * th;
+      ctx3.fillStyle = used ? "rgba(255,255,255,0.25)" : "#ffffff";
+      ctx3.fillRect(nx - 1.5, y - 5, 3, H + 10);
+      if (!used) {
+        ctx3.fillStyle = "#ffffff";
+        ctx3.beginPath();
+        ctx3.moveTo(nx, y - 5);
+        ctx3.lineTo(nx - 5, y - 11);
+        ctx3.lineTo(nx + 5, y - 11);
+        ctx3.closePath();
+        ctx3.fill();
+      }
+    });
+    ctx3.restore();
+  }
+  function drawFinisherDim(ctx3) {
+    const f = gameState.finisher;
+    if (!f) return;
+    ctx3.fillStyle = `rgba(0, 0, 0, ${0.55 * f.bars})`;
+    ctx3.fillRect(-200, -200, gameState.width + 400, gameState.height + 400);
+  }
+  var PROMPT_X = 0.72;
+  var PROMPT_Y = 0.48;
+  var PROMPT_GLYPH = {
+    up: { key: "\u25B2", hint: "\u2191 / D-PAD", color: "#22d3ee" },
+    down: { key: "\u25BC", hint: "\u2193 / D-PAD", color: "#22d3ee" },
+    jab: { key: "A", hint: "JAB \xB7 X", color: "#ffffff" },
+    cross: { key: "S", hint: "CROSS \xB7 Y", color: "#ec4899" },
+    hook: { key: "D", hint: "HOOK \xB7 B", color: "#facc15" }
+  };
+  function drawFinisherUI(ctx3) {
+    const f = gameState.finisher;
+    if (!f) return;
+    const W = gameState.width, H = gameState.height;
+    ctx3.save();
+    const barH = 58 * f.bars;
+    ctx3.fillStyle = "#000";
+    ctx3.fillRect(0, 0, W, barH);
+    ctx3.fillRect(0, H - barH, W, barH);
+    const vg = ctx3.createRadialGradient(W / 2, H / 2, H * 0.25, W / 2, H / 2, H * 0.85);
+    vg.addColorStop(0, "rgba(0,0,0,0)");
+    vg.addColorStop(1, `rgba(0,0,0,${0.55 * f.bars})`);
+    ctx3.fillStyle = vg;
+    ctx3.fillRect(0, 0, W, H);
+    ctx3.textAlign = "center";
+    const title = f.kind === "ko" ? "FINAL BLOW" : f.kind === "break1" ? "STAGGER I" : "STAGGER II";
+    ctx3.globalAlpha = f.bars;
+    ctx3.fillStyle = f.kind === "ko" ? "#ff0055" : "#ffffff";
+    ctx3.font = "900 italic 22px Orbitron";
+    ctx3.fillText(title, W / 2, Math.max(24, barH - 18));
+    const n = f.seq.length, pipW = 34, gap = 8, total = n * pipW + (n - 1) * gap;
+    for (let i = 0; i < n; i++) {
+      const px = W / 2 - total / 2 + i * (pipW + gap);
+      const done = i < f.idx, cur = i === f.idx && f.phase === "prompts";
+      const g = PROMPT_GLYPH[f.seq[i]];
+      ctx3.fillStyle = done ? g.color : cur ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.06)";
+      ctx3.fillRect(px, H - barH + 14, pipW, 22);
+      ctx3.fillStyle = done ? "#000" : cur ? "#fff" : "rgba(255,255,255,0.35)";
+      ctx3.font = "bold 13px Orbitron";
+      ctx3.fillText(g.key, px + pipW / 2, H - barH + 30);
+    }
+    ctx3.globalAlpha = 1;
+    const pp = promptProgress();
+    if (pp) {
+      const g = PROMPT_GLYPH[pp.move];
+      const cx = PROMPT_X * W, cy = PROMPT_Y * H;
+      const box = 38;
+      const ringR = box + 70 * (1 - Math.min(1, pp.progress));
+      const inWindow = pp.t >= -CONSTANTS.FINISHER.windowEarly;
+      ctx3.lineWidth = 4;
+      ctx3.strokeStyle = inWindow ? "#ffffff" : "rgba(255,255,255,0.45)";
+      ctx3.beginPath();
+      ctx3.arc(cx, cy, ringR, 0, Math.PI * 2);
+      ctx3.stroke();
+      ctx3.fillStyle = "rgba(0,0,0,0.75)";
+      ctx3.beginPath();
+      ctx3.arc(cx, cy, box, 0, Math.PI * 2);
+      ctx3.fill();
+      ctx3.strokeStyle = g.color;
+      ctx3.lineWidth = 3;
+      ctx3.shadowColor = g.color;
+      ctx3.shadowBlur = 18;
+      ctx3.beginPath();
+      ctx3.arc(cx, cy, box, 0, Math.PI * 2);
+      ctx3.stroke();
+      ctx3.shadowBlur = 0;
+      ctx3.fillStyle = g.color;
+      ctx3.font = "900 34px Orbitron";
+      ctx3.fillText(g.key, cx, cy + 12);
+      ctx3.fillStyle = "rgba(255,255,255,0.8)";
+      ctx3.font = "bold 11px Orbitron";
+      ctx3.fillText(g.hint, cx, cy + box + 22);
+    } else if (f.phase === "intro") {
+      ctx3.fillStyle = `rgba(255,255,255,${f.bars})`;
+      ctx3.font = "bold 13px Orbitron";
+      ctx3.fillText("HIT EACH PROMPT ON THE BEAT", PROMPT_X * W, PROMPT_Y * H);
+    }
+    if (f.judge && f.judgeTimer > 0) {
+      const a = Math.min(1, f.judgeTimer / 12);
+      const s = reducedMotion() ? 1 : 1 + Math.max(0, f.judgeTimer - 26) * 0.06;
+      ctx3.save();
+      ctx3.translate(PROMPT_X * W, PROMPT_Y * H - 128);
+      ctx3.scale(s, s);
+      ctx3.globalAlpha = a;
+      ctx3.fillStyle = f.judge.color;
+      ctx3.font = "900 italic 30px Orbitron";
+      ctx3.shadowColor = f.judge.color;
+      ctx3.shadowBlur = 14;
+      ctx3.fillText(f.judge.text, 0, 0);
+      ctx3.restore();
+    }
+    ctx3.restore();
+  }
+  function drawVignette(ctx3) {
+    const v = gameState.vignette;
+    if (!v) return;
+    const W = gameState.width, H = gameState.height, t = v.timer, D = v.duration;
+    const inA = Math.min(1, t / 8), outA = Math.min(1, (D - t) / 8);
+    const a = Math.min(inA, outA);
+    const rm = reducedMotion();
+    ctx3.save();
+    ctx3.globalAlpha = a;
+    ctx3.fillStyle = "rgba(0,0,0,0.86)";
+    ctx3.fillRect(0, 0, W, H);
+    const slashIn = rm ? 1 : Math.min(1, t / 10);
+    ctx3.save();
+    ctx3.translate(W / 2, H / 2);
+    ctx3.rotate(-0.22);
+    const sg = ctx3.createLinearGradient(-W, 0, W, 0);
+    sg.addColorStop(0, "rgba(0,0,0,0)");
+    sg.addColorStop(0.5, v.color);
+    sg.addColorStop(1, "rgba(0,0,0,0)");
+    ctx3.globalAlpha = a * 0.28;
+    ctx3.fillStyle = sg;
+    ctx3.fillRect(-W * slashIn, -70, W * 2 * slashIn, 140);
+    ctx3.globalAlpha = a * 0.9;
+    ctx3.fillStyle = v.color;
+    ctx3.fillRect(-W * slashIn, 72, W * 2 * slashIn, 3);
+    ctx3.restore();
+    const pose = { speed: "jab3", power: "cross", technique: "guard_jab" }[v.upgrade.tree] || (v.rarity === "fusion" ? "hook" : "cross");
+    const S = 2.3, bx = 250, by = 430;
+    const ent = {
+      x: bx / S - 25,
+      y: by / S,
+      w: 50,
+      h: 110,
+      lane: 1,
+      state: "punching",
+      punchType: pose,
+      hitFrame: 0,
+      didHit: true,
+      slipBuff: 0,
+      color: gameState.strikerColor || "#00ffff",
+      trails: [],
+      // v17 colour rule: the upgrade's colour rides the PUNCH TRAIL and sparks,
+      // never the Striker's body or gloves.
+      trailColor: v.color,
+      trailHeat: Math.min(1, t / 10)
+    };
+    ctx3.save();
+    ctx3.scale(S, S);
+    drawBoxer(ctx3, ent, true, a);
+    ctx3.restore();
+    if (ent.glovePositions) {
+      ctx3.fillStyle = v.color;
+      v.sparks.forEach((sp) => {
+        const gp = ent.glovePositions[sp.gx];
+        ctx3.globalAlpha = a * sp.life;
+        ctx3.fillRect(gp[0] * S + sp.ox, gp[1] * S + sp.oy, 3, 3);
+      });
+      ctx3.globalAlpha = a;
+    }
+    const slamK = rm ? 1 : Math.min(1, Math.max(0, (t - 4) / 8));
+    const scale = rm ? 1 : 1 + (1 - slamK) * 1.6;
+    const rankTag = v.upgrade.rank ? `RANK ${v.upgrade.rank} \xB7 ` : "";
+    const kindLabel = rankTag + ({ evolved: "\u2726 EVOLVED FUSION \u2726", fusion: "\u2726 FUSION \u2726", apex: "\u2605 APEX \u2605", verb: "\u27E1 NEW VERB", mastery: "\u25C6 MASTERY", overclock: "OVERCLOCK", orb: "STAT" }[v.rarity] || "STAT");
+    ctx3.save();
+    ctx3.translate(W * 0.64, H * 0.46);
+    ctx3.globalAlpha = a * slamK;
+    ctx3.fillStyle = v.color;
+    ctx3.font = "bold 14px Orbitron";
+    ctx3.textAlign = "center";
+    ctx3.fillText(kindLabel + (v.upgrade.tree && TREE_NAME[v.upgrade.tree] ? ` \xB7 ${TREE_NAME[v.upgrade.tree]}` : ""), 0, -48);
+    ctx3.scale(scale, scale);
+    ctx3.fillStyle = "#ffffff";
+    ctx3.font = "900 italic 44px Orbitron";
+    ctx3.shadowColor = v.color;
+    ctx3.shadowBlur = 24;
+    ctx3.fillText(v.upgrade.name.toUpperCase(), 0, 0);
+    ctx3.restore();
+    if (!v.repeat) {
+      ctx3.globalAlpha = a * Math.min(1, Math.max(0, (t - 16) / 10));
+      ctx3.fillStyle = "rgba(255,255,255,0.8)";
+      ctx3.font = "13px Orbitron";
+      ctx3.textAlign = "center";
+      wrapText(ctx3, v.upgrade.desc, W * 0.64, H * 0.46 + 40, 440, 18);
+    }
+    if (!rm && t >= 10 && t <= 13) {
+      ctx3.globalAlpha = 0.25 * (14 - t) / 4;
+      ctx3.fillStyle = "#fff";
+      ctx3.fillRect(0, 0, W, H);
+    }
+    ctx3.globalAlpha = a * 0.55;
+    ctx3.fillStyle = "#fff";
+    ctx3.font = "11px Orbitron";
+    ctx3.textAlign = "center";
+    ctx3.fillText("ANY KEY TO SKIP", W / 2, H - 96);
+    ctx3.restore();
+  }
+  var TREE_NAME = { speed: "SPEED", power: "POWER", technique: "TECHNIQUE" };
+  function wrapText(ctx3, text, x, y, maxW, lh) {
+    const words = String(text || "").split(" ");
+    let line = "", yy = y;
+    for (const w of words) {
+      const test = line ? line + " " + w : w;
+      if (ctx3.measureText(test).width > maxW && line) {
+        ctx3.fillText(line, x, yy);
+        line = w;
+        yy += lh;
+      } else line = test;
+    }
+    if (line) ctx3.fillText(line, x, yy);
+  }
+  function drawKoFx(ctx3) {
+    if (!gameState.koFx || !gameState.koFx.length) return;
+    ctx3.save();
+    for (const fx of gameState.koFx) {
+      ctx3.fillStyle = fx.color;
+      ctx3.shadowColor = fx.color;
+      ctx3.shadowBlur = 10;
+      if (!fx.orb) {
+        const a = fx.t < 14 ? 1 : Math.max(0.3, 1 - (fx.t - 14) / 16);
+        ctx3.globalAlpha = a;
+        fx.shards.forEach((s) => {
+          ctx3.save();
+          ctx3.translate(s.x, s.y);
+          ctx3.rotate(s.rot);
+          ctx3.beginPath();
+          ctx3.moveTo(0, -s.size);
+          ctx3.lineTo(s.size * 0.5, s.size * 0.6);
+          ctx3.lineTo(-s.size * 0.5, s.size * 0.6);
+          ctx3.closePath();
+          ctx3.fill();
+          ctx3.restore();
+        });
+      } else {
+        const o = fx.orb, r = fx.big ? 13 : 8;
+        ctx3.globalAlpha = 0.35;
+        ctx3.beginPath();
+        ctx3.arc(o.x - o.vx * 2, o.y - o.vy * 2, r * 0.8, 0, Math.PI * 2);
+        ctx3.fill();
+        ctx3.globalAlpha = 1;
+        ctx3.beginPath();
+        ctx3.arc(o.x, o.y, r, 0, Math.PI * 2);
+        ctx3.fill();
+        ctx3.fillStyle = "#ffffff";
+        ctx3.beginPath();
+        ctx3.arc(o.x, o.y, r * 0.45, 0, Math.PI * 2);
+        ctx3.fill();
+      }
+    }
+    ctx3.restore();
+  }
+  function drawRopes(ctx3) {
+    const R2 = CONSTANTS.ROPES, H = gameState.height, t = Date.now();
+    const top = H * CONSTANTS.LANE_Y[0] - 110, bot = H * CONSTANTS.LANE_Y[2] + 14;
+    const cornered = !!(gameState.player && gameState.player.cornered);
+    const live = gameState.enemies.some((e) => e.isBoss && e.controller === "live_wire");
+    const ropeYs = [0.3, 0.55, 0.8].map((f) => top + (bot - top) * f);
+    ctx3.save();
+    const px = R2.playerPostX;
+    const buzz = cornered ? Math.sin(t * 0.09) * 2.5 : 0;
+    let ropeCol = "rgba(200, 220, 255, 0.35)", glow = 0;
+    if (live) {
+      ropeCol = cornered ? "#fff36b" : "rgba(255, 243, 107, 0.75)";
+      glow = cornered ? 26 : 12;
+    } else if (cornered) {
+      ropeCol = "#ff5a3c";
+      glow = 18;
+    }
+    ctx3.shadowColor = ropeCol;
+    ctx3.shadowBlur = glow;
+    ctx3.fillStyle = "rgba(20, 20, 30, 0.9)";
+    ctx3.fillRect(px - 7, top - 10, 14, bot - top + 14);
+    ctx3.fillStyle = ropeCol;
+    ctx3.fillRect(px - 2, top - 10, 4, bot - top + 14);
+    ctx3.strokeStyle = ropeCol;
+    ctx3.lineWidth = cornered ? 4 : 3;
+    ropeYs.forEach((y, i) => {
+      ctx3.beginPath();
+      ctx3.moveTo(0, y - 18 + buzz * (i % 2 ? 1 : -1));
+      ctx3.lineTo(px, y + buzz * (i % 2 ? -1 : 1));
+      ctx3.stroke();
+    });
+    if (live) {
+      ctx3.lineWidth = 1.5;
+      ctx3.strokeStyle = "#ffffff";
+      ropeYs.forEach((y) => {
+        if (Math.random() < (cornered ? 0.9 : 0.35)) {
+          ctx3.beginPath();
+          let x0 = Math.random() * px, y0 = y - 12 + Math.random() * 6;
+          ctx3.moveTo(x0, y0);
+          for (let k = 0; k < 4; k++) {
+            x0 += 6 + Math.random() * 8;
+            y0 += (Math.random() - 0.5) * 12;
+            ctx3.lineTo(x0, y0);
+          }
+          ctx3.stroke();
+        }
+      });
+    }
+    ctx3.shadowBlur = 0;
+    const ex = R2.enemyPostX;
+    const pinned = gameState.enemies.some((e) => (e.onRopes || 0) > 0);
+    const eCol = pinned ? "rgba(255,255,255,0.8)" : "rgba(200, 220, 255, 0.16)";
+    ctx3.fillStyle = "rgba(20, 20, 30, 0.6)";
+    ctx3.fillRect(ex - 6, top - 10, 12, bot - top + 14);
+    ctx3.fillStyle = eCol;
+    ctx3.fillRect(ex - 1.5, top - 10, 3, bot - top + 14);
+    ctx3.strokeStyle = eCol;
+    ctx3.lineWidth = 2;
+    ropeYs.forEach((y) => {
+      ctx3.beginPath();
+      ctx3.moveTo(ex, y);
+      ctx3.lineTo(gameState.width, y - 18);
+      ctx3.stroke();
+    });
+    ctx3.restore();
+  }
+  function drawAfterimages(ctx3) {
+    const all = [...gameState.afterimages || [], ...(gameState.enemyEchoes || []).map((e) => ({ ...e, facing: -1, enemy: true }))];
+    if (!all.length) return;
+    for (const ai of all) {
+      const a = ai.fired ? Math.max(0, ai.fade / 22) * 0.7 : 0.55;
+      const ghost = {
+        x: ai.x + (ai.fired ? 10 * (ai.facing || 1) : 0),
+        y: ai.y,
+        lane: ai.lane,
+        w: 50,
+        h: 110,
+        state: ai.fired ? "punching" : "idle",
+        punchType: "cross",
+        hitFrame: 0,
+        didHit: true,
+        slipBuff: 0,
+        overrideColor: ai.color,
+        facing: ai.facing || 1,
+        shape: ai.enemy ? "negative" : void 0
+      };
+      ctx3.save();
+      ctx3.shadowColor = ai.color;
+      ctx3.shadowBlur = 16;
+      drawBoxer(ctx3, ghost, true, a, true);
+      ctx3.restore();
+    }
+  }
+  function drawKnockdownUI(ctx3) {
+    const k = gameState.knockdown;
+    if (!k) return;
+    const W = gameState.width, H = gameState.height, p = gameState.player;
+    ctx3.save();
+    const vg = ctx3.createRadialGradient(W / 2, H / 2, H * 0.2, W / 2, H / 2, H * 0.9);
+    vg.addColorStop(0, "rgba(0,0,0,0)");
+    vg.addColorStop(1, `rgba(120,0,20,${0.55 * k.fall})`);
+    ctx3.fillStyle = vg;
+    ctx3.fillRect(0, 0, W, H);
+    const rx = p.x + 130, ry = p.y;
+    ctx3.globalAlpha = Math.min(1, k.frame / 12);
+    drawBoxer(ctx3, { x: rx, y: ry, lane: p.lane, w: 50, h: 110, state: "idle", stun: 0, attackCooldown: 99, color: "#e5e7eb", type: "grunt", trails: [] }, false, 0.9);
+    ctx3.globalAlpha = 1;
+    const count = Math.max(0, Math.min(10, k.count));
+    if (count > 0 && k.phase !== "up") {
+      const pulse = 1 + Math.max(0, 1 - k.frame % CONSTANTS.KNOCKDOWN.framesPerCount / 10) * 0.35;
+      ctx3.save();
+      ctx3.translate(rx + 25, ry - 190);
+      ctx3.scale(pulse, pulse);
+      ctx3.fillStyle = count >= 8 ? "#ff3355" : "#ffffff";
+      ctx3.font = "900 italic 64px Orbitron";
+      ctx3.textAlign = "center";
+      ctx3.shadowColor = ctx3.fillStyle;
+      ctx3.shadowBlur = 20;
+      ctx3.fillText(String(count), 0, 0);
+      ctx3.restore();
+    }
+    ctx3.textAlign = "center";
+    ctx3.fillStyle = "#ffffff";
+    ctx3.font = "900 italic 26px Orbitron";
+    ctx3.fillText(k.phase === "up" ? "BACK ON YOUR FEET" : "GET UP!", W / 2, 60);
+    ctx3.font = "bold 12px Orbitron";
+    ctx3.fillStyle = "rgba(255,255,255,0.7)";
+    ctx3.fillText(k.phase === "up" ? "" : "HIT THE LANE PROMPTS BEFORE TEN \xB7 ONE COUNT PER ARC", W / 2, 82);
+    const n = k.seq.length;
+    for (let i = 0; i < n; i++) {
+      ctx3.fillStyle = i < k.idx ? "#22d3ee" : "rgba(255,255,255,0.2)";
+      ctx3.fillRect(W / 2 - n * 18 + i * 36 + 4, 96, 28, 6);
+    }
+    const pp = knockdownPrompt();
+    if (pp) {
+      const cx = W * 0.72, cy = H * 0.46, box = 38;
+      const ringR = box + 70 * (1 - Math.min(1, pp.progress));
+      ctx3.lineWidth = 4;
+      ctx3.strokeStyle = pp.t >= -CONSTANTS.KNOCKDOWN.windowEarly ? "#ffffff" : "rgba(255,255,255,0.45)";
+      ctx3.beginPath();
+      ctx3.arc(cx, cy, ringR, 0, Math.PI * 2);
+      ctx3.stroke();
+      ctx3.fillStyle = "rgba(0,0,0,0.75)";
+      ctx3.beginPath();
+      ctx3.arc(cx, cy, box, 0, Math.PI * 2);
+      ctx3.fill();
+      ctx3.strokeStyle = "#22d3ee";
+      ctx3.lineWidth = 3;
+      ctx3.shadowColor = "#22d3ee";
+      ctx3.shadowBlur = 18;
+      ctx3.beginPath();
+      ctx3.arc(cx, cy, box, 0, Math.PI * 2);
+      ctx3.stroke();
+      ctx3.shadowBlur = 0;
+      ctx3.fillStyle = "#22d3ee";
+      ctx3.font = "900 34px Orbitron";
+      ctx3.fillText(pp.move === "up" ? "\u25B2" : "\u25BC", cx, cy + 12);
+    }
+    if (k.judge && k.judgeTimer > 0) {
+      ctx3.globalAlpha = Math.min(1, k.judgeTimer / 10);
+      ctx3.fillStyle = k.judge.color;
+      ctx3.font = "900 italic 26px Orbitron";
+      ctx3.fillText(k.judge.text, W * 0.72, H * 0.46 - 120);
+    }
+    ctx3.restore();
+  }
+  var POSTER_FRAMES = 180;
+  function drawBossPoster(ctx3) {
+    const P = gameState.bossPoster;
+    if (!P || gameState.bossIntroTimer <= 0) return;
+    const W = gameState.width, H = gameState.height;
+    const t = POSTER_FRAMES - gameState.bossIntroTimer;
+    const inK = Math.min(1, t / 16), outK = Math.min(1, gameState.bossIntroTimer / 18);
+    const a = Math.min(inK, outK);
+    const rm = reducedMotion();
+    ctx3.save();
+    ctx3.globalAlpha = a;
+    ctx3.fillStyle = "rgba(0,0,0,0.82)";
+    ctx3.fillRect(0, 0, W, H);
+    const pw = 620, ph = 420, px = (W - pw) / 2, py = (H - ph) / 2 + (rm ? 0 : (1 - inK) * 40);
+    const grad = ctx3.createLinearGradient(0, py, 0, py + ph);
+    grad.addColorStop(0, "#0b0b12");
+    grad.addColorStop(1, "#050507");
+    ctx3.fillStyle = grad;
+    ctx3.fillRect(px, py, pw, ph);
+    ctx3.strokeStyle = P.color;
+    ctx3.lineWidth = 3;
+    ctx3.shadowColor = P.color;
+    ctx3.shadowBlur = 24;
+    ctx3.strokeRect(px, py, pw, ph);
+    ctx3.shadowBlur = 0;
+    ctx3.strokeStyle = "rgba(255,255,255,0.15)";
+    ctx3.lineWidth = 1;
+    ctx3.strokeRect(px + 8, py + 8, pw - 16, ph - 16);
+    ctx3.textAlign = "center";
+    ctx3.fillStyle = P.color;
+    ctx3.font = "900 14px Orbitron";
+    ctx3.fillText(`TITLE FIGHT \xB7 ARC ${P.arc} \xB7 ROUND ${P.round}`, W / 2, py + 36);
+    ctx3.fillStyle = "rgba(255,255,255,0.6)";
+    ctx3.font = "bold 11px Orbitron";
+    ctx3.fillText(String(P.venue).toUpperCase(), W / 2, py + 54);
+    const fy = py + 352;
+    ctx3.save();
+    ctx3.translate(px + 150, fy);
+    ctx3.scale(1.7, 1.7);
+    drawBoxer(ctx3, { x: -25, y: 0, lane: 1, w: 50, h: 110, state: "guarding", punchType: null, hitFrame: 0, slipBuff: 0, trails: [] }, true, a);
+    ctx3.restore();
+    ctx3.save();
+    ctx3.translate(px + pw - 150, fy);
+    ctx3.scale(1.7, 1.7);
+    drawBoxer(ctx3, { x: -25, y: 0, lane: 1, w: 50, h: 110, isBoss: false, controller: P.controller, type: "grunt", color: P.color, stun: 0, attackCooldown: 99, trails: [] }, false, a);
+    ctx3.restore();
+    const slam = rm ? 1 : Math.min(1, Math.max(0, (t - 10) / 10));
+    ctx3.globalAlpha = a * slam;
+    ctx3.fillStyle = gameState.strikerColor || "#00ffff";
+    ctx3.font = "900 italic 26px Orbitron";
+    ctx3.fillText("THE STRIKER", px + 150, py + 110);
+    ctx3.fillStyle = "#ffffff";
+    ctx3.font = "900 italic 30px Orbitron";
+    ctx3.fillText("VS", W / 2, py + 200);
+    ctx3.fillStyle = P.color;
+    ctx3.font = "900 italic 26px Orbitron";
+    ctx3.shadowColor = P.color;
+    ctx3.shadowBlur = 14;
+    ctx3.fillText(P.name, px + pw - 150, py + 110);
+    ctx3.shadowBlur = 0;
+    ctx3.fillStyle = "rgba(255,255,255,0.75)";
+    ctx3.font = "bold 12px Orbitron";
+    ctx3.fillText(P.tagline, px + pw - 150, py + 130);
+    if (gameState.bossIntroTimer < 40) {
+      ctx3.globalAlpha = Math.min(1, (40 - gameState.bossIntroTimer) / 8) * outK;
+      ctx3.fillStyle = "#ffffff";
+      ctx3.font = "900 italic 54px Orbitron";
+      ctx3.shadowColor = P.color;
+      ctx3.shadowBlur = 20;
+      ctx3.fillText("FIGHT!", W / 2, py + ph - 26);
+    }
+    ctx3.restore();
+  }
+  function drawBillingCard(ctx3, card, age, alpha) {
+    const W = gameState.width, H = gameState.height, rm = reducedMotion();
+    const inK = Math.min(1, age / 12);
+    ctx3.save();
+    ctx3.globalAlpha = alpha * inK;
+    const bw = 520, bh = 150, bx = (W - bw) / 2, by = H / 2 - bh / 2 - 20 + (rm ? 0 : (1 - inK) * 24);
+    ctx3.fillStyle = "rgba(4,4,8,0.88)";
+    ctx3.fillRect(bx, by, bw, bh);
+    ctx3.strokeStyle = card.color || "#22d3ee";
+    ctx3.lineWidth = 2;
+    ctx3.shadowColor = card.color || "#22d3ee";
+    ctx3.shadowBlur = 18;
+    ctx3.strokeRect(bx, by, bw, bh);
+    ctx3.shadowBlur = 0;
+    ctx3.fillStyle = card.color || "#22d3ee";
+    ctx3.fillRect(bx, by, 6, bh);
+    ctx3.fillRect(bx + bw - 6, by, 6, bh);
+    ctx3.textAlign = "center";
+    ctx3.fillStyle = "rgba(255,255,255,0.55)";
+    ctx3.font = "bold 11px Orbitron";
+    ctx3.fillText(card.kicker || "", W / 2, by + 26);
+    ctx3.fillStyle = "#ffffff";
+    ctx3.font = "900 italic 48px Orbitron";
+    ctx3.fillText(`ROUND ${card.round}`, W / 2, by + 78);
+    ctx3.fillStyle = card.color || "#22d3ee";
+    ctx3.font = "900 18px Orbitron";
+    ctx3.fillText(String(card.venue).toUpperCase(), W / 2, by + 108);
+    if (card.tagline) {
+      ctx3.fillStyle = "rgba(255,255,255,0.7)";
+      ctx3.font = "bold 12px Orbitron";
+      ctx3.fillText(card.tagline, W / 2, by + 132);
+    }
+    ctx3.restore();
   }
 
   // src/systems/sequences.js
@@ -1273,6 +3097,11 @@
         if (step.type === "text") {
           this.text = { title: step.title, subtitle: step.subtitle || "", alpha: 1, age: 0 };
         }
+        if (step.type === "billing") {
+          this.text = { title: "", subtitle: "", alpha: 1, age: 0 };
+          this.billing = { ...step.card };
+          playSound("bell");
+        }
         if (step.type === "walkout" && gameState.player) {
           this.walkFromX = gameState.player.x;
           gameState.player.state = "idle";
@@ -1294,6 +3123,7 @@
           this.overlayNow = [0, 0, 0, 0];
           this.overlayTo = [0, 0, 0, 0];
           this.text.alpha = 0;
+          this.billing = null;
           gameState.lightSweep = -1;
           gameState.paletteT = 1;
           if (gameState.player) {
@@ -1325,10 +3155,10 @@
           gameState.paletteT = ease2;
         }
       }
-      if (step && step.type === "text") this.text.age++;
+      if (step && (step.type === "text" || step.type === "billing")) this.text.age++;
       if (this.timer > 0) {
         this.timer--;
-        if (this.timer < 30 && this.text.alpha > 0 && step && step.type === "text") {
+        if (this.timer < 30 && this.text.alpha > 0 && step && (step.type === "text" || step.type === "billing")) {
           this.text.alpha = Math.max(0, this.text.alpha - 0.05);
         }
         if (this.timer <= 0) {
@@ -1336,6 +3166,7 @@
             gameState.lightSweep = -1;
             gameState.paletteT = 1;
           }
+          if (step && step.type === "billing") this.billing = null;
           if (step && (step.type === "walkout" || step.type === "walkin") && gameState.player) gameState.player.walking = false;
           this.stepIndex++;
           this.startStep();
@@ -1348,6 +3179,7 @@
         ctx3.fillStyle = colorStr(this.overlayNow);
         ctx3.fillRect(0, 0, w, h);
       }
+      if (this.billing && this.text.alpha > 0) drawBillingCard(ctx3, this.billing, this.text.age, this.text.alpha);
       if (this.text.alpha > 0 && this.text.title) {
         const a = this.text.alpha;
         const inT = Math.min(1, this.text.age / 12);
@@ -1380,10 +3212,29 @@
 
   // src/data/upgrades.js
   var UPGRADE_POOL = {
+    // v17: each tree is a LINEAR 5-rank ladder (drafted one rank at a time, capped
+    // by arc — see CONSTANTS.RANK_CAP_BY_ARC). Ranks 1/2/4 are stat ranks with
+    // their own names; rank 3 changes a VERB; rank 5 is the tree's Apex.
+    // `orbs` is kept as the key the draft/HUD code reads; it now holds all ranks.
     orbs: [
-      { id: "orb_speed", kind: "orb", draftRole: "core", tree: "speed", tier: 1, repeatable: true, memoryPolicy: "none", name: "Speed Evolution", desc: "Faster attacks, quicker recoveries, cleaner offensive flow.", weight: 10, reqs: { orbTreeBelow: { speed: 3 } }, effects: [{ op: "incOrb", tree: "speed", amount: 1 }, { op: "mulStat", stat: "speedMult", amount: 0.25 }] },
-      { id: "orb_power", kind: "orb", draftRole: "core", tree: "power", tier: 1, repeatable: true, memoryPolicy: "none", name: "Power Evolution", desc: "Stronger knockback authority and heavier control on your core blows.", weight: 10, reqs: { orbTreeBelow: { power: 3 } }, effects: [{ op: "incOrb", tree: "power", amount: 1 }, { op: "mulStat", stat: "powerMult", amount: 0.35 }] },
-      { id: "orb_technique", kind: "orb", draftRole: "core", tree: "technique", tier: 1, repeatable: true, memoryPolicy: "none", name: "Technique Evolution", desc: "Improves Instinct gain and the reward for clean defensive reads.", weight: 10, reqs: { orbTreeBelow: { technique: 3 } }, effects: [{ op: "incOrb", tree: "technique", amount: 1 }, { op: "mulStat", stat: "techMult", amount: 0.3 }] }
+      // ---- SPEED (cyan) ----
+      { id: "spd_r1", kind: "rank", tree: "speed", rank: 1, memoryPolicy: "none", name: "Quick Hands", desc: "Faster jabs, hooks and recoveries.", weight: 10, effects: [{ op: "incOrb", tree: "speed", amount: 1 }, { op: "mulStat", stat: "speedMult", amount: 0.25 }] },
+      { id: "spd_r2", kind: "rank", tree: "speed", rank: 2, memoryPolicy: "none", name: "Rhythm Keeper", desc: "Faster still \u2014 and a missed Jab no longer snaps your Combo.", weight: 10, effects: [{ op: "incOrb", tree: "speed", amount: 1 }, { op: "mulStat", stat: "speedMult", amount: 0.2 }] },
+      { id: "spd_r3", kind: "rank", tree: "speed", rank: 3, verb: true, memoryPolicy: "none", name: "Pivot Slip", desc: "VERB: every slip carries you forward into punching range, and the first punch out of it is instant.", weight: 12, effects: [{ op: "incOrb", tree: "speed", amount: 1 }, { op: "setFlag", key: "pivotSlip", value: true }] },
+      { id: "spd_r4", kind: "rank", tree: "speed", rank: 4, memoryPolicy: "none", name: "Hair Trigger", desc: "Faster again \u2014 and a landed Jab or Hook can be cancelled straight into a slip.", weight: 10, effects: [{ op: "incOrb", tree: "speed", amount: 1 }, { op: "mulStat", stat: "speedMult", amount: 0.2 }] },
+      { id: "apex_speed_blur_step", kind: "rank", draftRole: "apex", tree: "speed", rank: 5, memoryPolicy: "none", name: "Blur Step", desc: "APEX: Ghost Step gains a second charge \u2014 dash twice in a row before it has to refill.", weight: 8, effects: [{ op: "incOrb", tree: "speed", amount: 1 }, { op: "grantUpgradeId", id: "apex_speed_blur_step" }, { op: "setFlag", key: "blurStep", value: true }] },
+      // ---- POWER (magenta) ----
+      { id: "pwr_r1", kind: "rank", tree: "power", rank: 1, memoryPolicy: "none", name: "Heavy Shoulders", desc: "Every blow carries more knockback authority.", weight: 10, effects: [{ op: "incOrb", tree: "power", amount: 1 }, { op: "mulStat", stat: "powerMult", amount: 0.35 }] },
+      { id: "pwr_r2", kind: "rank", tree: "power", rank: 2, memoryPolicy: "none", name: "Long Reach", desc: "Heavier still \u2014 and your Cross reaches 25% further.", weight: 10, effects: [{ op: "incOrb", tree: "power", amount: 1 }, { op: "mulStat", stat: "powerMult", amount: 0.3 }] },
+      { id: "pwr_r3", kind: "rank", tree: "power", rank: 3, verb: true, memoryPolicy: "none", name: "Loaded Cross", desc: "VERB: Cross now fires on release. Hold it to load a guard-breaking blow that drives enemies into their ropes.", weight: 12, effects: [{ op: "incOrb", tree: "power", amount: 1 }, { op: "setFlag", key: "loadedCross", value: true }] },
+      { id: "pwr_r4", kind: "rank", tree: "power", rank: 4, memoryPolicy: "none", name: "Iron Frame", desc: "Heavier again \u2014 knocked-back enemies bowl through everyone behind them.", weight: 10, effects: [{ op: "incOrb", tree: "power", amount: 1 }, { op: "mulStat", stat: "powerMult", amount: 0.3 }] },
+      { id: "apex_power_executioner", kind: "rank", draftRole: "apex", tree: "power", rank: 5, memoryPolicy: "none", name: "Executioner's Cross", desc: "APEX: a Cross against an enemy below 25% health is a guaranteed finish.", weight: 8, effects: [{ op: "incOrb", tree: "power", amount: 1 }, { op: "grantUpgradeId", id: "apex_power_executioner" }, { op: "setFlag", key: "executionerCross", value: true }] },
+      // ---- TECHNIQUE (yellow) ----
+      { id: "tec_r1", kind: "rank", tree: "technique", rank: 1, memoryPolicy: "none", name: "Sharp Eyes", desc: "More Instinct from clean reads and Perfect Slips.", weight: 10, effects: [{ op: "incOrb", tree: "technique", amount: 1 }, { op: "mulStat", stat: "techMult", amount: 0.3 }] },
+      { id: "tec_r2", kind: "rank", tree: "technique", rank: 2, memoryPolicy: "none", name: "Double Tap", desc: "Sharper still \u2014 a Perfect Slip charges TWO Counter hits.", weight: 10, effects: [{ op: "incOrb", tree: "technique", amount: 1 }, { op: "mulStat", stat: "techMult", amount: 0.25 }] },
+      { id: "tec_r3", kind: "rank", tree: "technique", rank: 3, verb: true, memoryPolicy: "none", name: "Afterimage Slip", desc: "VERB: a Perfect Slip leaves a neon afterimage in the lane you left \u2014 it throws a delayed echo punch at whoever swung.", weight: 12, effects: [{ op: "incOrb", tree: "technique", amount: 1 }, { op: "setFlag", key: "afterimageSlip", value: true }] },
+      { id: "tec_r4", kind: "rank", tree: "technique", rank: 4, memoryPolicy: "none", name: "True Read", desc: "Sharper again \u2014 a Perfect Slip on a boss EXPOSES it for a True Read.", weight: 10, effects: [{ op: "incOrb", tree: "technique", amount: 1 }, { op: "mulStat", stat: "techMult", amount: 0.25 }] },
+      { id: "apex_technique_flow_state", kind: "rank", draftRole: "apex", tree: "technique", rank: 5, memoryPolicy: "none", name: "Flow State", desc: "APEX: a sustained streak of clean hits and Perfect Slips ramps Instinct and EXP gain. Getting hit resets it.", weight: 8, effects: [{ op: "incOrb", tree: "technique", amount: 1 }, { op: "grantUpgradeId", id: "apex_technique_flow_state" }, { op: "setFlag", key: "flowState", value: true }] }
     ],
     masteries: [
       { id: "mast_weavers_step", kind: "mastery", draftRole: "evolution", tree: "speed", tier: 2, repeatable: false, memoryPolicy: "hard", name: "Weaver's Step", desc: "Ghost Step cooldown reduced by 20%.", weight: 8, reqs: { orbTreeAtLeast: { speed: 2 }, notOwned: ["mast_weavers_step"] }, effects: [{ op: "grantUpgradeId", id: "mast_weavers_step" }, { op: "mulMod", key: "ghostStepCooldownMult", amount: 0.8 }] },
@@ -1395,21 +3246,18 @@
       { id: "mast_deep_focus", kind: "mastery", draftRole: "evolution", tree: "technique", tier: 2, repeatable: false, memoryPolicy: "hard", name: "Deep Focus", desc: "Perfect Slip window gains +2 frames.", weight: 8, reqs: { orbTreeAtLeast: { technique: 2 }, notOwned: ["mast_deep_focus"] }, effects: [{ op: "grantUpgradeId", id: "mast_deep_focus" }, { op: "addMod", key: "perfectSlipWindowBonus", amount: 2 }] },
       { id: "mast_cold_read", kind: "mastery", draftRole: "evolution", tree: "technique", tier: 2, repeatable: false, memoryPolicy: "hard", name: "Cold Read", desc: "Boss expose / True Read windows last longer.", weight: 8, reqs: { orbTreeAtLeast: { technique: 2 }, notOwned: ["mast_cold_read"] }, effects: [{ op: "grantUpgradeId", id: "mast_cold_read" }, { op: "addMod", key: "bossExposeBonusFrames", amount: 30 }] },
       { id: "mast_vantage_point", kind: "mastery", draftRole: "evolution", tree: "technique", tier: 2, repeatable: false, memoryPolicy: "hard", name: "Vantage Point", desc: "Perfect Slip restores a small amount of health.", weight: 8, reqs: { orbTreeAtLeast: { technique: 2 }, notOwned: ["mast_vantage_point"] }, effects: [{ op: "grantUpgradeId", id: "mast_vantage_point" }, { op: "addMod", key: "perfectSlipHeal", amount: 3 }] },
-      { id: "mast_guard_read", kind: "mastery", draftRole: "evolution", tree: "technique", tier: 2, repeatable: false, memoryPolicy: "hard", name: "Guard Read", desc: "Releasing Guard the instant a hit lands charges a Counter. Turtling becomes a second read, not just a shield.", weight: 8, reqs: { orbTreeAtLeast: { technique: 2 }, notOwned: ["mast_guard_read"] }, effects: [{ op: "grantUpgradeId", id: "mast_guard_read" }, { op: "setFlag", key: "guardRead", value: true }] },
-      // APEX PERKS (Tier 3, one per maxed tree): a fully-built run used to run out
-      // of unique content the moment its orbs/masteries/fusions were all owned —
-      // everything after that was six generic overclocks on repeat. These slot
-      // into the same masteries pool (orbTreeAtLeast just happens to require the
-      // tree be fully maxed at 3), so they surface right at the point staleness
-      // would otherwise set in, no new draft-system plumbing required.
-      { id: "apex_speed_blur_step", kind: "mastery", draftRole: "apex", tree: "speed", tier: 3, repeatable: false, memoryPolicy: "hard", name: "Blur Step", desc: "Ghost Step gains a second charge \u2014 dash twice in a row before the cooldown has to fully refill.", weight: 6, reqs: { orbTreeAtLeast: { speed: 3 }, notOwned: ["apex_speed_blur_step"] }, effects: [{ op: "grantUpgradeId", id: "apex_speed_blur_step" }, { op: "setFlag", key: "blurStep", value: true }] },
-      { id: "apex_power_executioner", kind: "mastery", draftRole: "apex", tree: "power", tier: 3, repeatable: false, memoryPolicy: "hard", name: "Executioner's Cross", desc: "A Cross against an enemy below 25% health is a guaranteed finish.", weight: 6, reqs: { orbTreeAtLeast: { power: 3 }, notOwned: ["apex_power_executioner"] }, effects: [{ op: "grantUpgradeId", id: "apex_power_executioner" }, { op: "setFlag", key: "executionerCross", value: true }] },
-      { id: "apex_technique_flow_state", kind: "mastery", draftRole: "apex", tree: "technique", tier: 3, repeatable: false, memoryPolicy: "hard", name: "Flow State", desc: "A sustained streak of clean hits and Perfect Slips ramps your Instinct and EXP gain. Getting hit resets it to zero.", weight: 6, reqs: { orbTreeAtLeast: { technique: 3 }, notOwned: ["apex_technique_flow_state"] }, effects: [{ op: "grantUpgradeId", id: "apex_technique_flow_state" }, { op: "setFlag", key: "flowState", value: true }] }
+      { id: "mast_guard_read", kind: "mastery", draftRole: "evolution", tree: "technique", tier: 2, repeatable: false, memoryPolicy: "hard", name: "Guard Read", desc: "Releasing Guard the instant a hit lands charges a Counter. Turtling becomes a second read, not just a shield.", weight: 8, reqs: { orbTreeAtLeast: { technique: 2 }, notOwned: ["mast_guard_read"] }, effects: [{ op: "grantUpgradeId", id: "mast_guard_read" }, { op: "setFlag", key: "guardRead", value: true }] }
     ],
+    // v17: a Fusion unlocks when BOTH its trees reach rank 3, and EVOLVES when both
+    // reach rank 5 (Arc 5). Colour = the mix of its two trees (constants FUSION_COLORS).
     fusions: [
-      { id: "fuse_dempsey_circuit", kind: "fusion", draftRole: "capstone", tree: "general", tier: 3, repeatable: false, memoryPolicy: "hard", name: "Dempsey Circuit", desc: "Alternating Jab and Hook reduces recovery and preserves offensive rhythm.", weight: 4, reqs: { orbTreeAtLeast: { speed: 2, power: 2 }, notOwned: ["fuse_dempsey_circuit"] }, effects: [{ op: "grantUpgradeId", id: "fuse_dempsey_circuit" }, { op: "setFlag", key: "dempseyCircuit", value: true }, { op: "addMod", key: "dempseyRecoveryBonus", amount: 0.18 }] },
-      { id: "fuse_ghost_counter", kind: "fusion", draftRole: "capstone", tree: "general", tier: 3, repeatable: false, memoryPolicy: "hard", name: "Ghost Counter", desc: "Ghost Step through an active hitbox to gain Counter Charge.", weight: 4, reqs: { orbTreeAtLeast: { speed: 2, technique: 2 }, notOwned: ["fuse_ghost_counter"] }, effects: [{ op: "grantUpgradeId", id: "fuse_ghost_counter" }, { op: "setFlag", key: "ghostCounter", value: true }] },
-      { id: "fuse_shatter_read", kind: "fusion", draftRole: "capstone", tree: "general", tier: 3, repeatable: false, memoryPolicy: "hard", name: "Shatter Read", desc: "A Counter-Charged Cross partially bypasses boss resistance and forces a stronger stagger.", weight: 4, reqs: { orbTreeAtLeast: { power: 2, technique: 2 }, notOwned: ["fuse_shatter_read"] }, effects: [{ op: "grantUpgradeId", id: "fuse_shatter_read" }, { op: "setFlag", key: "shatterRead", value: true }, { op: "addMod", key: "shatterReadBossBypass", amount: 0.35 }, { op: "addMod", key: "shatterReadStaggerBonus", amount: 12 }] }
+      { id: "fuse_dempsey_circuit", kind: "fusion", draftRole: "capstone", tree: "general", trees: ["speed", "power"], tier: 3, repeatable: false, memoryPolicy: "hard", name: "Dempsey Circuit", desc: "Alternating Jab and Hook reduces recovery and preserves offensive rhythm.", weight: 6, reqs: { orbTreeAtLeast: { speed: 3, power: 3 }, notOwned: ["fuse_dempsey_circuit"] }, effects: [{ op: "grantUpgradeId", id: "fuse_dempsey_circuit" }, { op: "setFlag", key: "dempseyCircuit", value: true }, { op: "addMod", key: "dempseyRecoveryBonus", amount: 0.18 }] },
+      { id: "fuse_ghost_counter", kind: "fusion", draftRole: "capstone", tree: "general", trees: ["speed", "technique"], tier: 3, repeatable: false, memoryPolicy: "hard", name: "Ghost Counter", desc: "Ghost Step through an active hitbox to gain Counter Charge.", weight: 6, reqs: { orbTreeAtLeast: { speed: 3, technique: 3 }, notOwned: ["fuse_ghost_counter"] }, effects: [{ op: "grantUpgradeId", id: "fuse_ghost_counter" }, { op: "setFlag", key: "ghostCounter", value: true }] },
+      { id: "fuse_shatter_read", kind: "fusion", draftRole: "capstone", tree: "general", trees: ["power", "technique"], tier: 3, repeatable: false, memoryPolicy: "hard", name: "Shatter Read", desc: "A Counter-Charged Cross partially bypasses boss resistance and forces a stronger stagger.", weight: 6, reqs: { orbTreeAtLeast: { power: 3, technique: 3 }, notOwned: ["fuse_shatter_read"] }, effects: [{ op: "grantUpgradeId", id: "fuse_shatter_read" }, { op: "setFlag", key: "shatterRead", value: true }, { op: "addMod", key: "shatterReadBossBypass", amount: 0.35 }, { op: "addMod", key: "shatterReadStaggerBonus", amount: 12 }] },
+      // ---- EVOLVED (both trees at rank 5, base Fusion owned) ----
+      { id: "evo_infinite_circuit", kind: "fusion", evolved: true, draftRole: "capstone", tree: "general", trees: ["speed", "power"], tier: 4, repeatable: false, memoryPolicy: "hard", name: "Infinite Circuit", desc: "EVOLVED: an alternating Jab/Hook string never drops Combo on a whiff, and every 4th alternation charges a Counter.", weight: 8, reqs: { orbTreeAtLeast: { speed: 5, power: 5 }, hasUpgradeIds: ["fuse_dempsey_circuit"], notOwned: ["evo_infinite_circuit"] }, effects: [{ op: "grantUpgradeId", id: "evo_infinite_circuit" }, { op: "setFlag", key: "infiniteCircuit", value: true }] },
+      { id: "evo_phantom_riposte", kind: "fusion", evolved: true, draftRole: "capstone", tree: "general", trees: ["speed", "technique"], tier: 4, repeatable: false, memoryPolicy: "hard", name: "Phantom Riposte", desc: "EVOLVED: a perfect Ghost Step leaves an afterimage that instantly echoes a punch back at the attacker.", weight: 8, reqs: { orbTreeAtLeast: { speed: 5, technique: 5 }, hasUpgradeIds: ["fuse_ghost_counter"], notOwned: ["evo_phantom_riposte"] }, effects: [{ op: "grantUpgradeId", id: "evo_phantom_riposte" }, { op: "setFlag", key: "phantomRiposte", value: true }] },
+      { id: "evo_shatter_nova", kind: "fusion", evolved: true, draftRole: "capstone", tree: "general", trees: ["power", "technique"], tier: 4, repeatable: false, memoryPolicy: "hard", name: "Shatter Nova", desc: "EVOLVED: a Counter-Charged Cross on a boss tears off an extra 8% of its health; on anyone else it shatters every enemy in the lane.", weight: 8, reqs: { orbTreeAtLeast: { power: 5, technique: 5 }, hasUpgradeIds: ["fuse_shatter_read"], notOwned: ["evo_shatter_nova"] }, effects: [{ op: "grantUpgradeId", id: "evo_shatter_nova" }, { op: "setFlag", key: "shatterNova", value: true }] }
     ],
     overclocks: [
       { id: "oc_vital_surge", kind: "overclock", draftRole: "fallback", tree: "general", tier: 4, repeatable: true, memoryPolicy: "soft", name: "Vital Surge", desc: "Restore +20 health.", weight: 20, reqs: {}, effects: [{ op: "heal", amount: 20 }, { op: "incOverclock", key: "vitality", amount: 1 }] },
@@ -1474,19 +3322,11 @@
       case "incOrb": {
         let currentCount = st.orbCounts[effect.tree] !== void 0 ? st.orbCounts[effect.tree] : 0;
         let addAmount = effect.amount !== void 0 ? effect.amount : 1;
-        st.orbCounts[effect.tree] = currentCount + addAmount;
+        st.orbCounts[effect.tree] = Math.min(CONSTANTS.MAX_RANK, currentCount + addAmount);
+        if (!st.rankOrder) st.rankOrder = [];
+        st.rankOrder.push(effect.tree);
         let el = document.getElementById(`orb-${effect.tree}`);
         if (el) el.innerText = st.orbCounts[effect.tree];
-        let newLvl = st.orbCounts[effect.tree];
-        if (newLvl === 2) {
-          if (effect.tree === "speed") showToast("SPEED LVL 2: Missing Jabs won't break combo!");
-          if (effect.tree === "power") showToast("POWER LVL 2: Cross attack gains massive reach!");
-          if (effect.tree === "technique") showToast("TECH LVL 2: Perfect Slips charge 2 Counter hits!");
-        } else if (newLvl === 3) {
-          if (effect.tree === "speed") showToast("SPEED MAX: Slip Cancel active!");
-          if (effect.tree === "power") showToast("POWER MAX: Bowling Collateral active!");
-          if (effect.tree === "technique") showToast("TECH MAX: True Read active!");
-        }
         break;
       }
       case "mulStat": {
@@ -1598,6 +3438,13 @@
     }
     return CONSTANTS.STAGE_TAGLINES[1];
   }
+  function roundCard(stage, tagline) {
+    var _a;
+    const arc = Math.min(CONSTANTS.getArcIndex(stage), 5);
+    const law = CONSTANTS.ARC_LAWS[arc] || CONSTANTS.ARC_LAWS[5];
+    const data = ((_a = CONSTANTS.ARC_STAGE_TABLES[arc]) == null ? void 0 : _a[CONSTANTS.getLevelInArc(stage)]) || { stageName: "Unknown Depths" };
+    return { round: stage, venue: data.stageName, tagline: tagline || "", kicker: `${law.shortName} \xB7 ${law.name.toUpperCase()}`, color: ARC_COLORS[arc] || "#22d3ee" };
+  }
   function advanceStage() {
     var _a;
     const prevStage = gameState.currentStage;
@@ -1654,6 +3501,7 @@
     let titleText = isBoss ? stageData.stageName : `${law.shortName} \u2014 ${stageData.stageName}`;
     let subtitleText = isBoss ? law.uiText : CONSTANTS.STAGE_TAGLINES[levelInArc];
     const isNewArc = CONSTANTS.locateStage(gameState.currentStage).ordinal === 1 && gameState.currentStage > 1;
+    if (isNewArc) gameState.knockdownsThisArc = 0;
     const chapterCardSteps = isNewArc ? [
       { type: "tint", color: "rgba(0, 0, 0, 0.82)", duration: 20 },
       { type: "text", title: `ARC ${safeArcIndex}`, subtitle: law.name.toUpperCase(), duration: 85 },
@@ -1670,7 +3518,9 @@
       } },
       { type: "sweep", duration: rm ? 24 : 54 },
       ...chapterCardSteps,
-      { type: "text", title: titleText, subtitle: subtitleText, duration: 120 },
+      // v17 ROUND FRAMING: every fight opens on a bell + billing card; a boss
+      // stage instead gets its title-fight poster when the champion walks out.
+      ...isBoss ? [] : [{ type: "billing", duration: 120, card: roundCard(gameState.currentStage, subtitleText) }],
       { type: "wager" },
       ...hotLaneCard,
       { type: "walkin", duration: rm ? 24 : 44 },
@@ -1715,6 +3565,13 @@
   }
 
   // src/systems/progression/draft.js
+  function nextRank(st, pool, tree) {
+    const r = st.orbCounts && st.orbCounts[tree] || 0;
+    return pool.orbs.find((o) => o.tree === tree && o.rank === r + 1) || null;
+  }
+  function currentRankCap(st) {
+    return CONSTANTS.rankCap(CONSTANTS.getArcIndex(st.currentStage || 1));
+  }
   function buildEligiblePool(st, pool) {
     const pools = {
       orbs: [],
@@ -1722,10 +3579,10 @@
       fusions: [],
       overclocks: []
     };
-    for (const orb of pool.orbs) {
-      if (meetsRequirements(orb, st)) {
-        pools.orbs.push(orb);
-      }
+    const cap = currentRankCap(st);
+    for (const tree of CONSTANTS.TREE_ORDER) {
+      const next = nextRank(st, pool, tree);
+      if (next && next.rank <= cap) pools.orbs.push(next);
     }
     for (const mastery of pool.masteries) {
       if (meetsRequirements(mastery, st) && !isRecentlyOffered(st, mastery)) {
@@ -1781,9 +3638,11 @@
     const excludedIds = /* @__PURE__ */ new Set();
     const slotRules = [
       ["orbs", "masteries", "fusions", "overclocks"],
-      // Slot 1: Core Growth
-      ["masteries", "orbs", "fusions", "overclocks"],
-      // Slot 2: Evolution
+      // Slot 1: a tree rank
+      // v17: slot 2 prefers a SECOND tree's rank, so a draft usually lets you
+      // choose which tree climbs (and a rank-3 verb isn't crowded out).
+      ["orbs", "masteries", "fusions", "overclocks"],
+      // Slot 2: another tree rank
       ["fusions", "masteries", "orbs", "overclocks"]
       // Slot 3: Capstone/Flex
     ];
@@ -1807,12 +3666,29 @@
     return chosen;
   }
   var TREE_SHORT = { speed: "SPD", power: "PWR", technique: "TEC" };
+  function buildRankTease(st, pool) {
+    const cap = currentRankCap(st);
+    const order = st.rankOrder || [];
+    let best = null;
+    for (const tree of CONSTANTS.TREE_ORDER) {
+      const r = st.orbCounts[tree] || 0;
+      if (r < cap || r >= CONSTANTS.MAX_RANK) continue;
+      if (!best || r > best.r || r === best.r && order.lastIndexOf(tree) > order.lastIndexOf(best.tree)) best = { tree, r };
+    }
+    if (!best) return null;
+    const next = nextRank(st, pool, best.tree);
+    if (!next) return null;
+    return { ...next, locked: true, reqText: `UNLOCKS IN ARC ${CONSTANTS.arcForRank(next.rank)}` };
+  }
+  function buildDraftTease(st, pool, arcIndex) {
+    return buildRankTease(st, pool) || buildFusionTease(st, pool, arcIndex);
+  }
   function buildFusionTease(st, pool, arcIndex) {
     if (arcIndex !== 1) return null;
     if ((st.currentDraftOptions || []).some((o) => o.kind === "fusion")) return null;
     let best = null;
     for (const f of pool.fusions) {
-      if (st.acquiredUpgradeIds.includes(f.id)) continue;
+      if (f.evolved || st.acquiredUpgradeIds.includes(f.id)) continue;
       const need = f.reqs && f.reqs.orbTreeAtLeast || {};
       let missing = 0;
       for (const [tree, lvl] of Object.entries(need)) missing += Math.max(0, lvl - (st.orbCounts[tree] || 0));
@@ -1914,285 +3790,66 @@
     });
   }
 
-  // src/systems/boss_rules.js
-  var BO = CONSTANTS.BOSS_OFFENSE;
-  function telegraphLead(en) {
-    const mult = en && en.arcMods && en.arcMods.punishWindowMult || 1;
-    return Math.max(BO.minTelegraphLead, Math.floor(BO.telegraphLead * mult));
+  // src/systems/colors.js
+  function treeColor(tree) {
+    return CONSTANTS.TREES[tree] && CONSTANTS.TREES[tree].color || "#ffffff";
   }
-  function punishFrames(en, move) {
-    const mult = en && en.arcMods && en.arcMods.punishWindowMult || 1;
-    const base = BO.punishFrames[move] || BO.punishFrames.jab;
-    return Math.max(BO.minPunishFrames, Math.floor(base * mult));
+  function upgradeColorFor(u) {
+    if (!u) return "#ffffff";
+    if (CONSTANTS.FUSION_COLORS[u.id]) return CONSTANTS.FUSION_COLORS[u.id];
+    if (u.kind === "overclock") return "#c084fc";
+    return treeColor(u.tree);
   }
-  function beginPunishWindow(en, move) {
-    const f = punishFrames(en, move);
-    en.recoverTimer = f;
-    en.recoverMax = f;
-    en.punishShown = false;
-    en.telegraphed = false;
-  }
-  function isBossOpen(en) {
-    if (!en || !en.isBoss) return false;
-    if ((en.recoverTimer || 0) > 0) return true;
-    return en.controller === "static_monk" && en.currentMove === "recharge";
-  }
-  function clampCycle(frames) {
-    return Math.max(BO.minTelegraphLead + 2, Math.round(frames));
+  function buildColor() {
+    const owned = gameState.acquiredUpgradeIds || [];
+    for (let i = owned.length - 1; i >= 0; i--) {
+      if (CONSTANTS.FUSION_COLORS[owned[i]]) return CONSTANTS.FUSION_COLORS[owned[i]];
+    }
+    let best = null, bestRank = 0;
+    const order = gameState.rankOrder || [];
+    for (const tree of CONSTANTS.TREE_ORDER) {
+      const r = gameState.orbCounts && gameState.orbCounts[tree] || 0;
+      if (r > bestRank || r === bestRank && r > 0 && order.lastIndexOf(tree) > order.lastIndexOf(best)) {
+        best = tree;
+        bestRank = r;
+      }
+    }
+    return best ? treeColor(best) : "#ffffff";
   }
 
-  // src/systems/finisher.js
-  var F = CONSTANTS.FINISHER;
-  var LANE_STEP = { up: -1, down: 1 };
-  function finisherSequence(controller, kind) {
-    const set = F.sequences[controller] || F.sequences.neon_enforcer;
-    return set[kind] || set.break1;
+  // src/systems/negative.js
+  var ECHO_DELAY = 26;
+  function invertHex(hex) {
+    const h = String(hex || "#00ffff").replace("#", "");
+    const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h.padEnd(6, "0").slice(0, 6);
+    const n = parseInt(full, 16);
+    return "#" + (16777215 ^ n).toString(16).padStart(6, "0");
   }
-  function gateBossDamage(en, dmg) {
-    if (!en || !en.isBoss || en.koDone || gameState.finisher || en.pendingFinisher) return dmg;
-    const stage = en.finisherStage || 0;
-    if (stage < F.thresholds.length) {
-      const line = en.maxHp * F.thresholds[stage];
-      if (en.hp - dmg <= line) {
-        en.finisherStage = stage + 1;
-        en.pendingFinisher = "break" + (stage + 1);
-        return Math.max(0, en.hp - line);
-      }
-    }
-    if (en.hp - dmg <= 0) {
-      en.pendingFinisher = "ko";
-      return Math.max(0, en.hp - 1);
-    }
-    return dmg;
-  }
-  function checkBossThresholds(en) {
-    if (!en || !en.isBoss || en.koDone || gameState.finisher || en.pendingFinisher) return;
-    const stage = en.finisherStage || 0;
-    if (en.hp <= 0) {
-      en.hp = 1;
-      en.pendingFinisher = "ko";
-      return;
-    }
-    if (stage < F.thresholds.length && en.hp <= en.maxHp * F.thresholds[stage]) {
-      en.finisherStage = stage + 1;
-      en.pendingFinisher = "break" + (stage + 1);
-    }
-  }
-  function startFinisher(en, kind) {
-    const seq = finisherSequence(en.controller, kind).slice();
-    let dmgPerHit = 0;
-    if (kind !== "ko") {
-      const nextStage = en.finisherStage || 0;
-      const floorFrac = nextStage < F.thresholds.length ? F.thresholds[nextStage] + 0.02 : 0.02;
-      const budget = Math.max(0, Math.min(en.maxHp * F.breakDamageFrac, en.hp - en.maxHp * floorFrac));
-      dmgPerHit = budget / seq.length;
-    }
-    gameState.finisher = {
-      boss: en,
-      kind,
-      seq,
-      idx: 0,
-      phase: "intro",
-      frame: 0,
-      timer: F.introFrames,
-      nextBeat: 0,
-      hits: 0,
-      perfects: 0,
-      result: null,
-      dmgPerHit,
-      zoom: 1,
-      bars: 0,
-      freeze: 0,
-      poseTimer: 0,
-      judge: null,
-      judgeTimer: 0,
-      jabAlt: false
-    };
-    const p = gameState.player;
-    p.state = "idle";
-    p.punchTimer = 0;
-    p.hitFrame = 0;
-    p.inputBuffer = null;
-    p.movementBuffer = null;
-    p.lane = 1;
-    p.x = Math.min(Math.max(p.x, 160), 300);
-    en.lane = 1;
-    en.x = p.x + 118;
-    en.vx = 0;
-    en.stun = 0;
-    en.recoverTimer = 0;
-    en.telegraphed = false;
-    en.shiftWarning = 0;
-    en.exposedTimer = 0;
-    en.decoyTimer = 0;
-    en.targetLanes = [];
-    en.justAttacked = 0;
-    gameState.hazards = [];
-    gameState.hitstop = 0;
-    const label = kind === "ko" ? "FINAL BLOW" : "STAGGERED!";
-    spawnFloatingText(en.x + en.w / 2, en.y - 190, label, kind === "ko" ? "#ff0055" : "#ffffff");
-    playSound("stagger");
-    doFlash(kind === "ko" ? 0.7 : 0.5);
-    triggerShockwave(en.x, en.y - 60, gameState.bossThemeColor || "#ffffff");
-    createShatter(en.x, en.y - 60, gameState.bossThemeColor || "#ffffff");
-    gameState.shake = Math.max(gameState.shake, 20);
-  }
-  function justPressed(code) {
-    return !!gameState.keys[code] && !gameState.lastKeys[code];
-  }
-  function readFinisherInput() {
-    if (justPressed("ArrowUp") || gameState.pad.up) return "up";
-    if (justPressed("ArrowDown") || gameState.pad.down) return "down";
-    if (justPressed("KeyA") || gameState.pad.jab) return "jab";
-    if (justPressed("KeyS") || gameState.pad.cross) return "cross";
-    if (justPressed("KeyD") || gameState.pad.hook) return "hook";
-    return null;
-  }
-  var ease = (t) => 1 - Math.pow(1 - Math.min(1, Math.max(0, t)), 3);
-  function judge(text, color) {
-    const f = gameState.finisher;
-    f.judge = { text, color };
-    f.judgeTimer = 34;
-  }
-  function landPrompt(isPerfect) {
-    const f = gameState.finisher, en = f.boss, p = gameState.player;
-    const move = f.seq[f.idx];
-    if (move in LANE_STEP) {
-      const old = { x: en.x, y: en.y };
-      p.lane += LANE_STEP[move];
-      p.slipCooldown = 20;
-      en.lane = p.lane;
-      en.y = gameState.height * CONSTANTS.LANE_Y[en.lane];
-      createShatter(old.x, old.y - 60, gameState.bossThemeColor || "#ffffff");
-      p.state = "punching";
-      p.punchType = "cross";
-      p.hitFrame = 0;
-      p.didHit = true;
-    } else {
-      p.state = "punching";
-      p.punchType = move === "jab" ? (f.jabAlt = !f.jabAlt) ? "jab1" : "jab2" : move;
-      p.hitFrame = 0;
-      p.didHit = true;
-    }
-    f.poseTimer = 12;
-    if (f.kind !== "ko") en.hp = Math.max(1, en.hp - f.dmgPerHit);
-    f.hits++;
-    gameState.statFinisherHits = (gameState.statFinisherHits || 0) + 1;
-    if (isPerfect) f.perfects++;
-    gameState.combo++;
-    if (gameState.combo > gameState.statMaxCombo) gameState.statMaxCombo = gameState.combo;
-    addScore(CONSTANTS.SCORE.finisherHit + (isPerfect ? CONSTANTS.SCORE.finisherPerfect : 0), en.x + en.w / 2, en.y - 150, { big: true });
-    judge(isPerfect ? "PERFECT" : "GREAT", isPerfect ? "#ffffff" : "#22d3ee");
-    playSound("finisher_hit");
-    doFlash(isPerfect ? 0.45 : 0.3);
-    gameState.shake = Math.max(gameState.shake, isPerfect ? 26 : 18);
-    triggerShockwave(en.x, en.y - 60, isPerfect ? "#ffffff" : gameState.bossThemeColor || "#ff0055");
-    createShatter(en.x, en.y - 70, isPerfect ? "#ffffff" : gameState.bossThemeColor || "#ff0055");
-    for (let i = 0; i < 3; i++) createImpact(en.x, en.y - 60 - i * 20, "#ffffff");
-    f.freeze = hitStopEnabled() ? isPerfect ? 9 : 6 : 0;
-    f.idx++;
-    if (f.idx >= f.seq.length) endPrompts("clean");
-    else f.nextBeat += F.beatFrames;
-  }
-  function missPrompt(reason) {
-    judge(reason, "#ff8800");
-    playSound("finisher_miss");
-    endPrompts("broken");
-  }
-  function endPrompts(result) {
-    const f = gameState.finisher;
-    f.result = result;
-    f.phase = "outro";
-    f.timer = F.outroFrames;
-    const en = f.boss;
-    if (result === "clean") {
-      gameState.statFinishersClean = (gameState.statFinishersClean || 0) + 1;
-      addScore(CONSTANTS.SCORE.finisherClean, en.x + en.w / 2, en.y - 210, { big: true });
-      spawnFloatingText(en.x + en.w / 2, en.y - 230, f.kind === "ko" ? "FLAWLESS FINISH" : "FULL BREAK!", "#facc15");
-    } else if (f.kind !== "ko") {
-      spawnFloatingText(en.x + en.w / 2, en.y - 230, "STAGGER BROKEN", "#ff8800");
-    }
-    if (f.kind === "ko") {
-      playSound("finisher_ko");
-      doFlash(0.8);
-      gameState.shake = Math.max(gameState.shake, 40);
-      for (let i = 0; i < 3; i++) triggerShockwave(en.x, en.y - 60 - i * 10, i === 1 ? "#ffffff" : gameState.bossThemeColor || "#ff0055");
-      spawnFloatingText(en.x + en.w / 2, en.y - 260, "K.O.", "#ffffff");
-    }
-  }
-  function finishFinisher() {
-    const f = gameState.finisher, en = f.boss, p = gameState.player;
-    p.state = "idle";
-    p.punchType = null;
-    if (f.kind === "ko") {
-      en.koDone = true;
-      en.hp = 0;
-    } else {
-      en.x = Math.min(gameState.width - 150, en.x + 150);
-      en.stun = 0;
-      en.stunResist = 60;
-      en.recoverTimer = 0;
+  function negativeReact(en, buffActive) {
+    const m = en.arcMods || {};
+    if (en.slipCooldown > 0) return false;
+    if (buffActive && random() < (m.counterRead || 0.5)) {
+      en.slipCooldown = 40;
+      spawnFloatingText(en.x + 20, en.y - 150, "READ YOU.", en.color);
+      playSound("feint_tell");
+      en.currentMove = "cross";
+      en.attackCooldown = telegraphLead(en) + 2;
       en.telegraphed = false;
-      en.attackCooldown = (en.maxCooldown || 60) + 40;
-      if (en.controller === "static_monk") {
-        en.currentMove = "laser";
-        en.attackCooldown = 110;
-        en.bossMashCount = 0;
-      }
+      return true;
     }
-    gameState.finisher = null;
-    gameState.finisherZoom = 1;
-  }
-  function updateFinisher() {
-    const f = gameState.finisher;
-    if (!f) return;
-    f.frame++;
-    if (f.judgeTimer > 0) f.judgeTimer--;
-    if (f.freeze > 0) f.freeze--;
-    if (f.poseTimer > 0 && --f.poseTimer === 0) gameState.player.state = "idle";
-    gameState.player.y += (gameState.height * CONSTANTS.LANE_Y[gameState.player.lane] - gameState.player.y) * 0.35;
-    if (gameState.player.slipCooldown > 0) gameState.player.slipCooldown--;
-    if (f.phase === "intro") {
-      f.timer--;
-      const k = ease(1 - f.timer / F.introFrames);
-      f.zoom = 1 + (F.zoom - 1) * k;
-      f.bars = k;
-      if (f.timer <= 0) {
-        f.phase = "prompts";
-        f.nextBeat = f.frame + F.beatFrames * F.leadBeats;
-      }
-    } else if (f.phase === "prompts") {
-      f.zoom = F.zoom;
-      f.bars = 1;
-      const t = f.frame - f.nextBeat;
-      if (t === 0) playSound("beat_tick");
-      const input = readFinisherInput();
-      const want = f.seq[f.idx];
-      if (input) {
-        if (t < -F.windowEarly) missPrompt("TOO EARLY");
-        else if (input !== want) missPrompt("WRONG MOVE");
-        else landPrompt(Math.abs(t) <= F.perfectWindow);
-      } else if (t > F.windowLate) {
-        missPrompt("MISSED");
-      }
-    } else if (f.phase === "outro") {
-      f.timer--;
-      const k = ease(f.timer / F.outroFrames);
-      f.zoom = 1 + (F.zoom - 1) * k;
-      f.bars = k;
-      if (f.timer <= 0) {
-        finishFinisher();
-        return;
-      }
+    if (random() < (m.echoChance || 0.35)) {
+      en.slipCooldown = 36;
+      const oldLane = en.lane;
+      const lanes = [oldLane - 1, oldLane + 1].filter((l) => l >= 0 && l <= 2);
+      en.lane = lanes[Math.floor(random() * lanes.length)];
+      if (!gameState.enemyEchoes) gameState.enemyEchoes = [];
+      gameState.enemyEchoes.push({ lane: oldLane, x: en.x, y: gameState.height * CONSTANTS.LANE_Y[oldLane], timer: ECHO_DELAY, fade: 20, fired: false, color: en.color });
+      createShatter(en.x, en.y - 60, en.color);
+      spawnFloatingText(en.x + 20, en.y - 150, "AFTERIMAGE", en.color);
+      playSound("ghost_step");
+      return true;
     }
-    gameState.finisherZoom = reducedMotion() ? 1 : f.zoom;
-  }
-  function promptProgress() {
-    const f = gameState.finisher;
-    if (!f || f.phase !== "prompts") return null;
-    const lead = F.beatFrames * F.leadBeats;
-    const t = f.frame - f.nextBeat;
-    return { move: f.seq[f.idx], progress: Math.min(1.2, Math.max(0, (t + lead) / lead)), t };
+    return false;
   }
 
   // src/systems/combat.js
@@ -2203,6 +3860,9 @@
     let reach = isJab ? 120 : type === "cross" ? 140 * reachMult : 140;
     let hitSomething = false;
     let buffActive = gameState.player.slipBuff > 0;
+    const loaded = type === "cross" && !!gameState.player.crossLoaded;
+    const spark = buildColor();
+    let ropeBounce = false, novaLanes = [];
     if (gameState.player.slipBuff > 0) gameState.player.slipBuff--;
     const jX = () => Math.random() * 50 - 25;
     const jY = () => Math.random() * 30 - 15;
@@ -2230,12 +3890,12 @@
           continue;
         }
         if (en.tutorialType === "guard") {
-          spawnFloatingText(en.x, en.y - 80, "WAIT & HOLD SHIFT!", "#ffaa00");
+          spawnFloatingText(en.x, en.y - 80, `WAIT & HOLD [${keyName("guard")}]!`, "#ffaa00");
           hitSomething = true;
           continue;
         }
         if (en.tutorialType === "ghost_step") {
-          spawnFloatingText(en.x, en.y - 80, "USE GHOST STEP [LEFT]!", "#ffaa00");
+          spawnFloatingText(en.x, en.y - 80, `GHOST STEP [${keyName("ghost")}]!`, "#ffaa00");
           hitSomething = true;
           continue;
         }
@@ -2244,7 +3904,7 @@
             en.hp = 0;
             spawnFloatingText(gameState.player.x + jX(), gameState.player.y - 50 + jY(), "ARMOR BROKEN!", "#00ffff");
           } else {
-            spawnFloatingText(gameState.player.x + jX(), gameState.player.y - 50 + jY(), "USE CROSS [S] TO BREAK!", "#ffaa00");
+            spawnFloatingText(gameState.player.x + jX(), gameState.player.y - 50 + jY(), `USE CROSS [${keyName("cross")}] TO BREAK!`, "#ffaa00");
             en.x = gameState.player.x + 200;
             en.attackCooldown = en.maxCooldown;
             playSound("bounce");
@@ -2272,6 +3932,19 @@
           en.pressureDecay = Math.max(15, Math.floor(45 / jpm));
         }
         if (buffActive) dmg *= 2;
+        if (loaded) dmg = Math.round(dmg * 1.3);
+        if ((en.onRopes || 0) > 0 && (buffActive || loaded)) {
+          dmg = Math.round(dmg * CONSTANTS.ROPES.bounceDmgMult);
+          ropeBounce = true;
+          en.ropeBounce = 8;
+          spawnFloatingText(en.x + jX(), en.y - 130 + jY(), "ROPE BOUNCE!", spark);
+        }
+        if (gameState.progressionMods.shatterNova && buffActive && type === "cross") {
+          if (en.isBoss) dmg += Math.round(en.maxHp * 0.08);
+          else novaLanes.push(en.lane);
+          spawnFloatingText(en.x + jX(), en.y - 150 + jY(), "SHATTER NOVA", CONSTANTS.FUSION_COLORS.evo_shatter_nova);
+        }
+        if (loaded) spawnFloatingText(en.x + jX(), en.y - 110 + jY(), "LOADED!", spark);
         if (en.type === "shield" && type === "cross") {
           en.type = "grunt";
           if (!en.isBoss) en.color = "#ff0055";
@@ -2287,6 +3960,7 @@
             playSound("punish");
           }
         }
+        if (en.controller === "negative" && !bossOpen && negativeReact(en, buffActive)) return false;
         let trueReadActive = false;
         if (en.isBoss && (en.exposedTimer || 0) > 0 && (type === "cross" || type === "hook" || buffActive)) {
           trueReadActive = true;
@@ -2398,7 +4072,9 @@
         let powerFactor = gameState.stats.powerMult * (gameState.isInstinct ? 2 : 1) * (buffActive ? 1.5 : 1);
         if (trueReadActive) powerFactor *= 1.5;
         let baseKB = 0;
-        if (buffActive || trueReadActive) {
+        if (loaded) {
+          baseKB = CONSTANTS.VERBS.loadedCross.knockback;
+        } else if (buffActive || trueReadActive) {
           baseKB = 45;
         } else {
           if (type === "jab1" || type === "jab2") {
@@ -2432,6 +4108,7 @@
           else if (type === "check_hook") stunAmount = 20;
           else if (type === "cross") stunAmount = 40;
           if (buffActive) stunAmount += 15;
+          if (loaded) stunAmount += CONSTANTS.VERBS.loadedCross.stun;
           if (type === "cross" && (en.type === "shield" || en.type === "bruiser" || en.isBoss && en.name === "NEON ENFORCER" && en.phase === 2)) {
             stunAmount += gameState.progressionMods.crossArmorStunBonus;
           }
@@ -2441,7 +4118,7 @@
             spawnFloatingText(en.x + jX(), en.y - 120 + jY(), "SHATTER READ!", "#ff0055");
           }
           if (en.name === "NEON ENFORCER" && en.phase === 2) {
-            if (buffActive || trueReadActive) {
+            if (buffActive || trueReadActive || loaded) {
               canStun = true;
               stunAmount += 10;
               gameState.statBossBreaks++;
@@ -2472,13 +4149,13 @@
           gameState.exp += gameState.progressionMods.hardTargetExpFlat;
         }
         hitSomething = true;
-        if (buffActive && en.tutorialType !== "counter") {
-          createShatter(en.x, en.y - 60, "#ffffff");
+        if ((buffActive || loaded) && en.tutorialType !== "counter") {
+          createShatter(en.x, en.y - 60, spark);
         } else if (en.tutorialType !== "counter") {
-          createImpact(en.x, en.y - 60, gameState.isInstinct ? "#ff00ff" : null);
+          createImpact(en.x, en.y - 60, spark);
         }
-        if (gameState.orbCounts.power >= 3 && en.hp <= 0 && (type === "cross" || buffActive)) {
-          triggerShockwave(en.x, en.y - 60, "#ff0055");
+        if (gameState.orbCounts.power >= 4 && en.hp <= 0 && (type === "cross" || buffActive)) {
+          triggerShockwave(en.x, en.y - 60, spark);
         }
       }
     }
@@ -2501,13 +4178,24 @@
       }
       let stopMult = 1 + (gameState.isInstinct ? 0.5 : 0) + (buffActive ? 0.5 : 0);
       gameState.hitstop = isJab ? Math.floor(2 * stopMult) : type === "cross" ? Math.floor(5 * stopMult) : Math.floor(3 * stopMult);
+      if (loaded) gameState.hitstop += 6;
+      if (ropeBounce) {
+        gameState.hitstop += CONSTANTS.ROPES.bounceHitstop;
+        playSound("rope_bounce");
+      }
       gameState.shake = (type === "cross" ? 8 : isJab ? 2 : 4) * stopMult;
       if (type === "cross" || buffActive) doFlash(buffActive ? 0.6 : 0.2);
       if (type === "cross" && gameState.orbCounts.power >= 2) {
-        createImpact(gameState.player.x + reach, gameState.player.y - 40, "#ff0055");
+        createImpact(gameState.player.x + reach, gameState.player.y - 40, spark);
         gameState.shake += 5;
       }
-      if (gameState.orbCounts.speed >= 3 && (isJab || type === "hook")) {
+      if (novaLanes.length) gameState.enemies.forEach((o) => {
+        if (!o.isBoss && novaLanes.includes(o.lane) && !o.tutorialType) {
+          o.hp = 0;
+          createShatter(o.x, o.y - 60, CONSTANTS.FUSION_COLORS.evo_shatter_nova);
+        }
+      });
+      if (gameState.orbCounts.speed >= 4 && (isJab || type === "hook")) {
         gameState.player.moveCancelReady = true;
       }
       if (!buffActive) playSound("hit");
@@ -2517,11 +4205,55 @@
 
   // src/entities/player.js
   function resetPlayerObj() {
-    return { lane: 1, x: 180, y: 0, w: 50, h: 110, state: "idle", punchTimer: 0, punchType: null, hitFrame: 0, didHit: false, slipCooldown: 0, slipBuff: 0, color: "#00ffff", trails: [], trailTimer: 0, recoveryTimer: 0, moveCancelReady: false, jabStep: 0, comboWindow: 0, inputBuffer: null, inputBufferTimer: 0, movementBuffer: null, movementBufferTimer: 0, ghostStepTimer: 0, ghostStepCooldown: 0, ghostStepCharges: 1, dangerLevel: 0, hitStun: 0, lastPunchLanded: null, dempseyActive: false, guardReadTimer: 0, flowStreak: 0 };
+    return {
+      lane: 1,
+      x: 180,
+      y: 0,
+      w: 50,
+      h: 110,
+      state: "idle",
+      punchTimer: 0,
+      punchType: null,
+      hitFrame: 0,
+      didHit: false,
+      slipCooldown: 0,
+      slipBuff: 0,
+      color: "#00ffff",
+      trails: [],
+      trailTimer: 0,
+      recoveryTimer: 0,
+      moveCancelReady: false,
+      jabStep: 0,
+      comboWindow: 0,
+      inputBuffer: null,
+      inputBufferTimer: 0,
+      movementBuffer: null,
+      movementBufferTimer: 0,
+      ghostStepTimer: 0,
+      ghostStepCooldown: 0,
+      ghostStepCharges: 1,
+      dangerLevel: 0,
+      hitStun: 0,
+      lastPunchLanded: null,
+      dempseyActive: false,
+      guardReadTimer: 0,
+      flowStreak: 0,
+      // v17
+      invuln: 0,
+      pivotTimer: 0,
+      charging: false,
+      crossCharge: 0,
+      crossLoaded: false,
+      bufferedCharge: 0,
+      cornered: false,
+      cornerTimer: 0,
+      dempseyAlternations: 0
+    };
   }
-  var FOOTWORK_MIN_X = 90;
-  var FOOTWORK_MAX_X = 320;
-  var FOOTWORK_ADVANCE_SPD = 3;
+  var R = CONSTANTS.ROPES;
+  var FOOTWORK_MIN_X = R.playerMinX;
+  var FOOTWORK_MAX_X = R.playerMaxX;
+  var FOOTWORK_ADVANCE_SPD = 4.2;
   var FOOTWORK_RETREAT_SPD = 3.4;
   var FOOTWORK_HOME_PULL = 0.02;
   function resetJabString() {
@@ -2532,56 +4264,70 @@
       gameState.player.dempseyActive = false;
     }
   }
-  function executeAttackInput(code) {
+  function executeAttackInput(action, charge = 0) {
     if (gameState.player.state === "guarding") {
-      if (code === "KeyA") startPunch("guard_jab");
-      if (code === "KeyD") startPunch("check_hook");
+      if (action === "jab") startPunch("guard_jab");
+      if (action === "hook") startPunch("check_hook");
       return;
     }
-    if (code === "KeyA") {
+    if (action === "jab") {
       if (gameState.player.jabStep === 0) startPunch("jab1");
       else if (gameState.player.jabStep === 1) startPunch("jab2");
       else if (gameState.player.jabStep === 2) startPunch("jab3");
       else startPunch("jab1");
-    } else if (code === "KeyS") startPunch("cross");
-    else if (code === "KeyD") startPunch("hook");
+    } else if (action === "cross") startPunch("cross", charge);
+    else if (action === "hook") startPunch("hook");
   }
-  function executeMovementInput(code) {
-    if (code === "ShiftLeft" || code === "ShiftRight") {
+  function ghostStep() {
+    const maxGhostCharges = gameState.progressionMods.blurStep ? 2 : 1;
+    if (gameState.player.ghostStepCharges === void 0) gameState.player.ghostStepCharges = maxGhostCharges;
+    if (gameState.player.ghostStepCharges <= 0) return;
+    gameState.player.ghostStepCharges--;
+    gameState.player.state = "ghost_step";
+    gameState.player.ghostStepTimer = 18;
+    gameState.player.ghostPerfected = false;
+    gameState.player.charging = false;
+    if (gameState.player.ghostStepCharges <= 0) gameState.player.ghostStepCooldown = Math.max(10, Math.floor(60 * gameState.progressionMods.ghostStepCooldownMult));
+    resetJabString();
+    playSound("ghost_step");
+    for (let i = 0; i < 8; i++) {
+      gameState.particles.push({ x: gameState.player.x + Math.random() * 30, y: gameState.player.y - 30 - Math.random() * 60, vx: -10 - Math.random() * 15, vy: 0, life: 0.6, color: "#666666", type: "dash_line" });
+    }
+  }
+  function executeMovementInput(action) {
+    if (action === "guard") {
       gameState.player.state = "guarding";
+      gameState.player.charging = false;
       gameState.combo = 0;
       resetJabString();
-    } else if (code === "ArrowLeft") {
-      const maxGhostCharges = gameState.progressionMods.blurStep ? 2 : 1;
-      if (gameState.player.ghostStepCharges === void 0) gameState.player.ghostStepCharges = maxGhostCharges;
-      if (gameState.player.ghostStepCharges > 0) {
-        gameState.player.ghostStepCharges--;
-        gameState.player.state = "ghost_step";
-        gameState.player.ghostStepTimer = 18;
-        gameState.player.ghostPerfected = false;
-        if (gameState.player.ghostStepCharges <= 0) gameState.player.ghostStepCooldown = Math.max(10, Math.floor(60 * gameState.progressionMods.ghostStepCooldownMult));
-        resetJabString();
-        playSound("ghost_step");
-        for (let i = 0; i < 8; i++) {
-          gameState.particles.push({ x: gameState.player.x + Math.random() * 30, y: gameState.player.y - 30 - Math.random() * 60, vx: -10 - Math.random() * 15, vy: 0, life: 0.6, color: "#666666", type: "dash_line" });
-        }
-      }
-    } else if (code === "ArrowUp" || code === "ArrowDown") {
+    } else if (action === "ghost") ghostStep();
+    else if (action === "up" || action === "down") {
       const oldLane = gameState.player.lane;
-      if (code === "ArrowUp") gameState.player.lane = Math.max(0, gameState.player.lane - 1);
-      if (code === "ArrowDown") gameState.player.lane = Math.min(2, gameState.player.lane + 1);
+      if (action === "up") gameState.player.lane = Math.max(0, gameState.player.lane - 1);
+      if (action === "down") gameState.player.lane = Math.min(2, gameState.player.lane + 1);
       if (oldLane !== gameState.player.lane) {
         if (gameState.player.slipCooldown <= 0) {
           checkPerfectSlip(oldLane);
           gameState.player.slipCooldown = 12;
           resetJabString();
+          if (gameState.progressionMods.pivotSlip) pivotForward();
         } else {
           gameState.player.lane = oldLane;
         }
       }
     }
   }
-  function registerPerfectGhostStep() {
+  function pivotForward() {
+    const V = CONSTANTS.VERBS.pivotSlip, p = gameState.player;
+    const target = gameState.enemies.filter((e) => e.lane === p.lane && e.x > p.x).sort((a, b) => a.x - b.x)[0];
+    const want = target ? Math.min(target.x - 95, p.x + V.advance) : p.x;
+    if (want > p.x + 4) {
+      p.x = Math.min(FOOTWORK_MAX_X, want);
+      for (let i = 0; i < 6; i++) gameState.particles.push({ x: p.x - 20 - Math.random() * 30, y: p.y - 30 - Math.random() * 60, vx: -8 - Math.random() * 8, vy: 0, life: 0.5, color: buildColor(), type: "dash_line" });
+    }
+    p.pivotTimer = V.instantWindow;
+  }
+  function registerPerfectGhostStep(attacker) {
     const p = gameState.player;
     if (!p || p.ghostPerfected) return false;
     p.ghostPerfected = true;
@@ -2591,14 +4337,16 @@
     p.flowStreak = (p.flowStreak || 0) + 1;
     addScore(CONSTANTS.SCORE.perfectGhostStep, p.x + 40, p.y - 120);
     spawnFloatingText(p.x, p.y - 95, "PERFECT GHOST +1", "#e5e7eb");
+    if (gameState.progressionMods.phantomRiposte) spawnAfterimage(p.lane, p.x, 8);
     return true;
   }
   function checkPerfectSlip(oldLane) {
     let slipQuality = "none", bossSlipped = null;
+    const cornered = CONSTANTS.isCornered(gameState.player);
     gameState.enemies.forEach((en) => {
       if (en.lane === oldLane && en.stun <= 0) {
         let isThreat = false;
-        const { perfect: perfectThresh, good: goodThresh } = CONSTANTS.getSlipThresholds(en.type, gameState.progressionMods.perfectSlipWindowBonus);
+        const { perfect: perfectThresh, good: goodThresh } = CONSTANTS.getSlipThresholds(en.type, gameState.progressionMods.perfectSlipWindowBonus, cornered);
         if (en.type === "zoner") {
           if (en.attackCooldown <= 40 && en.x > gameState.player.x - 20) isThreat = true;
         } else if (Math.abs(en.x - gameState.player.x) < 130 && en.attackCooldown <= 22 && en.x > gameState.player.x - 20) {
@@ -2638,9 +4386,65 @@
       }
     });
     if (slipQuality !== "none") triggerPerfectSlip(bossSlipped, slipQuality);
+    if (slipQuality === "perfect" && gameState.progressionMods.afterimageSlip) spawnAfterimage(oldLane, gameState.player.x);
+  }
+  function spawnAfterimage(lane, x, delayOverride) {
+    if (!gameState.afterimages) gameState.afterimages = [];
+    gameState.afterimages.push({ lane, x, y: gameState.height * CONSTANTS.LANE_Y[lane], timer: delayOverride !== void 0 ? delayOverride : CONSTANTS.VERBS.afterimage.delay, fade: 22, fired: false, color: buildColor() });
+  }
+  function fireAfterimage(ai) {
+    const V = CONSTANTS.VERBS.afterimage;
+    let hit = false;
+    for (const en of gameState.enemies) {
+      if (en.lane !== ai.lane || en.x < ai.x - 20 || en.x > ai.x + V.reach || en.hp <= 0) continue;
+      let dmg = Math.round(V.damage * gameState.stats.powerMult);
+      if (en.isBoss) dmg = gateBossDamage(en, dmg);
+      en.hp -= dmg;
+      en.stun = Math.max(en.stun, en.isBoss ? 6 : V.stun);
+      createImpact(en.x, en.y - 60, ai.color);
+      createShatter(en.x, en.y - 70, ai.color);
+      spawnFloatingText(en.x, en.y - 120, "ECHO!", ai.color);
+      hit = true;
+    }
+    if (hit) {
+      gameState.combo++;
+      if (gameState.combo > gameState.statMaxCombo) gameState.statMaxCombo = gameState.combo;
+      addScore(CONSTANTS.SCORE.hit.hook, ai.x + 80, ai.y - 110);
+      playSound("hit");
+      gameState.shake = Math.max(gameState.shake, 6);
+    }
+  }
+  function updateAfterimages() {
+    if (!gameState.afterimages || !gameState.afterimages.length) return;
+    for (const ai of gameState.afterimages) {
+      if (!ai.fired) {
+        if (--ai.timer <= 0) {
+          ai.fired = true;
+          fireAfterimage(ai);
+        }
+      } else ai.fade--;
+    }
+    gameState.afterimages = gameState.afterimages.filter((ai) => !ai.fired || ai.fade > 0);
+  }
+  function activateInstinct(zone = false) {
+    gameState.isInstinct = true;
+    gameState.instinctReadyTimer = 0;
+    if (HUD.instinctBanner) HUD.instinctBanner.style.display = "none";
+    if (HUD.barCont) HUD.barCont.classList.add("beast-active");
+    doFlash(0.5);
+    gameState.shake = 20;
+    gameState.hitstop = 10;
+    triggerShockwave(gameState.player.x, gameState.player.y - 50, "#ffffff");
+    playSound("perfect_slip");
+    if (zone) {
+      gameState.zoneTimer = CONSTANTS.ZONE.frames;
+      playSound("zone");
+      spawnFloatingText(gameState.player.x, gameState.player.y - 140, "THE ZONE", "#ffffff");
+    }
   }
   function triggerPerfectSlip(bossSlipped, slipQuality) {
     if (slipQuality === "perfect") {
+      const zoneReady = gameState.instinctMeter >= 100 && !gameState.isInstinct;
       if (HUD.slipPopup) {
         HUD.slipPopup.innerText = "PERFECT SLIP";
         HUD.slipPopup.style.color = "#ffffff";
@@ -2667,12 +4471,13 @@
       gameState.player.slipBuff = gameState.orbCounts.technique >= 2 ? 2 : 1;
       spawnFloatingText(gameState.player.x, gameState.player.y - 80, "COUNTER READY!", "#ffffff");
       gameState.hitstop += 8;
-      if (gameState.orbCounts.speed >= 3) gameState.player.moveCancelReady = true;
-      if (bossSlipped && gameState.orbCounts.technique >= 3) {
+      if (gameState.orbCounts.speed >= 4) gameState.player.moveCancelReady = true;
+      if (bossSlipped && gameState.orbCounts.technique >= 4) {
         bossSlipped.exposedTimer = 90 + gameState.progressionMods.bossExposeBonusFrames;
         spawnFloatingText(bossSlipped.x, bossSlipped.y - 140, "EXPOSED!", "#00ffff");
         playSound("feint_tell");
       }
+      if (zoneReady) activateInstinct(true);
     } else if (slipQuality === "good") {
       if (HUD.slipPopup) {
         HUD.slipPopup.innerText = "GOOD SLIP";
@@ -2693,13 +4498,15 @@
       }, 500);
     }
   }
-  function startPunch(t) {
+  function startPunch(t, charge = 0) {
     if (gameState.player.state === "guarding") gameState.player.state = "idle";
     gameState.player.state = "punching";
     gameState.player.punchType = t;
     gameState.player.didHit = false;
     gameState.player.moveCancelReady = false;
     gameState.player.comboWindow = 0;
+    gameState.player.charging = false;
+    gameState.player.crossLoaded = t === "cross" && !!gameState.progressionMods.loadedCross && charge >= CONSTANTS.VERBS.loadedCross.chargeFrames;
     let isJab1 = t === "jab1", isJab2 = t === "jab2", isJab3 = t === "jab3";
     if (isJab1) gameState.player.jabStep = 1;
     else if (isJab2) gameState.player.jabStep = 2;
@@ -2730,13 +4537,19 @@
       gameState.player.punchTimer = Math.max(8, Math.floor(16 * sF));
       gameState.player.hitFrame = Math.max(3, Math.floor(6 * sF));
     }
+    if (gameState.player.pivotTimer > 0 && t !== "guard_jab" && t !== "check_hook") {
+      gameState.player.hitFrame = 1;
+      gameState.player.pivotTimer = 0;
+    }
     if (gameState.player.slipBuff > 0) {
       playSound("vacuum");
       createVacuum(gameState.player.x + 80, gameState.player.y - 40);
     }
   }
   function takeDamage(amt, isHeavy, en) {
+    if ((gameState.player.invuln || 0) > 0) return;
     gameState.player.flowStreak = 0;
+    gameState.player.charging = false;
     let guardMult = 0.25;
     let piercing = gameState.player.state === "guarding" && en && en.type === "assassin";
     if (piercing) guardMult = 0.6;
@@ -2747,7 +4560,7 @@
     gameState.health -= actualDmg;
     gameState.player.hitStun = isHeavy ? 10 : 5;
     gameState.shake = isHeavy ? 30 : 15;
-    gameState.player.x = Math.max(20, gameState.player.x - (isHeavy ? 40 : 10) * gameState.progressionMods.incomingRecoilMult);
+    gameState.player.x = Math.max(FOOTWORK_MIN_X, gameState.player.x - (isHeavy ? 40 : 10) * gameState.progressionMods.incomingRecoilMult);
     gameState.player.state = "hurt";
     resetJabString();
     if (gameState.combo >= 2 && !gameState.isInstinct) spawnFloatingText(gameState.player.x, gameState.player.y - 50, "COMBO BROKEN", "#ff0055");
@@ -2771,156 +4584,194 @@
     }
     if (gameState.enemies.some((e) => e.isBoss && e.desperation)) gameState.statDespDamage++;
   }
+  function readInput() {
+    const K2 = getBinds();
+    const jp = (code) => !!gameState.keys[code] && !gameState.lastKeys[code];
+    const pad = gameState.pad;
+    return {
+      up: pad.up || jp(K2.up),
+      down: pad.down || jp(K2.down),
+      ghost: pad.ghost || jp(K2.ghost),
+      jab: pad.jab || jp(K2.jab),
+      cross: pad.cross || jp(K2.cross),
+      hook: pad.hook || jp(K2.hook),
+      instinct: pad.instinct || jp(K2.instinct),
+      guard: !!(pad.guard || gameState.keys[K2.guard]),
+      holdLeft: !!(gameState.keys[K2.left] || pad.leftHeld),
+      holdRight: !!(gameState.keys[K2.right] || pad.rightHeld),
+      crossHeld: !!(gameState.keys[K2.cross] || pad.crossHeld)
+    };
+  }
   function updatePlayer() {
-    let keyUpJustPressed = gameState.keys["ArrowUp"] && !gameState.lastKeys["ArrowUp"];
-    let keyDownJustPressed = gameState.keys["ArrowDown"] && !gameState.lastKeys["ArrowDown"];
-    let keyLeftJustPressed = gameState.keys["ArrowLeft"] && !gameState.lastKeys["ArrowLeft"];
-    let keyAJustPressed = gameState.keys["KeyA"] && !gameState.lastKeys["KeyA"];
-    let keySJustPressed = gameState.keys["KeyS"] && !gameState.lastKeys["KeyS"];
-    let keyDJustPressed = gameState.keys["KeyD"] && !gameState.lastKeys["KeyD"];
-    let keySpaceJustPressed = gameState.keys["Space"] && !gameState.lastKeys["Space"];
-    let attemptGuard = gameState.pad.guard || gameState.keys["ShiftLeft"] || gameState.keys["ShiftRight"];
-    let attemptUp = gameState.pad.up || keyUpJustPressed;
-    let attemptDown = gameState.pad.down || keyDownJustPressed;
-    let attemptLeft = gameState.pad.left || keyLeftJustPressed;
-    let attemptJab = gameState.pad.jab || keyAJustPressed;
-    let attemptCross = gameState.pad.cross || keySJustPressed;
-    let attemptHook = gameState.pad.hook || keyDJustPressed;
-    let attemptInstinct = gameState.pad.instinct || keySpaceJustPressed;
+    const input = readInput();
+    const p = gameState.player;
     gameState.scrollX += (gameState.isInstinct ? 20 : 8) * (gameState.stageSpeedMult || 1);
-    if (gameState.player.slipCooldown > 0) gameState.player.slipCooldown--;
-    if (gameState.player.ghostStepCooldown > 0) {
-      gameState.player.ghostStepCooldown--;
-      if (gameState.player.ghostStepCooldown <= 0) {
+    if (p.invuln > 0) p.invuln--;
+    if (p.pivotTimer > 0) p.pivotTimer--;
+    if (p.slipCooldown > 0) p.slipCooldown--;
+    if (p.ghostStepCooldown > 0) {
+      p.ghostStepCooldown--;
+      if (p.ghostStepCooldown <= 0) {
         const maxGhostCharges = gameState.progressionMods.blurStep ? 2 : 1;
-        gameState.player.ghostStepCharges = Math.min(maxGhostCharges, (gameState.player.ghostStepCharges || 0) + 1);
-        if (gameState.player.ghostStepCharges < maxGhostCharges) gameState.player.ghostStepCooldown = Math.max(10, Math.floor(60 * gameState.progressionMods.ghostStepCooldownMult));
+        p.ghostStepCharges = Math.min(maxGhostCharges, (p.ghostStepCharges || 0) + 1);
+        if (p.ghostStepCharges < maxGhostCharges) p.ghostStepCooldown = Math.max(10, Math.floor(60 * gameState.progressionMods.ghostStepCooldownMult));
       }
     }
-    if (gameState.player.guardReadTimer > 0) gameState.player.guardReadTimer--;
-    const targetY = gameState.height * CONSTANTS.LANE_Y[gameState.player.lane];
-    gameState.player.y += (targetY - gameState.player.y) * 0.25;
-    if (gameState.player.state !== "hurt" && gameState.player.state !== "punching") {
-      if (gameState.keys["ArrowRight"]) gameState.player.x = Math.min(FOOTWORK_MAX_X, gameState.player.x + FOOTWORK_ADVANCE_SPD);
-      else if (gameState.keys["ArrowLeft"]) gameState.player.x = Math.max(FOOTWORK_MIN_X, gameState.player.x - FOOTWORK_RETREAT_SPD);
-      else gameState.player.x += (180 - gameState.player.x) * FOOTWORK_HOME_PULL;
+    if (p.guardReadTimer > 0) p.guardReadTimer--;
+    updateAfterimages();
+    const targetY = gameState.height * CONSTANTS.LANE_Y[p.lane];
+    p.y += (targetY - p.y) * 0.25;
+    if (p.state !== "hurt" && p.state !== "punching") {
+      if (input.holdRight) p.x = Math.min(FOOTWORK_MAX_X, p.x + FOOTWORK_ADVANCE_SPD);
+      else if (input.holdLeft) p.x = Math.max(FOOTWORK_MIN_X, p.x - FOOTWORK_RETREAT_SPD);
+      else p.x += (180 - p.x) * FOOTWORK_HOME_PULL;
     }
-    if (attemptInstinct && gameState.instinctMeter >= 100 && !gameState.isInstinct) {
-      gameState.isInstinct = true;
-      gameState.instinctReadyTimer = 0;
-      if (HUD.instinctBanner) HUD.instinctBanner.style.display = "none";
-      if (HUD.barCont) HUD.barCont.classList.add("beast-active");
-      doFlash(0.5);
-      gameState.shake = 20;
-      gameState.hitstop = 10;
-      triggerShockwave(gameState.player.x, gameState.player.y - 50, "#ffffff");
-      playSound("perfect_slip");
+    p.cornered = CONSTANTS.isCornered(p);
+    if (p.cornered) {
+      if (p.cornerTimer === 0) spawnFloatingText(p.x + 10, p.y - 150, "CORNERED", "#ff5a3c");
+      if (p.cornerTimer % 30 === 0) playSound("rope_buzz");
+      p.cornerTimer++;
+    } else p.cornerTimer = 0;
+    if (input.instinct && gameState.instinctMeter >= 100 && !gameState.isInstinct) activateInstinct(false);
+    if (p.inputBufferTimer > 0) {
+      if (--p.inputBufferTimer <= 0) {
+        p.inputBuffer = null;
+        p.bufferedCharge = 0;
+      }
     }
-    if (gameState.player.inputBufferTimer > 0) {
-      if (--gameState.player.inputBufferTimer <= 0) gameState.player.inputBuffer = null;
+    if (p.movementBufferTimer > 0) {
+      if (--p.movementBufferTimer <= 0) p.movementBuffer = null;
     }
-    if (gameState.player.movementBufferTimer > 0) {
-      if (--gameState.player.movementBufferTimer <= 0) gameState.player.movementBuffer = null;
-    }
-    if (gameState.player.state === "hurt") {
-      if (--gameState.player.hitStun <= 0) gameState.player.state = "idle";
+    if (p.state === "hurt") {
+      if (--p.hitStun <= 0) p.state = "idle";
       return;
     }
-    if (gameState.player.state === "recovery") {
-      if (--gameState.player.recoveryTimer <= 0) gameState.player.state = "idle";
-    } else if (gameState.player.state === "ghost_step") {
-      if (--gameState.player.ghostStepTimer <= 0) gameState.player.state = "idle";
+    if (p.state === "recovery") {
+      if (--p.recoveryTimer <= 0) p.state = "idle";
+    } else if (p.state === "ghost_step") {
+      if (--p.ghostStepTimer <= 0) p.state = "idle";
     }
-    if (attemptGuard) {
-      if (gameState.player.state === "idle") {
-        gameState.player.state = "guarding";
+    let crossAttempt = input.cross, crossCharge = 0;
+    if (gameState.progressionMods.loadedCross) {
+      crossAttempt = false;
+      if (p.charging) {
+        if (input.crossHeld) {
+          p.crossCharge = Math.min(CONSTANTS.VERBS.loadedCross.maxFrames, p.crossCharge + 1);
+          if (p.crossCharge === CONSTANTS.VERBS.loadedCross.chargeFrames) {
+            playSound("charge_ready");
+            createImpact(p.x + 60, p.y - 70, buildColor());
+          }
+          if (gameState.particles.length < 90 && p.crossCharge % 3 === 0) {
+            const a = Math.random() * Math.PI * 2, d = 40 + Math.random() * 20;
+            gameState.particles.push({ x: p.x + 55 + Math.cos(a) * d, y: p.y - 70 + Math.sin(a) * d, vx: -Math.cos(a) * 4, vy: -Math.sin(a) * 4, life: 0.4, color: buildColor(), type: "spark" });
+          }
+        } else {
+          crossAttempt = true;
+          crossCharge = p.crossCharge;
+          p.charging = false;
+        }
+      } else if (input.cross) {
+        if (p.state === "idle") {
+          p.charging = true;
+          p.crossCharge = 0;
+        } else crossAttempt = true;
+      }
+    }
+    if (input.guard) {
+      if (p.state === "idle" && !p.charging) {
+        p.state = "guarding";
         gameState.combo = 0;
         resetJabString();
       }
     } else {
-      if (gameState.player.state === "guarding") {
-        gameState.player.state = "idle";
-        if (gameState.player.guardReadTimer > 0 && gameState.progressionMods.guardRead) {
-          gameState.player.guardReadTimer = 0;
-          gameState.player.slipBuff = Math.max(gameState.player.slipBuff, 1);
+      if (p.state === "guarding") {
+        p.state = "idle";
+        if (p.guardReadTimer > 0 && gameState.progressionMods.guardRead) {
+          p.guardReadTimer = 0;
+          p.slipBuff = Math.max(p.slipBuff, 1);
           playSound("perfect_slip");
           doFlash(0.15);
           gameState.shake = Math.max(gameState.shake, 6);
-          spawnFloatingText(gameState.player.x, gameState.player.y - 80, "GUARD READ!", "#ffffff");
+          spawnFloatingText(p.x, p.y - 80, "GUARD READ!", "#ffffff");
         }
       }
     }
-    let canAct = gameState.player.state === "idle" || gameState.player.state === "guarding";
-    let attemptMovement = attemptUp || attemptDown || attemptLeft || attemptGuard;
-    if (!canAct && gameState.player.moveCancelReady && attemptMovement && gameState.player.state !== "ghost_step") {
+    let canAct = p.state === "idle" || p.state === "guarding";
+    const moveAction = input.up ? "up" : input.down ? "down" : input.ghost ? "ghost" : null;
+    const attackAction = input.jab ? "jab" : crossAttempt ? "cross" : input.hook ? "hook" : null;
+    let attemptMovement = !!moveAction || input.guard;
+    if (!canAct && p.moveCancelReady && attemptMovement && p.state !== "ghost_step") {
       canAct = true;
-      gameState.player.moveCancelReady = false;
-      gameState.player.state = "idle";
-      createImpact(gameState.player.x, gameState.player.y - 50, "#00ffff");
+      p.moveCancelReady = false;
+      p.state = "idle";
+      createImpact(p.x, p.y - 50, "#00ffff");
       playSound("slip");
     }
     if (canAct) {
-      let attemptAttackCode = attemptJab ? "KeyA" : attemptCross ? "KeyS" : attemptHook ? "KeyD" : null;
-      let attemptMoveCode = attemptUp ? "ArrowUp" : attemptDown ? "ArrowDown" : attemptLeft ? "ArrowLeft" : null;
-      if (attemptAttackCode) {
-        if (Math.abs(gameState.player.y - targetY) < 5) executeAttackInput(attemptAttackCode);
+      if (attackAction) {
+        if (p.charging && attackAction !== "cross") p.charging = false;
+        if (Math.abs(p.y - targetY) < 5) executeAttackInput(attackAction, crossCharge);
         else {
-          gameState.player.inputBuffer = attemptAttackCode;
-          gameState.player.inputBufferTimer = 12;
+          p.inputBuffer = attackAction;
+          p.bufferedCharge = crossCharge;
+          p.inputBufferTimer = 12;
         }
-      } else if (attemptMoveCode) {
-        if (gameState.player.state === "guarding") gameState.player.state = "idle";
-        executeMovementInput(attemptMoveCode);
-      } else if (attemptGuard) {
-        executeMovementInput("ShiftLeft");
+      } else if (moveAction) {
+        if (p.state === "guarding") p.state = "idle";
+        p.charging = false;
+        executeMovementInput(moveAction);
+      } else if (input.guard && !p.charging) {
+        executeMovementInput("guard");
       } else {
-        if (gameState.player.state === "guarding") gameState.player.state = "idle";
+        if (p.state === "guarding") p.state = "idle";
       }
-    } else if (gameState.player.state === "punching" || gameState.player.state === "recovery") {
-      let attemptMoveCode = attemptUp ? "ArrowUp" : attemptDown ? "ArrowDown" : attemptLeft ? "ArrowLeft" : null;
-      let attemptAttackCode = attemptJab ? "KeyA" : attemptCross ? "KeyS" : attemptHook ? "KeyD" : null;
-      if (attemptAttackCode) {
-        gameState.player.inputBuffer = attemptAttackCode;
-        gameState.player.inputBufferTimer = 12;
-      } else if (attemptMoveCode) {
-        gameState.player.movementBuffer = attemptMoveCode;
-        gameState.player.movementBufferTimer = 12;
+    } else if (p.state === "punching" || p.state === "recovery") {
+      if (attackAction) {
+        p.inputBuffer = attackAction;
+        p.bufferedCharge = crossCharge;
+        p.inputBufferTimer = 12;
+      } else if (moveAction) {
+        p.movementBuffer = moveAction;
+        p.movementBufferTimer = 12;
       }
     }
-    if (gameState.player.state === "idle" || gameState.player.state === "guarding") {
-      if (gameState.player.comboWindow > 0) {
-        if (--gameState.player.comboWindow <= 0) resetJabString();
+    if (p.state === "idle" || p.state === "guarding") {
+      if (p.comboWindow > 0) {
+        if (--p.comboWindow <= 0) resetJabString();
       }
-      if (gameState.player.movementBuffer) {
-        let c = gameState.player.movementBuffer;
-        gameState.player.movementBuffer = null;
-        gameState.player.movementBufferTimer = 0;
+      if (p.movementBuffer) {
+        let c = p.movementBuffer;
+        p.movementBuffer = null;
+        p.movementBufferTimer = 0;
         executeMovementInput(c);
-      } else if (gameState.player.inputBuffer) {
-        if (Math.abs(gameState.player.y - targetY) < 5) {
-          let c = gameState.player.inputBuffer;
-          gameState.player.inputBuffer = null;
-          gameState.player.inputBufferTimer = 0;
-          executeAttackInput(c);
+      } else if (p.inputBuffer) {
+        if (Math.abs(p.y - targetY) < 5) {
+          let c = p.inputBuffer, ch = p.bufferedCharge || 0;
+          p.inputBuffer = null;
+          p.bufferedCharge = 0;
+          p.inputBufferTimer = 0;
+          executeAttackInput(c, ch);
         }
       }
     }
-    if (gameState.player.state === "punching") {
-      gameState.player.punchTimer--;
-      if (gameState.player.hitFrame > 0) {
-        gameState.player.hitFrame--;
-        if (gameState.player.hitFrame === 0) {
-          gameState.player.didHit = checkHit(gameState.player.punchType);
+    if (p.state === "punching") {
+      p.punchTimer--;
+      if (p.hitFrame > 0) {
+        p.hitFrame--;
+        if (p.hitFrame === 0) {
+          p.didHit = checkHit(p.punchType);
         }
       }
-      if (gameState.player.punchTimer <= 0) {
-        if (!gameState.player.didHit) {
-          gameState.player.state = "recovery";
-          let isJab = gameState.player.punchType && gameState.player.punchType.startsWith("jab"), iGP = gameState.player.punchType === "guard_jab" || gameState.player.punchType === "check_hook";
-          gameState.player.recoveryTimer = isJab || gameState.player.punchType === "guard_jab" ? 6 : gameState.player.punchType === "hook" || gameState.player.punchType === "check_hook" ? Math.floor(9 * gameState.progressionMods.hookRecoveryMult) : 13;
-          if (gameState.player.dempseyActive) gameState.player.recoveryTimer = Math.max(1, Math.floor(gameState.player.recoveryTimer * (1 - gameState.progressionMods.dempseyRecoveryBonus)));
-          if (isJab && !iGP) {
-            if (gameState.progressionMods.relentlessRhythm && (gameState.player.punchType === "jab1" || gameState.player.punchType === "jab2")) {
+      if (p.punchTimer <= 0) {
+        if (!p.didHit) {
+          p.state = "recovery";
+          let isJab = p.punchType && p.punchType.startsWith("jab"), iGP = p.punchType === "guard_jab" || p.punchType === "check_hook";
+          p.recoveryTimer = isJab || p.punchType === "guard_jab" ? 6 : p.punchType === "hook" || p.punchType === "check_hook" ? Math.floor(9 * gameState.progressionMods.hookRecoveryMult) : 13;
+          if (p.dempseyActive) p.recoveryTimer = Math.max(1, Math.floor(p.recoveryTimer * (1 - gameState.progressionMods.dempseyRecoveryBonus)));
+          const circuitSafe = gameState.progressionMods.infiniteCircuit && p.dempseyActive;
+          if (circuitSafe) {
+          } else if (isJab && !iGP) {
+            if (gameState.progressionMods.relentlessRhythm && (p.punchType === "jab1" || p.punchType === "jab2")) {
               gameState.combo = Math.max(0, gameState.combo - 1);
             } else if (gameState.orbCounts.speed < 2) {
               gameState.combo = Math.max(0, gameState.combo - 1);
@@ -2931,22 +4782,57 @@
           resetJabString();
           let cD = gameState.enemies.find((e) => e.tutorialType === "counter");
           if (cD) {
-            spawnFloatingText(gameState.player.x, gameState.player.y - 50, "MISSED! TRY AGAIN!", "#ffaa00");
-            cD.x = gameState.player.x + 250;
+            spawnFloatingText(p.x, p.y - 50, "MISSED! TRY AGAIN!", "#ffaa00");
+            cD.x = p.x + 250;
             cD.attackCooldown = cD.maxCooldown;
             cD.justAttacked = 0;
-            gameState.player.slipBuff = 1;
+            p.slipBuff = 1;
           }
         } else {
-          gameState.player.state = "idle";
-          gameState.player.comboWindow = gameState.player.dempseyActive ? 35 : 25;
-          gameState.player.lastPunchLanded = gameState.player.punchType;
+          p.state = "idle";
+          p.comboWindow = p.dempseyActive ? 35 : 25;
+          if (gameState.progressionMods.infiniteCircuit && p.dempseyActive) {
+            p.dempseyAlternations = (p.dempseyAlternations || 0) + 1;
+            if (p.dempseyAlternations % 4 === 0) {
+              p.slipBuff = Math.max(p.slipBuff, 1);
+              spawnFloatingText(p.x, p.y - 100, "CIRCUIT CHARGED", CONSTANTS.FUSION_COLORS.evo_infinite_circuit);
+            }
+          }
+          p.lastPunchLanded = p.punchType;
         }
+        p.crossLoaded = false;
       }
     }
   }
 
   // src/entities/enemies.js
+  function applyKnockback(en) {
+    const preX = en.x;
+    en.x += en.vx;
+    en.vx *= 0.85;
+    const ROPE = CONSTANTS.ROPES.enemyRopeX;
+    if (en.controller !== "static_monk" && preX <= ROPE && en.x > ROPE) {
+      en.x = ROPE;
+      en.vx = 0;
+      if ((en.onRopes || 0) <= 0) {
+        playSound("rope_thud");
+        createImpact(ROPE + 30, en.y - 70, "#ffffff");
+        spawnFloatingText(en.x + 20, en.y - 150, "ON THE ROPES", "#ffffff");
+      }
+      en.onRopes = CONSTANTS.ROPES.pinFrames;
+    }
+  }
+  function endAttack(en) {
+    if ((en.stringLen || 1) > 1 && (en.stringIdx || 0) < en.stringLen - 1) {
+      en.stringIdx = (en.stringIdx || 0) + 1;
+      en.attackCooldown = CONSTANTS.PUNCH_STRINGS.gap;
+      if (en.lane !== gameState.player.lane && Math.abs(en.lane - gameState.player.lane) === 1) en.lane = gameState.player.lane;
+      return;
+    }
+    en.stringIdx = 0;
+    if (en.type === "bruiser") en.currentMove = "bash";
+    en.attackCooldown = en.maxCooldown;
+  }
   function applyMenace(en) {
     const M = CONSTANTS.MENACE;
     if (!M) return;
@@ -3006,29 +4892,30 @@
           let counterText = 'Your Perfect Slip was successful!<br><br>Notice the <span class="text-white font-bold">White Energy Rings</span> around your fists.<br><br>You are now holding a <span class="text-white font-bold">Counter Charge</span>. Your next strike will deal massive damage, shatter their posture, and cause extra hitstop.<br><br>' + (gameState.runCount <= 1 ? "<i>Strike this dummy enemy to unleash it!</i>" : "<i>Strike an enemy to unleash it!</i>");
           triggerTutorial("counter", "COUNTER READY", counterText);
         } else if (en.tutorialType === "shield") {
-          triggerTutorial("shield", "GOLD ARMOR", 'Enemies with Gold Armor will block your Jabs.<br><br>Use your <span class="text-cyan-400 font-bold">CROSS [S]</span> to shatter their defense!<br><br><i>Break the armor to pass!</i>');
+          triggerTutorial("shield", "GOLD ARMOR", `Enemies with Gold Armor will block your Jabs.<br><br>Use your <span class="text-cyan-400 font-bold">CROSS [${keyName("cross")}]</span> to shatter their defense!<br><br><i>Break the armor to pass!</i>`);
         } else if (en.tutorialType === "guard") {
-          triggerTutorial("guard", "GUARDING", 'Guard is the stable answer when timing gets crowded, even if a clean slip is possible.<br><br>Hold <span class="text-cyan-400 font-bold">[SHIFT]</span> to Guard &mdash; it cuts incoming damage by 75% against <i>most</i> attackers.<br><br>Not all, though. A few enemies bite through Guard far more than that. You will get a specific heads-up the first time one shows up &mdash; watch for it.<br><br><i>Guard the next attack to pass!</i>');
+          triggerTutorial("guard", "GUARDING", `Guard is the stable answer when timing gets crowded, even if a clean slip is possible.<br><br>Hold <span class="text-cyan-400 font-bold">[${keyName("guard")}]</span> to Guard &mdash; it cuts incoming damage by 75% against <i>most</i> attackers.<br><br>Not all, though. A few enemies bite through Guard far more than that. You will get a specific heads-up the first time one shows up &mdash; watch for it.<br><br><i>Guard the next attack to pass!</i>`);
         } else if (en.tutorialType === "ghost_step") {
-          triggerTutorial("ghost_step", "GHOST STEP", `This one is too fast to jab, guard, or slip cleanly.<br><br>Tap (don't hold) <span class="text-cyan-400 font-bold">[LEFT ARROW]</span> for a Ghost Step &mdash; a short evasive dash with a moment of invincibility.<br><br><i>Ghost Step the next attack to pass!</i>`);
+          triggerTutorial("ghost_step", "GHOST STEP", `This one is too fast to jab, guard, or slip cleanly.<br><br>Press <span class="text-cyan-400 font-bold">[${keyName("ghost")}]</span> for a Ghost Step &mdash; a short evasive dash with a moment of invincibility.<br><br><i>Ghost Step the next attack to pass!</i>`);
         }
         return;
       }
       if (!en.tutorialType && en.isActiveThreat && en.x - gameState.player.x < 400) {
-        if (en.type === "bruiser" && !gameState.seenTutorials.bruiser_id) {
-          triggerTutorial("bruiser_id", "ARMORED BRUISER", 'This one shrugs off Jabs entirely.<br><br>Jabs still chip its health, but only a <span class="text-cyan-400 font-bold">CROSS [S]</span> &mdash; or a Counter Hit &mdash; actually staggers it.');
+        if (en.type === "bruiser" && !en.isBoss && !gameState.seenTutorials.bruiser_id) {
+          triggerTutorial("bruiser_id", "ARMORED BRUISER", `This one shrugs off Jabs entirely.<br><br>Jabs still chip its health, but only a <span class="text-cyan-400 font-bold">CROSS [${keyName("cross")}]</span> &mdash; or a Counter Hit &mdash; actually staggers it.`);
+          return;
+        }
+        if ((en.stringLen || 1) > 1 && !en.isBoss && !gameState.seenTutorials.string_id) {
+          triggerTutorial("string_id", "PUNCH STRING", `This one throws <span class="text-white font-bold">${en.stringLen} punches</span> in a row &mdash; the pips above its head count them.<br><br>Each punch follows you into your new lane and gets its own red &rarr; white tell.<br><br><span class="text-cyan-400 font-bold">Slip every one.</span> Answering only the first is how a string catches you.`);
           return;
         }
         if (en.type === "assassin" && !en.isBoss && !gameState.seenTutorials.assassin_id) {
-          triggerTutorial("assassin_id", "ASSASSIN", 'This is the exception the Guard tutorial warned you about.<br><br>Guard normally blocks 75% of incoming damage. Against an Assassin, only about 40% gets blocked &mdash; the rest bites through.<br><br>You have to actually read it and <span class="text-cyan-400 font-bold">SLIP [UP/DOWN]</span>, not just hold Shift.');
+          triggerTutorial("assassin_id", "ASSASSIN", 'This is the exception the Guard tutorial warned you about.<br><br>Guard normally blocks 75% of incoming damage. Against an Assassin, only about 40% gets blocked &mdash; the rest bites through.<br><br>You have to actually read it and <span class="text-cyan-400 font-bold">SLIP [UP/DOWN]</span>, not just Guard.');
           return;
         }
       }
       if (en.stun > 0 || gameState.bossIntroTimer > 0) {
-        if (en.vx > 0.1) {
-          en.x += en.vx;
-          en.vx *= 0.85;
-        }
+        if (en.vx > 0.1) applyKnockback(en);
         continue;
       }
       if (en.type === "zoner") {
@@ -3063,7 +4950,7 @@
         continue;
       }
       if (en.isActiveThreat && en.name !== "STATIC MONK") {
-        const { perfect: perfectThresh, good: goodThresh } = CONSTANTS.getSlipThresholds(en.type, gameState.progressionMods.perfectSlipWindowBonus);
+        const { perfect: perfectThresh, good: goodThresh } = CONSTANTS.getSlipThresholds(en.type, gameState.progressionMods.perfectSlipWindowBonus, CONSTANTS.isCornered(gameState.player));
         if (Math.abs(en.x - gameState.player.x) < 130) {
           if (en.attackCooldown <= perfectThresh) gameState.laneFlash[en.lane] = 2;
           else if (en.attackCooldown <= goodThresh + 6) gameState.laneFlash[en.lane] = Math.max(gameState.laneFlash[en.lane], 1);
@@ -3104,9 +4991,8 @@
         }
         let isAtPlayer = en.lane === gameState.player.lane && en.x <= gameState.player.x + 90 && en.x >= gameState.player.x - 20;
         if (en.vx > 0.1) {
-          en.x += en.vx;
-          en.vx *= 0.85;
-          let isBowling = gameState.orbCounts.power >= 3 && en.vx > 5;
+          applyKnockback(en);
+          let isBowling = gameState.orbCounts.power >= 4 && en.vx > 5;
           gameState.enemies.forEach((other) => {
             if (other !== en && other.lane === en.lane && other.x > en.x - 20 && other.x < en.x + 120) {
               if (isBowling) {
@@ -3126,6 +5012,8 @@
           en.vx = 0;
           if (en.isBoss && en.x < gameState.player.x + 100 && en.name !== "STATIC MONK") {
             en.x = gameState.player.x + 100;
+          } else if ((en.onRopes || 0) > 0) {
+            en.onRopes--;
           } else if (!isBlockedByEnemy && !isAtPlayer && gameState.tutorialGrace <= 0 && en.name !== "STATIC MONK") {
             en.x -= en.speed;
           }
@@ -3151,7 +5039,7 @@
               if (en.tutorialType === "ghost_step") {
                 en.hp = 0;
               }
-              en.attackCooldown = en.maxCooldown;
+              endAttack(en);
               continue;
             }
             if (en.tutorialType) {
@@ -3173,7 +5061,7 @@
                 }
               }
               if (en.tutorialType === "shield") {
-                spawnFloatingText(gameState.player.x, gameState.player.y - 50, "USE CROSS [S] TO BREAK!", "#ffaa00");
+                spawnFloatingText(gameState.player.x, gameState.player.y - 50, `USE CROSS [${keyName("cross")}] TO BREAK!`, "#ffaa00");
                 en.x = gameState.player.x + 200;
                 en.attackCooldown = en.maxCooldown;
                 continue;
@@ -3184,7 +5072,7 @@
                   en.hp = 0;
                   playSound("hit");
                 } else {
-                  spawnFloatingText(gameState.player.x, gameState.player.y - 50, "HOLD [SHIFT] TO GUARD!", "#ffaa00");
+                  spawnFloatingText(gameState.player.x, gameState.player.y - 50, `HOLD [${keyName("guard")}] TO GUARD!`, "#ffaa00");
                   en.x = gameState.player.x + 200;
                   en.attackCooldown = en.maxCooldown;
                   gameState.player.lane = 1;
@@ -3207,17 +5095,12 @@
               gameState.player.slipBuff = 1;
               continue;
             } else if (en.tutorialType === "ghost_step" && Math.abs(en.x - gameState.player.x) < 100) {
-              spawnFloatingText(gameState.player.x, gameState.player.y - 50, "TAP [LEFT] TO GHOST STEP!", "#ffaa00");
+              spawnFloatingText(gameState.player.x, gameState.player.y - 50, `PRESS [${keyName("ghost")}] TO GHOST STEP!`, "#ffaa00");
               en.x = gameState.player.x + 200;
               en.attackCooldown = en.maxCooldown;
               continue;
             }
-            if (en.type === "bruiser") {
-              en.currentMove = "bash";
-              en.attackCooldown = en.maxCooldown;
-            } else {
-              en.attackCooldown = en.maxCooldown;
-            }
+            endAttack(en);
           }
         }
       }
@@ -3274,6 +5157,7 @@
           if (!en.tutorialType) addScore(killScore(en.type), en.x + en.w / 2, en.y - 130);
         }
         if (en.tutorialType) gameState.tutorialDelay = 60;
+        createKoShatter(en);
         gameState.enemies.splice(i, 1);
       } else if (en.x < -100) {
         gameState.enemies.splice(i, 1);
@@ -3549,7 +5433,12 @@
         speed *= gameState.stageSpeedMult;
         if (gameState.laneTempo && gameState.laneTempo[lane] !== void 0) speed *= gameState.laneTempo[lane];
         let spawnX = gameState.width + 50 + delayFrames * speed;
+        const PS = CONSTANTS.PUNCH_STRINGS, arcI = Math.min(rawArcIndex, 5);
+        let stringLen = 1;
+        if (PS.types.includes(type) && (PS.chanceByArc[arcI] || 0) > 0 && random() < PS.chanceByArc[arcI]) stringLen = PS.lenByArc[arcI] || 2;
         gameState.enemies.push({
+          stringLen,
+          stringIdx: 0,
           x: spawnX,
           lane,
           y: gameState.height * CONSTANTS.LANE_Y[lane],
@@ -3616,8 +5505,33 @@
       cooldown: 120,
       baseHpMult: 0.85,
       startMove: "laser"
+    },
+    // v17: the rotation no longer repeats inside Arcs 1-5.
+    {
+      name: "LIVE WIRE",
+      color: "#ffe14d",
+      controller: "live_wire",
+      type: "bruiser",
+      weight: 2.2,
+      speed: 1.7,
+      cooldown: 50,
+      baseHpMult: 1.05,
+      startMove: "string"
+    },
+    {
+      name: "NEGATIVE",
+      color: "#ff0000",
+      // replaced at spawn with the inverse of the Striker's colour
+      controller: "negative",
+      type: "grunt",
+      weight: 1.3,
+      speed: 2.2,
+      cooldown: 44,
+      baseHpMult: 1.2,
+      startMove: "jab"
     }
   ];
+  var BOSS_ROSTER_IDS = BOSS_ROSTER.map((b) => b.controller);
   function spawnMonkAdd() {
     let hp = Math.floor(45 * (1 + (CONSTANTS.difficultyStage(gameState.currentStage) - 1) * 0.1));
     let lane = Math.floor(random() * 3);
@@ -3649,16 +5563,28 @@
   }
   function spawnBoss() {
     gameState.bossActive = true;
-    gameState.bossIntroTimer = 120;
+    gameState.bossIntroTimer = 180;
     gameState.shake = 15;
     playSound("bash_tell");
     setMusicIntensity(1);
     let baseHp = 300 + CONSTANTS.difficultyStage(gameState.currentStage) * 100;
     const rawArcIndex = CONSTANTS.getArcIndex(gameState.currentStage);
     const bossIndex = (rawArcIndex - 1) % BOSS_ROSTER.length;
-    const template = BOSS_ROSTER[bossIndex];
+    const template = { ...BOSS_ROSTER[bossIndex] };
+    if (template.controller === "negative") template.color = invertHex(gameState.strikerColor || "#00ffff");
     gameState.bossThemeColor = template.color;
     gameState.bossIntroText = template.name;
+    const arcData = CONSTANTS.ARC_STAGE_TABLES[Math.min(rawArcIndex, 5)] || {};
+    gameState.bossPoster = {
+      name: template.name,
+      controller: template.controller,
+      color: template.color,
+      arc: rawArcIndex,
+      tagline: (CONSTANTS.BOSS_BILLING[template.controller] || {}).tagline || "",
+      venue: arcData[7] && arcData[7].stageName || "Boss Chamber",
+      round: gameState.currentStage
+    };
+    playSound("bell");
     const arcMods = CONSTANTS.getBossArcMods(template.controller, rawArcIndex);
     gameState.enemies.push({
       name: template.name,
@@ -3710,6 +5636,10 @@
       finisherStage: 0,
       pendingFinisher: null,
       koDone: false,
+      stringIdx: 0,
+      stringsThrown: 0,
+      shockTimer: 0,
+      slipCooldown: 0,
       arcMods
       // Assigned directly to the entity!
     });
@@ -3923,9 +5853,126 @@
       }
     }
   }
+  function liveWireShocks(en) {
+    const p = gameState.player;
+    if (!p.cornered) {
+      en.shockTimer = 0;
+      return;
+    }
+    const S = CONSTANTS.ROPES.liveWireShock;
+    if (++en.shockTimer % S.every === 0 && !(p.invuln > 0) && p.state !== "ghost_step") {
+      takeDamage(S.damage, false, null);
+      playSound("shock");
+      createImpact(p.x - 10, p.y - 70, "#fff36b");
+      createImpact(p.x - 10, p.y - 30, "#ffffff");
+      spawnFloatingText(p.x + 10, p.y - 130, "SHOCKED!", "#fff36b");
+    }
+  }
+  function handleLiveWire(en) {
+    if (en.recoverTimer > 0) {
+      en.recoverTimer--;
+      return;
+    }
+    en.attackCooldown--;
+    const p = gameState.player;
+    if (en.x > p.x + 100) en.x -= en.speed * 0.6 * (en.arcMods.walkDownMult || 1);
+    const K2 = getBinds();
+    const holding = gameState.keys[K2.right] || gameState.pad.rightHeld;
+    if (Math.abs(en.x - p.x) < 112 && !holding && p.state !== "punching") p.x = Math.max(CONSTANTS.ROPES.playerMinX, p.x - 0.7);
+    const inRange = Math.abs(en.x - p.x) < 140 && en.stun <= 0;
+    meleeTelegraph(en, inRange, () => {
+      playSound(en.currentMove === "shove" ? "bash_tell" : "jab_tell");
+      if (en.currentMove === "shove") createImpact(en.x, en.y - 60, "#ffe14d");
+    });
+    if (!(inRange && en.attackCooldown <= 0)) return;
+    en.justAttacked = 5;
+    if (en.currentMove === "string") {
+      resolveBossStrike(en, 10, false);
+      const len = en.arcMods.stringLength || 2;
+      en.stringIdx = (en.stringIdx || 0) + 1;
+      if (en.stringIdx < len) {
+        if (Math.abs(en.lane - p.lane) === 1) {
+          en.lane = p.lane;
+          en.y = gameState.height * CONSTANTS.LANE_Y[en.lane];
+        }
+        en.attackCooldown = telegraphLead(en) + 4;
+        en.telegraphed = false;
+        return;
+      }
+      en.stringIdx = 0;
+      en.stringsThrown = (en.stringsThrown || 0) + 1;
+      const shoveNext = en.stringsThrown % (en.arcMods.shoveEvery || 3) === 0;
+      en.currentMove = shoveNext ? "shove" : "string";
+      en.maxCooldown = nextCycle(en, shoveNext ? 60 : 44);
+      en.attackCooldown = en.maxCooldown;
+      beginPunishWindow(en, "jab");
+    } else {
+      const connected = en.lane === p.lane && Math.abs(en.x - p.x) <= 100 && p.state !== "ghost_step";
+      resolveBossStrike(en, 14, true);
+      if (connected) {
+        p.x = Math.max(CONSTANTS.ROPES.playerMinX, p.x - 60);
+        spawnFloatingText(p.x, p.y - 120, "WALKED BACK", "#ffe14d");
+      }
+      en.currentMove = "string";
+      en.maxCooldown = nextCycle(en, 44);
+      en.attackCooldown = en.maxCooldown;
+      beginPunishWindow(en, "bash");
+    }
+  }
+  function updateEnemyEchoes() {
+    if (!gameState.enemyEchoes || !gameState.enemyEchoes.length) return;
+    const p = gameState.player;
+    for (const e of gameState.enemyEchoes) {
+      if (!e.fired) {
+        if (e.timer <= 12) gameState.laneFlash[e.lane] = Math.max(gameState.laneFlash[e.lane], e.timer <= 6 ? 2 : 1);
+        if (--e.timer <= 0) {
+          e.fired = true;
+          if (p.lane === e.lane && Math.abs(e.x - p.x) < 150) {
+            if (p.state === "ghost_step") {
+              spawnFloatingText(p.x, p.y - 50, "GHOST STEP", "#888888");
+              registerPerfectGhostStep();
+            } else takeDamage(gameState.isInstinct ? 6 : 12, false, null);
+          }
+          createImpact(e.x - 40, e.y - 60, e.color);
+        }
+      } else e.fade--;
+    }
+    gameState.enemyEchoes = gameState.enemyEchoes.filter((e) => !e.fired || e.fade > 0);
+  }
+  function handleNegative(en) {
+    if (en.slipCooldown > 0) en.slipCooldown--;
+    if (en.phase === 1 && en.hp < en.maxHp * 0.5) {
+      en.phase = 2;
+      gameState.shake = 40;
+      doFlash(0.6);
+      triggerShockwave(en.x, en.y - 60, en.color);
+      spawnFloatingText(en.x + 20, en.y - 160, "THE MIRROR CRACKS", en.color);
+      playSound("hit");
+    }
+    if (en.recoverTimer > 0) {
+      en.recoverTimer--;
+      return;
+    }
+    en.attackCooldown--;
+    const p = gameState.player;
+    if (en.x > p.x + 100) en.x -= en.speed * 0.6;
+    const inRange = Math.abs(en.x - p.x) < 140 && en.stun <= 0;
+    meleeTelegraph(en, inRange, () => playSound(en.currentMove === "cross" ? "bash_tell" : "jab_tell"));
+    if (!(inRange && en.attackCooldown <= 0)) return;
+    en.justAttacked = 5;
+    const struck = en.currentMove;
+    resolveBossStrike(en, struck === "cross" ? 18 : 12, struck === "cross");
+    const roll = random();
+    en.currentMove = en.phase === 2 ? roll > 0.45 ? "cross" : "jab" : roll > 0.65 ? "cross" : "jab";
+    en.maxCooldown = nextCycle(en, en.currentMove === "cross" ? 48 : 34);
+    en.attackCooldown = en.maxCooldown;
+    beginPunishWindow(en, struck === "cross" ? "bash" : "jab");
+  }
   function updateBosses() {
+    updateEnemyEchoes();
     for (const en of gameState.enemies) {
       if (!en.isBoss) continue;
+      if (en.controller === "live_wire" && gameState.bossIntroTimer <= 0 && !gameState.finisher) liveWireShocks(en);
       checkBossThresholds(en);
       if (en.pendingFinisher && !gameState.finisher) {
         const kind = en.pendingFinisher;
@@ -3937,6 +5984,8 @@
       if (en.controller === "neon_enforcer") handleNeonEnforcer(en);
       else if (en.controller === "phantom_boxer") handlePhantomBoxer(en);
       else if (en.controller === "static_monk") handleStaticMonk(en);
+      else if (en.controller === "live_wire") handleLiveWire(en);
+      else if (en.controller === "negative") handleNegative(en);
     }
   }
 
@@ -4340,597 +6389,216 @@
     ctx.fillRect(x - 1, 0, 2, gameState.height);
   }
 
-  // src/render/boxer.js
-  function drawBoxer(ctx3, entity, isPlayer, opacity = 1, isTrail = false) {
-    const dl2 = (x1, y1, x2, y2) => {
-      ctx3.beginPath();
-      ctx3.moveTo(x1, y1);
-      ctx3.lineTo(x2, y2);
-      ctx3.stroke();
-    };
-    const dc = (x, y, r, f, s) => {
-      ctx3.beginPath();
-      ctx3.arc(x, y, r, 0, Math.PI * 2);
-      if (f) ctx3.fill();
-      if (s) ctx3.stroke();
-    };
-    const d = isPlayer ? 1 : -1;
-    const bS = entity.isBoss ? 1.5 : entity.type === "bruiser" ? 1.3 : 1;
-    let t = Date.now(), bn = 0, br = 0;
-    if (entity.state === "idle" || !isPlayer && entity.stun <= 0) {
-      bn = Math.sin(t * 5e-3 + entity.x) * 3;
-      br = Math.sin(t * 3e-3 + entity.x) * 2;
-    }
-    if (isPlayer && entity.state === "hurt") bn -= 10;
-    let h = entity.h * (entity.isBoss ? 1 : 0.8) + br;
-    const w = entity.w;
-    const hS = 12 * bS, gS = 10 * bS;
-    let rX = entity.x + w / 2, rY = entity.y;
-    if (!isTrail) {
-      ctx3.fillStyle = "rgba(0,0,0,0.7)";
-      ctx3.beginPath();
-      ctx3.ellipse(rX, rY, w * 0.6 * bS, 6 * bS, 0, 0, Math.PI * 2);
-      ctx3.fill();
-    }
-    let pL = 0;
-    if (!isPlayer && entity.stun <= 0 && entity.attackCooldown >= 15) {
-      if (entity.type === "assassin") pL = 20 * d;
-      if (entity.type === "zoner") pL = -10 * d;
-      if (entity.type === "shield") pL = -5 * d;
-      if (entity.type === "bruiser") {
-        h *= 0.85;
-        pL = 15 * d;
-      }
-    }
-    let hY = rY - h * 0.2 + bn, nY = rY - h * 0.75 + bn, hdY = rY - h * 0.85 + bn;
-    if (!isPlayer && entity.type === "bruiser") hdY += 10;
-    if (!isPlayer && entity.type === "assassin") hdY += 5;
-    let lX = pL;
-    if (isPlayer && gameState.player.slipCooldown > 15) lX += 15 * d;
-    if (isPlayer && entity.state === "ghost_step") {
-      let sn = entity.ghostStepTimer > 10 ? (14 - entity.ghostStepTimer) / 4 : entity.ghostStepTimer / 10;
-      opacity *= 0.3 + (1 - sn) * 0.7;
-      lX -= 35 * sn * d;
-    } else if (isPlayer && entity.state === "hurt") {
-      lX -= 25 * d;
-    }
-    let sL = 0;
-    if (entity.stun > 0) sL = -15 * d;
-    lX += sL;
-    let lg1X, lg2X;
-    if (isPlayer && entity.walking) {
-      const wc = Math.sin(t * 0.018) * 16;
-      lg1X = wc * d;
-      lg2X = -wc * d;
-      bn += Math.abs(Math.sin(t * 0.018)) * -3;
-    } else if (isPlayer) {
-      lg1X = 15 * d;
-      lg2X = -10 * d;
-    } else {
-      let wP = 0;
-      if (entity.stun <= 0 && entity.attackCooldown >= 15 && (!entity.isBoss || entity.currentMove !== "feint")) wP = entity.x * 0.08;
-      lg1X = Math.sin(wP) * 15 * d;
-      lg2X = Math.sin(wP + Math.PI) * 15 * d;
-    }
-    let dC = entity.color, isCounterReady = false;
-    if (isPlayer) {
-      dC = entity.state === "hurt" ? "#ff0000" : gameState.strikerColor || "#00ffff";
-      if (isTrail) dC = "#ffffff";
-      else if (!isTrail && gameState.player.slipBuff > 0) isCounterReady = true;
-    }
-    if (!isPlayer && entity.shiftWarning > 0) dC = Math.floor(Date.now() / 50) % 2 === 0 ? "#ffffff" : "#aa00ff";
-    if (!isPlayer && entity.isActiveThreat) {
-      let pT = entity.type === "zoner" ? 10 : 8;
-      if (entity.attackCooldown > 0 && entity.attackCooldown <= pT) dC = "#ffffff";
-    }
-    ctx3.globalAlpha = opacity;
-    ctx3.strokeStyle = dC;
-    ctx3.lineWidth = (entity.type === "bruiser" ? 12 : 8) * bS;
-    ctx3.lineCap = "round";
-    ctx3.lineJoin = "round";
-    if (!isPlayer && entity.isBoss && entity.exposedTimer > 0) {
-      ctx3.save();
-      ctx3.strokeStyle = Math.floor(Date.now() / 50) % 2 === 0 ? "#00ffff" : "#ffffff";
-      ctx3.lineWidth = 2;
-      ctx3.beginPath();
-      ctx3.arc(rX + lX, nY, 30 + Math.sin(Date.now() * 0.01) * 5, 0, Math.PI * 2);
-      ctx3.stroke();
-      ctx3.restore();
-    }
-    dl2(rX + lX, hY, rX + lg1X, rY);
-    dl2(rX + lX, hY, rX + lg2X, rY);
-    let sX = rX + (entity.type === "bruiser" ? 10 * d : 5 * d) + lX;
-    dl2(rX + lX, hY, sX, nY);
-    ctx3.fillStyle = entity.stun > 0 ? "#fff" : dC;
-    dc(sX + 3 * d, hdY, hS, true, false);
-    if (isPlayer && !isTrail) {
-      let eC = "#ff00ff", fF = Math.sin(Date.now() * 0.02) * 3;
-      ctx3.save();
-      if (gameState.player.dangerLevel === 1) {
-        ctx3.strokeStyle = `rgba(0,255,255,${0.4 + Math.sin(t * 0.02) * 0.3})`;
-        ctx3.lineWidth = 2;
-        dc(sX + 3 * d, hdY, hS + 6, false, true);
-      } else if (gameState.player.dangerLevel === 2) {
-        ctx3.strokeStyle = "#ffffff";
-        ctx3.lineWidth = 3;
-        ctx3.beginPath();
-        for (let i = 0; i < 5; i++) {
-          let a = Math.PI + i * Math.PI / 4 - Math.PI / 2;
-          if (d < 0) a = -a;
-          let r1 = hS + 2, r2 = hS + 12 + Math.random() * 5;
-          ctx3.moveTo(sX + 3 * d + Math.cos(a) * r1, hdY + Math.sin(a) * r1);
-          ctx3.lineTo(sX + 3 * d + Math.cos(a) * r2, hdY + Math.sin(a) * r2);
-        }
-        ctx3.stroke();
-      }
-      ctx3.fillStyle = "#fff";
-      ctx3.beginPath();
-      ctx3.ellipse(sX + 5 * d, hdY - 3, 5, 2, Math.PI / 8 * d, 0, Math.PI * 2);
-      ctx3.fill();
-      ctx3.fillStyle = eC;
-      ctx3.globalAlpha = 0.8;
-      ctx3.beginPath();
-      ctx3.moveTo(sX + 5 * d, hdY - 4);
-      ctx3.quadraticCurveTo(sX - 1 * d, hdY - 8 + fF, sX - 11 * d, hdY - 6 + fF);
-      ctx3.quadraticCurveTo(sX + 1 * d, hdY - 1, sX + 5 * d, hdY - 2);
-      ctx3.fill();
-      ctx3.restore();
-    }
-    let ldX = sX + 20 * d, ldY = nY + 10, rrX = sX - 10 * d, rrY = nY - 5;
-    if (isPlayer && (entity.state === "recovery" || entity.state === "ghost_step" || entity.state === "hurt")) {
-      ldX += 15 * d;
-      rrX += 5 * d;
-      lX += 10 * d;
-    } else if (isPlayer && entity.state === "punching") {
-      let iH = entity.hitFrame <= 2 || entity.didHit, ex = iH ? 1 : 0.4, iJ = entity.punchType && entity.punchType.startsWith("jab");
-      if (iJ) {
-        if (entity.punchType === "jab2") {
-          rrX += 50 * ex * d;
-          sX += 15 * d;
-        } else if (entity.punchType === "jab3") {
-          ldX += 60 * ex * d;
-          ldY -= 10 * ex;
-          lX += 10 * d;
-        } else ldX += 50 * ex * d;
-      } else if (entity.punchType === "guard_jab") {
-        ldX += 40 * ex * d;
-        rrX = sX + 15 * d;
-        rrY = nY - 5;
-      } else if (entity.punchType === "check_hook") {
-        ldX = sX + 10 * d;
-        ldY = nY - 15;
-        rrX += 30 * ex * d;
-        rrY -= 15 * ex;
-      } else if (entity.punchType === "cross") {
-        let rM = gameState.orbCounts.power >= 2 ? 1.25 : 1;
-        rrX += 90 * rM * ex * d;
-        ldX -= 15 * d;
-        sX += 10 * d;
-      } else if (entity.punchType === "hook") {
-        ldX += 40 * ex * d;
-        ldY -= 30 * ex;
-        rrX -= 10 * d;
-      }
-    } else if (isPlayer && entity.state === "guarding") {
-      ldX = sX + 10 * d;
-      ldY = nY - 15;
-      rrX = sX + 15 * d;
-      rrY = nY - 5;
-    } else if (!isPlayer && entity.isBoss && entity.stun <= 0 && (entity.recoverTimer > 0 || entity.currentMove === "recharge")) {
-      ldX = sX + 12 * d;
-      ldY = nY + 38;
-      rrX = sX - 6 * d;
-      rrY = nY + 34;
-    } else if (!isPlayer && entity.stun <= 0) {
-      if (entity.justAttacked > 0) {
-        if (entity.currentMove === "bash" || entity.type === "shield" || entity.type === "bruiser") {
-          rrX += 60 * d;
-          sX += 10 * d;
-        } else if (entity.type !== "zoner") ldX += 50 * d;
-      } else if (entity.attackCooldown < 15 && entity.attackCooldown >= 0) {
-        let wp = 1 - entity.attackCooldown / 15;
-        if (entity.currentMove === "bash" || entity.type === "shield" || entity.type === "bruiser") {
-          rrX -= 30 * wp * d;
-          rrY -= 20 * wp;
-        } else if (entity.type !== "zoner") ldX -= 20 * wp * d;
-      } else {
-        if (entity.type === "shield") {
-          ldX = sX + 5 * d;
-          ldY = nY - 10;
-          rrX = sX - 5 * d;
-          rrY = nY - 5;
-        } else if (entity.type === "zoner") {
-          ldX = sX + 35 * d;
-          ldY = nY;
-          rrX = sX - 10 * d;
-          rrY = nY + 10;
-        } else if (entity.type === "assassin") {
-          ldX = sX + 15 * d;
-          ldY = nY + 20;
-          rrX = sX - 5 * d;
-          rrY = nY + 15;
-        } else {
-          ldX = sX + 15 * d;
-          ldY = nY + 10;
-          rrX = sX - 5 * d;
-          rrY = nY + 5;
-        }
-      }
-    } else if (entity.stun > 0) {
-      ldX = sX - 10 * d;
-      ldY = nY - 30;
-      rrX = sX - 20 * d;
-      rrY = nY - 20;
-    }
-    ctx3.lineWidth = 4 * bS;
-    dl2(sX, nY, rrX, rrY);
-    ctx3.fillStyle = dC;
-    dc(rrX, rrY, gS, true, false);
+  // src/render/onboarding_mock.js
+  var LESSONS = ["SLIP", "COUNTER", "ARMOR", "GUARD", "GHOST STEP"];
+  function keycap(ctx3, x, y, label, color = "#22d3ee", pulse = 0) {
+    ctx3.save();
+    ctx3.font = "900 13px Orbitron";
+    const w = Math.max(28, ctx3.measureText(label).width + 16), h = 26;
+    ctx3.fillStyle = "rgba(8,10,16,0.92)";
+    ctx3.strokeStyle = color;
+    ctx3.lineWidth = 2;
+    ctx3.shadowColor = color;
+    ctx3.shadowBlur = 8 + pulse * 10;
     ctx3.beginPath();
-    ctx3.moveTo(sX, nY);
-    if (isPlayer && entity.punchType === "hook" && entity.state === "punching") ctx3.quadraticCurveTo(sX + 30 * d, nY - 20, ldX, ldY);
-    else ctx3.lineTo(ldX, ldY);
+    ctx3.roundRect ? ctx3.roundRect(x - w / 2, y - h / 2, w, h, 5) : ctx3.rect(x - w / 2, y - h / 2, w, h);
+    ctx3.fill();
     ctx3.stroke();
-    ctx3.fillStyle = dC;
-    dc(ldX, ldY, gS, true, false);
-    if (entity.gloveGlow) {
-      const heat = entity.gloveHeat === void 0 ? 1 : entity.gloveHeat;
-      const fl = 1 + Math.sin(t * 0.04) * 0.12;
-      ctx3.save();
-      ctx3.shadowColor = entity.gloveGlow;
-      ctx3.shadowBlur = 28 * heat;
-      ctx3.fillStyle = entity.gloveGlow;
-      ctx3.globalAlpha = opacity * heat;
-      dc(ldX, ldY, (gS + 3) * fl, true, false);
-      dc(rrX, rrY, (gS + 3) * fl, true, false);
-      ctx3.globalAlpha = opacity * heat * 0.45;
-      dc(ldX, ldY, (gS + 9) * fl, true, false);
-      dc(rrX, rrY, (gS + 9) * fl, true, false);
-      ctx3.fillStyle = "#ffffff";
-      ctx3.globalAlpha = opacity * heat * 0.9;
-      dc(ldX, ldY, gS * 0.45, true, false);
-      dc(rrX, rrY, gS * 0.45, true, false);
-      ctx3.restore();
-      entity.glovePositions = [[ldX, ldY], [rrX, rrY]];
-    }
-    if (isPlayer && !isTrail && isCounterReady) {
-      let cP = Math.sin(Date.now() * 0.02) * 2;
-      ctx3.save();
-      ctx3.strokeStyle = "#ffffff";
-      ctx3.lineWidth = 2;
-      dc(rrX, rrY, gS + 4 + cP, false, true);
-      dc(ldX, ldY, gS + 4 + cP, false, true);
-      ctx3.restore();
-    }
-    ctx3.globalAlpha = 1;
-  }
-
-  // src/render/overlays.js
-  var MOVE_STYLE = {
-    bash: { label: "BASH", color: "#ffaa00" },
-    jab: { label: "JAB", color: "#ffffff" },
-    feint: { label: "FEINT", color: "#c084fc" },
-    laser: { label: "LASER", color: "#39ff14" }
-  };
-  function drawScorePops(ctx3) {
-    if (!gameState.scorePops || !gameState.scorePops.length) return;
-    ctx3.save();
+    ctx3.shadowBlur = 0;
+    ctx3.fillStyle = color;
     ctx3.textAlign = "center";
-    gameState.scorePops.forEach((p) => {
-      ctx3.globalAlpha = Math.max(0, Math.min(1, p.life * 1.4));
-      ctx3.font = p.big ? "900 italic 26px Orbitron" : "bold 13px Orbitron";
-      ctx3.fillStyle = p.big ? "#facc15" : "#fde68a";
-      ctx3.shadowColor = "#facc15";
-      ctx3.shadowBlur = p.big ? 12 : 4;
-      ctx3.fillText(p.text, p.x, p.y);
+    ctx3.textBaseline = "middle";
+    ctx3.fillText(label, x, y + 1);
+    ctx3.restore();
+    return w;
+  }
+  function callout(ctx3, x, y, ax, ay, color, title, lines, keys = []) {
+    ctx3.save();
+    ctx3.font = "900 13px Orbitron";
+    let keysW = 0;
+    keys.forEach((k) => {
+      keysW += Math.max(28, ctx3.measureText(k.label).width + 16) + 8;
     });
-    ctx3.restore();
-  }
-  function drawBossTells(ctx3, en) {
-    if (!en.isBoss || gameState.bossIntroTimer > 0) return;
-    const cx = en.x - 34, top = en.y - en.h * 0.95;
-    ctx3.save();
-    if (isBossOpen(en)) {
-      const max = en.recoverMax || 1;
-      const left = en.controller === "static_monk" && en.currentMove === "recharge" ? Math.max(0, en.attackCooldown) / Math.max(1, Math.floor(180 / (en.arcMods && en.arcMods.teleportRateMult || 1))) : (en.recoverTimer || 0) / max;
-      const pulse = 0.6 + 0.4 * Math.sin(Date.now() * 0.02);
-      ctx3.strokeStyle = `rgba(34, 211, 238, ${pulse})`;
-      ctx3.lineWidth = 3;
-      const bx = en.x - 22, by = en.y - en.h * 1.5 - 10, bw = en.w + 44, bh = en.h * 1.5 + 16, k = 14;
-      ctx3.beginPath();
-      ctx3.moveTo(bx, by + k);
-      ctx3.lineTo(bx, by);
-      ctx3.lineTo(bx + k, by);
-      ctx3.moveTo(bx + bw - k, by);
-      ctx3.lineTo(bx + bw, by);
-      ctx3.lineTo(bx + bw, by + k);
-      ctx3.moveTo(bx, by + bh - k);
-      ctx3.lineTo(bx, by + bh);
-      ctx3.lineTo(bx + k, by + bh);
-      ctx3.moveTo(bx + bw - k, by + bh);
-      ctx3.lineTo(bx + bw, by + bh);
-      ctx3.lineTo(bx + bw, by + bh - k);
-      ctx3.stroke();
-      ctx3.fillStyle = "#22d3ee";
-      ctx3.font = "900 italic 18px Orbitron";
-      ctx3.textAlign = "center";
-      ctx3.shadowColor = "#22d3ee";
-      ctx3.shadowBlur = 12;
-      ctx3.fillText("OPEN", cx, top + 8);
-      ctx3.shadowBlur = 0;
-      ctx3.fillStyle = "rgba(34, 211, 238, 0.25)";
-      ctx3.fillRect(cx - 40, top + 16, 80, 4);
-      ctx3.fillStyle = "#22d3ee";
-      ctx3.fillRect(cx - 40, top + 16, 80 * Math.max(0, Math.min(1, left)), 4);
-    } else if (en.telegraphed && en.stun <= 0 && en.attackCooldown > 0) {
-      const move = en.controller === "static_monk" ? "laser" : en.currentMove || "jab";
-      const style = MOVE_STYLE[move] || MOVE_STYLE.jab;
-      const lead = Math.max(1, en.telegraphAt || 30);
-      const k = Math.max(0, Math.min(1, 1 - en.attackCooldown / lead));
-      const r = 16;
-      ctx3.lineWidth = 4;
-      ctx3.strokeStyle = "rgba(255,255,255,0.15)";
-      ctx3.beginPath();
-      ctx3.arc(cx, top - 4, r, 0, Math.PI * 2);
-      ctx3.stroke();
-      ctx3.strokeStyle = k > 0.8 ? "#ffffff" : style.color;
-      ctx3.shadowColor = style.color;
-      ctx3.shadowBlur = 10;
-      ctx3.beginPath();
-      ctx3.arc(cx, top - 4, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * k);
-      ctx3.stroke();
-      ctx3.shadowBlur = 0;
-      ctx3.fillStyle = style.color;
-      ctx3.font = "bold 12px Orbitron";
-      ctx3.textAlign = "center";
-      ctx3.fillText(style.label, cx, top + 28);
-    }
-    ctx3.restore();
-  }
-  function drawBossHud(ctx3) {
-    const boss = gameState.enemies.find((e) => e.isBoss);
-    if (!boss) return;
-    const W = 460, H = 12, x = (gameState.width - W) / 2, y = 104;
-    const pct = Math.max(0, boss.hp / boss.maxHp);
-    const inFinisher = !!gameState.finisher;
-    ctx3.save();
-    ctx3.fillStyle = "rgba(0,0,0,0.6)";
-    ctx3.fillRect(x - 4, y - 22, W + 8, H + 30);
-    ctx3.fillStyle = "#fff";
-    ctx3.font = "bold 12px Orbitron";
+    ctx3.font = "bold 10px Orbitron";
+    keys.forEach((k) => {
+      if (k.after) keysW += ctx3.measureText(k.after).width + 14;
+    });
+    ctx3.font = "bold 11px Orbitron";
+    const w = Math.max(210, keysW + 28, ...lines.map((l) => ctx3.measureText(l).width + 28)), h = 34 + lines.length * 16 + (keys.length ? 34 : 0);
+    ctx3.strokeStyle = color;
+    ctx3.lineWidth = 1.5;
+    ctx3.setLineDash([4, 4]);
+    ctx3.beginPath();
+    ctx3.moveTo(ax, ay);
+    ctx3.lineTo(x + (ax < x ? 0 : w), y + h / 2);
+    ctx3.stroke();
+    ctx3.setLineDash([]);
+    ctx3.fillStyle = color;
+    ctx3.beginPath();
+    ctx3.arc(ax, ay, 4, 0, Math.PI * 2);
+    ctx3.fill();
+    ctx3.fillStyle = "rgba(6,8,14,0.9)";
+    ctx3.fillRect(x, y, w, h);
+    ctx3.fillStyle = color;
+    ctx3.fillRect(x, y, 4, h);
+    ctx3.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx3.lineWidth = 1;
+    ctx3.strokeRect(x, y, w, h);
     ctx3.textAlign = "left";
-    ctx3.fillText(boss.name, x, y - 7);
-    ctx3.textAlign = "right";
-    ctx3.fillStyle = isBossOpen(boss) ? "#22d3ee" : boss.desperation ? "#ff3355" : "#9ca3af";
-    ctx3.fillText(isBossOpen(boss) ? "OPEN \u2014 PUNISH" : boss.desperation ? "DESPERATION" : "", x + W, y - 7);
-    ctx3.fillStyle = "rgba(255,255,255,0.08)";
-    ctx3.fillRect(x, y, W, H);
-    const flash = inFinisher ? 0.7 + 0.3 * Math.sin(Date.now() * 0.03) : 1;
-    ctx3.globalAlpha = flash;
-    ctx3.fillStyle = gameState.bossThemeColor || "#ff0055";
-    ctx3.fillRect(x, y, W * pct, H);
-    ctx3.globalAlpha = 1;
-    CONSTANTS.FINISHER.thresholds.forEach((th, i) => {
-      const used = (boss.finisherStage || 0) > i;
-      const nx = x + W * th;
-      ctx3.fillStyle = used ? "rgba(255,255,255,0.25)" : "#ffffff";
-      ctx3.fillRect(nx - 1.5, y - 5, 3, H + 10);
-      if (!used) {
-        ctx3.fillStyle = "#ffffff";
-        ctx3.beginPath();
-        ctx3.moveTo(nx, y - 5);
-        ctx3.lineTo(nx - 5, y - 11);
-        ctx3.lineTo(nx + 5, y - 11);
-        ctx3.closePath();
-        ctx3.fill();
+    ctx3.fillStyle = color;
+    ctx3.font = "900 12px Orbitron";
+    ctx3.fillText(title, x + 14, y + 20);
+    ctx3.fillStyle = "#e5e7eb";
+    ctx3.font = "bold 11px Orbitron";
+    lines.forEach((l, i) => ctx3.fillText(l, x + 14, y + 38 + i * 16));
+    let kx = x + 14;
+    keys.forEach((k) => {
+      ctx3.font = "900 13px Orbitron";
+      const kw = Math.max(28, ctx3.measureText(k.label).width + 16);
+      keycap(ctx3, kx + kw / 2, y + h - 20, k.label, k.color || color, k.pulse || 0);
+      kx += kw + 8;
+      if (k.after) {
+        ctx3.fillStyle = "#9ca3af";
+        ctx3.font = "bold 10px Orbitron";
+        ctx3.textAlign = "left";
+        ctx3.fillText(k.after, kx, y + h - 16);
+        kx += ctx3.measureText(k.after).width + 14;
       }
     });
     ctx3.restore();
   }
-  function drawFinisherDim(ctx3) {
-    const f = gameState.finisher;
-    if (!f) return;
-    ctx3.fillStyle = `rgba(0, 0, 0, ${0.55 * f.bars})`;
-    ctx3.fillRect(-200, -200, gameState.width + 400, gameState.height + 400);
-  }
-  var PROMPT_X = 0.72;
-  var PROMPT_Y = 0.48;
-  var PROMPT_GLYPH = {
-    up: { key: "\u25B2", hint: "\u2191 / D-PAD", color: "#22d3ee" },
-    down: { key: "\u25BC", hint: "\u2193 / D-PAD", color: "#22d3ee" },
-    jab: { key: "A", hint: "JAB \xB7 X", color: "#ffffff" },
-    cross: { key: "S", hint: "CROSS \xB7 Y", color: "#ec4899" },
-    hook: { key: "D", hint: "HOOK \xB7 B", color: "#facc15" }
-  };
-  function drawFinisherUI(ctx3) {
-    const f = gameState.finisher;
-    if (!f) return;
-    const W = gameState.width, H = gameState.height;
+  function lessonRail(ctx3, current2) {
     ctx3.save();
-    const barH = 58 * f.bars;
-    ctx3.fillStyle = "#000";
-    ctx3.fillRect(0, 0, W, barH);
-    ctx3.fillRect(0, H - barH, W, barH);
-    const vg = ctx3.createRadialGradient(W / 2, H / 2, H * 0.25, W / 2, H / 2, H * 0.85);
-    vg.addColorStop(0, "rgba(0,0,0,0)");
-    vg.addColorStop(1, `rgba(0,0,0,${0.55 * f.bars})`);
-    ctx3.fillStyle = vg;
-    ctx3.fillRect(0, 0, W, H);
-    ctx3.textAlign = "center";
-    const title = f.kind === "ko" ? "FINAL BLOW" : f.kind === "break1" ? "STAGGER I" : "STAGGER II";
-    ctx3.globalAlpha = f.bars;
-    ctx3.fillStyle = f.kind === "ko" ? "#ff0055" : "#ffffff";
-    ctx3.font = "900 italic 22px Orbitron";
-    ctx3.fillText(title, W / 2, Math.max(24, barH - 18));
-    const n = f.seq.length, pipW = 34, gap = 8, total = n * pipW + (n - 1) * gap;
-    for (let i = 0; i < n; i++) {
-      const px = W / 2 - total / 2 + i * (pipW + gap);
-      const done = i < f.idx, cur = i === f.idx && f.phase === "prompts";
-      const g = PROMPT_GLYPH[f.seq[i]];
-      ctx3.fillStyle = done ? g.color : cur ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.06)";
-      ctx3.fillRect(px, H - barH + 14, pipW, 22);
-      ctx3.fillStyle = done ? "#000" : cur ? "#fff" : "rgba(255,255,255,0.35)";
-      ctx3.font = "bold 13px Orbitron";
-      ctx3.fillText(g.key, px + pipW / 2, H - barH + 30);
-    }
-    ctx3.globalAlpha = 1;
-    const pp = promptProgress();
-    if (pp) {
-      const g = PROMPT_GLYPH[pp.move];
-      const cx = PROMPT_X * W, cy = PROMPT_Y * H;
-      const box = 38;
-      const ringR = box + 70 * (1 - Math.min(1, pp.progress));
-      const inWindow = pp.t >= -CONSTANTS.FINISHER.windowEarly;
-      ctx3.lineWidth = 4;
-      ctx3.strokeStyle = inWindow ? "#ffffff" : "rgba(255,255,255,0.45)";
-      ctx3.beginPath();
-      ctx3.arc(cx, cy, ringR, 0, Math.PI * 2);
-      ctx3.stroke();
-      ctx3.fillStyle = "rgba(0,0,0,0.75)";
-      ctx3.beginPath();
-      ctx3.arc(cx, cy, box, 0, Math.PI * 2);
-      ctx3.fill();
-      ctx3.strokeStyle = g.color;
-      ctx3.lineWidth = 3;
-      ctx3.shadowColor = g.color;
-      ctx3.shadowBlur = 18;
-      ctx3.beginPath();
-      ctx3.arc(cx, cy, box, 0, Math.PI * 2);
-      ctx3.stroke();
-      ctx3.shadowBlur = 0;
-      ctx3.fillStyle = g.color;
-      ctx3.font = "900 34px Orbitron";
-      ctx3.fillText(g.key, cx, cy + 12);
-      ctx3.fillStyle = "rgba(255,255,255,0.8)";
-      ctx3.font = "bold 11px Orbitron";
-      ctx3.fillText(g.hint, cx, cy + box + 22);
-    } else if (f.phase === "intro") {
-      ctx3.fillStyle = `rgba(255,255,255,${f.bars})`;
-      ctx3.font = "bold 13px Orbitron";
-      ctx3.fillText("HIT EACH PROMPT ON THE BEAT", PROMPT_X * W, PROMPT_Y * H);
-    }
-    if (f.judge && f.judgeTimer > 0) {
-      const a = Math.min(1, f.judgeTimer / 12);
-      const s = reducedMotion() ? 1 : 1 + Math.max(0, f.judgeTimer - 26) * 0.06;
-      ctx3.save();
-      ctx3.translate(PROMPT_X * W, PROMPT_Y * H - 128);
-      ctx3.scale(s, s);
-      ctx3.globalAlpha = a;
-      ctx3.fillStyle = f.judge.color;
-      ctx3.font = "900 italic 30px Orbitron";
-      ctx3.shadowColor = f.judge.color;
-      ctx3.shadowBlur = 14;
-      ctx3.fillText(f.judge.text, 0, 0);
-      ctx3.restore();
-    }
+    const x0 = 22, y = 100;
+    ctx3.font = "900 9px Orbitron";
+    ctx3.textAlign = "left";
+    ctx3.fillStyle = "rgba(255,255,255,0.55)";
+    ctx3.fillText("SPARRING", x0, y - 8);
+    let x = x0;
+    LESSONS.forEach((l, i) => {
+      const done = i < current2, cur = i === current2;
+      const label = (done ? "\u2713 " : "") + l;
+      const w = ctx3.measureText(label).width + 16;
+      ctx3.fillStyle = done ? "#22d3ee" : cur ? "rgba(34,211,238,0.18)" : "rgba(255,255,255,0.05)";
+      ctx3.fillRect(x, y, w, 16);
+      if (cur) {
+        ctx3.strokeStyle = "#22d3ee";
+        ctx3.lineWidth = 1.5;
+        ctx3.strokeRect(x, y, w, 16);
+      }
+      ctx3.fillStyle = done ? "#000" : cur ? "#22d3ee" : "#6b7280";
+      ctx3.fillText(label, x + 8, y + 11);
+      x += w + 4;
+    });
     ctx3.restore();
   }
-  function drawVignette(ctx3) {
-    const v = gameState.vignette;
-    if (!v) return;
-    const W = gameState.width, H = gameState.height, t = v.timer, D = v.duration;
-    const inA = Math.min(1, t / 8), outA = Math.min(1, (D - t) / 8);
-    const a = Math.min(inA, outA);
-    const rm = reducedMotion();
+  function drawOnboardingMock(ctx3) {
+    const scene = gameState.onboardingMock;
+    if (!scene) return;
+    const K2 = getBinds(), L = (c) => keyLabel(c);
+    const p = gameState.player, t = Date.now(), pulse = 0.5 + 0.5 * Math.sin(t * 8e-3);
+    const en = gameState.enemies[0];
     ctx3.save();
-    ctx3.globalAlpha = a;
-    ctx3.fillStyle = "rgba(0,0,0,0.86)";
-    ctx3.fillRect(0, 0, W, H);
-    const slashIn = rm ? 1 : Math.min(1, t / 10);
-    ctx3.save();
-    ctx3.translate(W / 2, H / 2);
-    ctx3.rotate(-0.22);
-    const sg = ctx3.createLinearGradient(-W, 0, W, 0);
-    sg.addColorStop(0, "rgba(0,0,0,0)");
-    sg.addColorStop(0.5, v.color);
-    sg.addColorStop(1, "rgba(0,0,0,0)");
-    ctx3.globalAlpha = a * 0.28;
-    ctx3.fillStyle = sg;
-    ctx3.fillRect(-W * slashIn, -70, W * 2 * slashIn, 140);
-    ctx3.globalAlpha = a * 0.9;
-    ctx3.fillStyle = v.color;
-    ctx3.fillRect(-W * slashIn, 72, W * 2 * slashIn, 3);
-    ctx3.restore();
-    const pose = { speed: "jab3", power: "cross", technique: "guard_jab" }[v.upgrade.tree] || (v.rarity === "fusion" ? "hook" : "cross");
-    const S = 2.3, bx = 250, by = 430;
-    const ent = {
-      x: bx / S - 25,
-      y: by / S,
-      w: 50,
-      h: 110,
-      lane: 1,
-      state: "punching",
-      punchType: pose,
-      hitFrame: 0,
-      didHit: true,
-      slipBuff: 0,
-      color: gameState.strikerColor || "#00ffff",
-      trails: [],
-      gloveGlow: v.color,
-      gloveHeat: Math.min(1, t / 14)
-    };
-    ctx3.save();
-    ctx3.scale(S, S);
-    drawBoxer(ctx3, ent, true, a);
-    ctx3.restore();
-    if (ent.glovePositions) {
-      ctx3.fillStyle = v.color;
-      v.sparks.forEach((sp) => {
-        const gp = ent.glovePositions[sp.gx];
-        ctx3.globalAlpha = a * sp.life;
-        ctx3.fillRect(gp[0] * S + sp.ox, gp[1] * S + sp.oy, 3, 3);
-      });
-      ctx3.globalAlpha = a;
-    }
-    const slamK = rm ? 1 : Math.min(1, Math.max(0, (t - 4) / 8));
-    const scale = rm ? 1 : 1 + (1 - slamK) * 1.6;
-    const kindLabel = { fusion: "\u2726 FUSION \u2726", apex: "\u2605 APEX MASTERY \u2605", mastery: "\u25C6 MASTERY", overclock: "OVERCLOCK", orb: "EVOLUTION" }[v.rarity] || "EVOLUTION";
-    ctx3.save();
-    ctx3.translate(W * 0.64, H * 0.46);
-    ctx3.globalAlpha = a * slamK;
-    ctx3.fillStyle = v.color;
-    ctx3.font = "bold 14px Orbitron";
-    ctx3.textAlign = "center";
-    ctx3.fillText(kindLabel + (v.upgrade.tree && TREE_NAME[v.upgrade.tree] ? ` \xB7 ${TREE_NAME[v.upgrade.tree]}` : ""), 0, -48);
-    ctx3.scale(scale, scale);
-    ctx3.fillStyle = "#ffffff";
-    ctx3.font = "900 italic 44px Orbitron";
-    ctx3.shadowColor = v.color;
-    ctx3.shadowBlur = 24;
-    ctx3.fillText(v.upgrade.name.toUpperCase(), 0, 0);
-    ctx3.restore();
-    if (!v.repeat) {
-      ctx3.globalAlpha = a * Math.min(1, Math.max(0, (t - 16) / 10));
-      ctx3.fillStyle = "rgba(255,255,255,0.8)";
-      ctx3.font = "13px Orbitron";
+    if (scene === "slip") {
+      lessonRail(ctx3, 0);
+      const ex = en ? en.x + 25 : p.x + 200, ey = en ? en.y - 140 : p.y - 140;
+      callout(
+        ctx3,
+        ex + 50,
+        ey - 60,
+        ex,
+        ey + 10,
+        "#ff3355",
+        "IT\u2019S WINDING UP",
+        ["The lane flashes RED while it winds up.", "When it flashes WHITE \u2014 slip out."],
+        []
+      );
+      keycap(ctx3, p.x + 25, p.y - 175, L(K2.up), "#ffffff", pulse);
+      keycap(ctx3, p.x + 25, p.y + 30, L(K2.down), "#ffffff", pulse);
+      ctx3.fillStyle = "rgba(255,255,255,0.85)";
+      ctx3.font = "900 10px Orbitron";
       ctx3.textAlign = "center";
-      wrapText(ctx3, v.upgrade.desc, W * 0.64, H * 0.46 + 40, 440, 18);
+      ctx3.fillText("SLIP ON WHITE", p.x + 25, p.y - 196);
+      ctx3.fillStyle = "#9ca3af";
+      ctx3.fillText("PERFECT SLIPS: 0 / 1", p.x + 25, p.y + 58);
+    } else if (scene === "counter") {
+      lessonRail(ctx3, 1);
+      callout(
+        ctx3,
+        p.x + 70,
+        p.y - 250,
+        p.x + 60,
+        p.y - 70,
+        "#ffffff",
+        "COUNTER CHARGED",
+        ["A Perfect Slip charged your next hit.", "It lands double, shatters posture."],
+        [{ label: L(K2.jab) }, { label: L(K2.cross) }, { label: L(K2.hook), after: "ANY PUNCH" }]
+      );
+    } else if (scene === "bruiser") {
+      const ex = en ? en.x + 35 : p.x + 220, ey = en ? en.y - 150 : p.y - 150;
+      callout(
+        ctx3,
+        Math.max(ex + 40, 650),
+        ey - 60,
+        ex,
+        ey + 10,
+        "#ff3030",
+        "NEW: BRUISER",
+        ["Jabs chip it but never stagger it.", "Only a Cross (or a Counter) stops it."],
+        [{ label: L(K2.cross), color: "#ff2bd6", after: "CROSS" }]
+      );
+      ctx3.fillStyle = "rgba(255,255,255,0.45)";
+      ctx3.font = "bold 9px Orbitron";
+      ctx3.textAlign = "center";
+      ctx3.fillText("world at 60% speed for a beat \xB7 fades on its own", gameState.width / 2, gameState.height - 110);
+    } else if (scene === "instinct") {
+      callout(
+        ctx3,
+        330,
+        70,
+        290,
+        52,
+        "#22d3ee",
+        "INSTINCT FULL",
+        ["Unleash it now \u2014 or keep it banked and", "Perfect Slip on a full meter for THE ZONE."],
+        [{ label: L(K2.instinct), after: "UNLEASH" }, { label: `${L(K2.up)}/${L(K2.down)}`, color: "#ffffff", after: "PERFECT SLIP = ZONE" }]
+      );
+    } else if (scene === "footwork") {
+      keycap(ctx3, p.x - 10, p.y + 34, L(K2.left), "#22d3ee", pulse);
+      keycap(ctx3, p.x + 60, p.y + 34, L(K2.right), "#22d3ee", pulse);
+      ctx3.fillStyle = "#9ca3af";
+      ctx3.font = "bold 9px Orbitron";
+      ctx3.textAlign = "center";
+      ctx3.fillText("HOLD", p.x + 25, p.y + 38);
+      const low = gameState.height * CONSTANTS.LANE_Y[2] + 20;
+      callout(
+        ctx3,
+        90,
+        low,
+        CONSTANTS.ROPES.playerPostX,
+        low - 20,
+        "#ff5a3c",
+        "YOUR ROPES",
+        ["Pinned on them you\u2019re CORNERED:", "slip windows tighten."],
+        []
+      );
+      callout(
+        ctx3,
+        650,
+        low,
+        CONSTANTS.ROPES.enemyPostX,
+        low - 20,
+        "#ffffff",
+        "THEIR ROPES",
+        ["Drive them here and counters", "ROPE-BOUNCE for bonus damage."],
+        []
+      );
+      keycap(ctx3, p.x + 25, p.y - 175, L(K2.ghost), "#c084fc", 0);
+      ctx3.fillStyle = "#c084fc";
+      ctx3.font = "900 9px Orbitron";
+      ctx3.fillText("GHOST STEP", p.x + 25, p.y - 196);
     }
-    if (!rm && t >= 10 && t <= 13) {
-      ctx3.globalAlpha = 0.25 * (14 - t) / 4;
-      ctx3.fillStyle = "#fff";
-      ctx3.fillRect(0, 0, W, H);
-    }
-    ctx3.globalAlpha = a * 0.55;
-    ctx3.fillStyle = "#fff";
-    ctx3.font = "11px Orbitron";
-    ctx3.textAlign = "center";
-    ctx3.fillText("ANY KEY TO SKIP", W / 2, H - 96);
     ctx3.restore();
-  }
-  var TREE_NAME = { speed: "SPEED", power: "POWER", technique: "TECHNIQUE" };
-  function wrapText(ctx3, text, x, y, maxW, lh) {
-    const words = String(text || "").split(" ");
-    let line = "", yy = y;
-    for (const w of words) {
-      const test = line ? line + " " + w : w;
-      if (ctx3.measureText(test).width > maxW && line) {
-        ctx3.fillText(line, x, yy);
-        line = w;
-        yy += lh;
-      } else line = test;
-    }
-    if (line) ctx3.fillText(line, x, yy);
   }
 
   // src/render/draw.js
@@ -5067,7 +6735,9 @@
       }
     });
     ctx.globalAlpha = 1;
+    drawRopes(ctx);
     drawFinisherDim(ctx);
+    drawAfterimages(ctx);
     gameState.player.trails.forEach((t) => {
       let ghost = { lane: t.lane, x: t.x, y: t.y, w: 50, h: 110, state: t.state, punchType: t.punchType, hitFrame: t.hitFrame, slipBuff: t.slipBuff, color: "#00ffff" };
       drawBoxer(ctx, ghost, true, t.opacity, true);
@@ -5077,7 +6747,7 @@
       if (gameState.purifyTimer > 0) opacity *= 0.5;
       drawBoxer(ctx, en, false, opacity);
       if (en.isActiveThreat) {
-        const { perfect: perfectThresh, good: goodThresh } = CONSTANTS.getSlipThresholds(en.type, gameState.progressionMods.perfectSlipWindowBonus);
+        const { perfect: perfectThresh, good: goodThresh } = CONSTANTS.getSlipThresholds(en.type, gameState.progressionMods.perfectSlipWindowBonus, CONSTANTS.isCornered(gameState.player));
         if (en.type === "zoner" && en.attackCooldown < 40 && en.stun <= 0 && gameState.bossIntroTimer <= 0) {
           let intensity = 1 - en.attackCooldown / 40;
           ctx.strokeStyle = `rgba(0, 255, 0, ${intensity})`;
@@ -5123,7 +6793,7 @@
           ctx.fillText(telText, en.x + en.w / 2 + xOff, en.y - en.h - 10);
           ctx.textAlign = "left";
         }
-      } else if (en.attackCooldown <= CONSTANTS.getSlipThresholds(en.type, 0).good + 6 && en.stun <= 0 && en.type !== "zoner" && gameState.bossIntroTimer <= 0) {
+      } else if (en.attackCooldown <= CONSTANTS.getSlipThresholds(en.type, 0, CONSTANTS.isCornered(gameState.player)).good + 6 && en.stun <= 0 && en.type !== "zoner" && gameState.bossIntroTimer <= 0) {
         let telColor = "rgba(255,255,255,0.3)";
         let telText = "!";
         if (en.isBoss) {
@@ -5160,6 +6830,14 @@
         ctx.fillRect(en.x, barY, barW, 3);
         ctx.fillStyle = en.color;
         ctx.fillRect(en.x, barY, barW * Math.max(0, en.hp / en.maxHp), 3);
+        if ((en.stringLen || 1) > 1) {
+          for (let i = 0; i < en.stringLen; i++) {
+            ctx.fillStyle = i < (en.stringIdx || 0) ? "#ffffff" : "rgba(255,255,255,0.3)";
+            ctx.beginPath();
+            ctx.arc(en.x + barW - 4 - i * 9, barY - 7, 3, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
         const pressure = en.pressure || 0;
         if (pressure > 0) {
           for (let i = 0; i < pressure; i++) {
@@ -5171,7 +6849,19 @@
       }
       drawBossTells(ctx, en);
     });
-    drawBoxer(ctx, gameState.player, true);
+    gameState.player.trailColor = buildColor();
+    if (gameState.knockdown) {
+      const k = gameState.knockdown.fall, p = gameState.player;
+      ctx.save();
+      ctx.translate(p.x + 25, p.y);
+      ctx.rotate(-Math.PI / 2 * k);
+      ctx.translate(-(p.x + 25), -p.y);
+      drawBoxer(ctx, { ...p, state: "hurt" }, true);
+      ctx.restore();
+    } else {
+      const inv = (gameState.player.invuln || 0) > 0 && Math.floor(Date.now() / 80) % 2 === 0;
+      drawBoxer(ctx, gameState.player, true, inv ? 0.45 : 1);
+    }
     gameState.floatingTexts.forEach((ft) => {
       ctx.globalAlpha = Math.max(0, ft.life);
       ctx.fillStyle = ft.color;
@@ -5181,20 +6871,14 @@
       ctx.textAlign = "left";
     });
     ctx.globalAlpha = 1;
+    drawKoFx(ctx);
     drawScorePops(ctx);
-    if (gameState.bossIntroTimer > 0) {
-      ctx.fillStyle = "#000";
-      ctx.fillRect(0, gameState.height / 2 - 80, gameState.width, 160);
-      let slideIn = Math.min(1, (120 - gameState.bossIntroTimer) / 20);
-      ctx.fillStyle = "#fff";
-      ctx.font = "900 italic 40px Orbitron";
-      ctx.textAlign = "center";
-      ctx.fillText(gameState.bossIntroText, gameState.width / 2 * slideIn + gameState.width / 4, gameState.height / 2 - 10);
-      ctx.textAlign = "left";
-    }
     ctx.restore();
     if (gameState.screen !== "start") drawBossHud(ctx);
     drawFinisherUI(ctx);
+    drawKnockdownUI(ctx);
+    drawBossPoster(ctx);
+    if (gameState.onboardingMock) drawOnboardingMock(ctx);
     SequenceManager.draw(ctx, gameState.width, gameState.height);
     drawVignette(ctx);
   }
@@ -5203,22 +6887,19 @@
   var VIGNETTE_FULL_FRAMES = 90;
   var VIGNETTE_REPEAT_FRAMES = 36;
   var SKIP_GUARD_FRAMES = 6;
-  var TREE_COLORS = { speed: "#22d3ee", power: "#ec4899", technique: "#facc15" };
   function upgradeColor(u) {
-    if (!u) return "#ffffff";
-    if (u.kind === "fusion") return "#ff0055";
-    if (u.kind === "overclock") return "#c084fc";
-    return TREE_COLORS[u.tree] || "#ffffff";
+    return upgradeColorFor(u);
   }
   function upgradeRarity(u) {
     if (!u) return "orb";
-    if (u.kind === "fusion") return "fusion";
+    if (u.kind === "fusion") return u.evolved ? "evolved" : "fusion";
     if (u.draftRole === "apex") return "apex";
+    if (u.verb) return "verb";
     if (u.kind === "mastery") return "mastery";
     if (u.kind === "overclock") return "overclock";
     return "orb";
   }
-  var STING = { fusion: "sting_fusion", apex: "sting_fusion", mastery: "sting_mastery", overclock: "sting_overclock", orb: "sting_orb" };
+  var STING = { evolved: "sting_fusion", fusion: "sting_fusion", apex: "sting_fusion", verb: "sting_mastery", mastery: "sting_mastery", overclock: "sting_overclock", orb: "sting_orb" };
   function vignetteDuration(upgradeId, seenBefore, reduced = false) {
     return seenBefore || reduced ? VIGNETTE_REPEAT_FRAMES : VIGNETTE_FULL_FRAMES;
   }
@@ -5273,7 +6954,12 @@
   };
   var canvas2 = document.getElementById("gameCanvas");
   var ctx2 = canvas2 ? canvas2.getContext("2d", { alpha: false }) : null;
-  var RARITY_BADGE = { orb: "EVOLUTION", mastery: "\u25C6 MASTERY", apex: "\u2605 APEX MASTERY", fusion: "\u2726 FUSION \u2726", overclock: "OVERCLOCK" };
+  var RARITY_BADGE = { orb: "STAT", verb: "\u27E1 NEW VERB", mastery: "\u25C6 MASTERY", apex: "\u2605 APEX", fusion: "\u2726 FUSION \u2726", evolved: "\u2726 EVOLVED FUSION \u2726", overclock: "OVERCLOCK" };
+  function cardBadge(option, rarity) {
+    const tree = CONSTANTS.TREES[option.tree];
+    if (option.kind === "rank") return `${tree ? tree.name : ""} \xB7 RANK ${option.rank}${rarity === "orb" ? "" : " \xB7 " + RARITY_BADGE[rarity]}`;
+    return RARITY_BADGE[rarity] + (tree ? ` \xB7 ${tree.name}` : "");
+  }
   function escapeAttr(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   }
@@ -5291,7 +6977,7 @@
       }
     }
     let draftOptions = buildDraft(gameState, UPGRADE_POOL);
-    const tease = buildFusionTease(gameState, UPGRADE_POOL, CONSTANTS.getArcIndex(gameState.currentStage));
+    const tease = buildDraftTease(gameState, UPGRADE_POOL, CONSTANTS.getArcIndex(gameState.currentStage));
     const container = document.getElementById("draft-container");
     if (container) {
       container.innerHTML = "";
@@ -5300,11 +6986,10 @@
         const rarity = upgradeRarity(option);
         const color = upgradeColor(option);
         const iconText = `[${index + 1}] / [${PAD_LABEL[index] || "?"}]`;
-        const treeTag = option.tree && option.tree !== "general" ? ` \xB7 ${option.tree.toUpperCase()}` : "";
         const btnHTML = `
-                <div class="draft-card card-${rarity}" style="--card-color:${color}; animation-delay:${index * 90 + (rarity === "fusion" || rarity === "apex" ? 220 : 0)}ms" onclick="window.engineApplyUpgradeState('${escapeAttr(option.id)}')">
+                <div class="draft-card card-${rarity}" style="--card-color:${color}; animation-delay:${index * 90 + (rarity === "fusion" || rarity === "evolved" || rarity === "apex" ? 220 : 0)}ms" onclick="window.engineApplyUpgradeState('${escapeAttr(option.id)}')">
                     <div class="card-inner">
-                        <div class="card-badge">${RARITY_BADGE[rarity]}${treeTag}</div>
+                        <div class="card-badge">${cardBadge(option, rarity)}</div>
                         <div class="card-name">${option.name}</div>
                         <div class="card-desc">${option.desc}</div>
                         <div class="card-key">${iconText}</div>
@@ -5314,19 +6999,22 @@
         container.insertAdjacentHTML("beforeend", btnHTML);
       });
       if (tease) {
+        const tr = upgradeRarity(tease), tc = upgradeColor(tease);
+        const tBadge = tease.kind === "rank" ? `\u{1F512} ${cardBadge(tease, tr)}` : "\u{1F512} FUSION \xB7 LOCKED";
         container.insertAdjacentHTML("beforeend", `
-                <div class="draft-card card-fusion card-locked" style="--card-color:#ff0055; animation-delay:${draftOptions.length * 90 + 260}ms" title="Locked \u2014 build toward it">
+                <div class="draft-card card-${tr} card-locked" style="--card-color:${tc}; animation-delay:${draftOptions.length * 90 + 260}ms" title="Locked \u2014 build toward it">
                     <div class="card-inner">
-                        <div class="card-badge">\u{1F512} FUSION \xB7 LOCKED</div>
+                        <div class="card-badge">${tBadge}</div>
                         <div class="card-name">${tease.name}</div>
                         <div class="card-desc">${tease.desc}</div>
-                        <div class="card-key card-req">REQUIRES ${tease.reqText}</div>
+                        <div class="card-key card-req">${tease.kind === "rank" ? "" : "REQUIRES "}${tease.reqText}</div>
                     </div>
                 </div>`);
       }
     }
-    const rarest = draftOptions.map(upgradeRarity).find((r) => r === "fusion" || r === "apex") || draftOptions.map(upgradeRarity).find((r) => r === "mastery");
-    if (rarest) setTimeout(() => playSound(rarest === "mastery" ? "sting_mastery" : "sting_fusion"), rarest === "mastery" ? 120 : 300);
+    const rs = draftOptions.map(upgradeRarity);
+    const rarest = rs.find((r) => r === "evolved" || r === "fusion" || r === "apex") || rs.find((r) => r === "verb" || r === "mastery");
+    if (rarest) setTimeout(() => playSound(rarest === "verb" || rarest === "mastery" ? "sting_mastery" : "sting_fusion"), rarest === "verb" || rarest === "mastery" ? 120 : 300);
     if (HUD.screens.upgrade) HUD.screens.upgrade.style.display = "flex";
   }
   window.engineTriggerUpgradeDraft = triggerUpgradeDraft;
@@ -5355,7 +7043,7 @@
     gameState.tutorialDelay = 0;
     gameState.tutorialGrace = 0;
     gameState.instinctPauseTimer = 0;
-    gameState.seenTutorials = { shield: false, slip: false, guard: false, instinct: false, counter: false, ghost_step: false, bruiser_id: false, assassin_id: false, footwork_tip: false };
+    gameState.seenTutorials = { shield: false, slip: false, guard: false, instinct: false, counter: false, ghost_step: false, bruiser_id: false, assassin_id: false, string_id: false, footwork_tip: false };
     gameState.tutorialSlipFails = 0;
     gameState.orbCounts = { speed: 0, power: 0, technique: 0 };
     gameState.stats = { speedMult: 1, powerMult: 1, techMult: 1 };
@@ -5416,6 +7104,16 @@
     gameState.finisher = null;
     gameState.finisherZoom = 1;
     gameState.vignette = null;
+    gameState.knockdown = null;
+    gameState.knockdownsThisArc = 0;
+    gameState.statKnockdowns = 0;
+    gameState.zoneTimer = 0;
+    gameState.bossPoster = null;
+    gameState.enemyEchoes = [];
+    gameState.afterimages = [];
+    gameState.koFx = [];
+    gameState.rankOrder = [];
+    gameState.orbPulse = 0;
     gameState.paletteFrom = 1;
     gameState.paletteTo = 1;
     gameState.paletteT = 1;
@@ -5469,7 +7167,7 @@
     startMusic();
     SequenceManager.playDynamic([
       { type: "walkin", duration: 50 },
-      { type: "text", title: "ARC 1 \u2014 SHATTERED CATHEDRAL", subtitle: openingSubtitle(), duration: 130 },
+      { type: "billing", duration: 130, card: roundCard(1, openingSubtitle()) },
       { type: "resume" }
     ]);
   }
@@ -5518,6 +7216,21 @@
   ];
   var pauseTab = "resume";
   var settingsFocus = 0;
+  var BIND_ACTIONS = Object.keys(DEFAULT_BINDS);
+  var rebindingAction = null;
+  var settingsRowCount = () => SETTINGS_ROWS.length + BIND_ACTIONS.length + 1;
+  function renderInstructions() {
+    const el = document.getElementById("instructions");
+    if (!el) return;
+    const K2 = getBinds(), L = (c) => keyLabel(c);
+    el.innerHTML = `<span class="text-cyan-400">[${L(K2.up)}/${L(K2.down)}]</span> SLIP &nbsp;|&nbsp; <span class="text-cyan-400">[${L(K2.ghost)}]</span> GHOST STEP &nbsp;|&nbsp; <span class="text-cyan-400">[${L(K2.left)}/${L(K2.right)}]</span> FOOTWORK &nbsp;|&nbsp; <span class="text-pink-500">[${L(K2.jab)}]</span> JAB &nbsp;|&nbsp; <span class="text-pink-500">[${L(K2.cross)}]</span> CROSS &nbsp;|&nbsp; <span class="text-pink-500">[${L(K2.hook)}]</span> HOOK &nbsp;|&nbsp; <span class="text-gray-400">[${L(K2.guard)}]</span> GUARD &nbsp;|&nbsp; <span class="text-yellow-400">[${L(K2.instinct)}]</span> INSTINCT<br><span class="text-gray-500">PAD: X JAB \xB7 Y CROSS \xB7 B HOOK \xB7 LB GHOST \xB7 RB GUARD \xB7 A INSTINCT</span>`;
+    let done = 0;
+    try {
+      done = loadMeta().totalRuns;
+    } catch (e) {
+    }
+    el.classList.toggle("hidden", done >= 1);
+  }
   function openPause() {
     if (gameState.screen !== "playing") return;
     gameState.screen = "paused";
@@ -5550,12 +7263,7 @@
     const i = PAUSE_TABS.indexOf(pauseTab);
     setPauseTab(PAUSE_TABS[(i + dir + PAUSE_TABS.length) % PAUSE_TABS.length]);
   }
-  var ORB_PERKS = {
-    speed: ["Faster strikes", "Missed Jabs don't snap Combo", "Slip Cancel"],
-    power: ["Heavier knockback", "Cross gains reach", "Bowling Collateral"],
-    technique: ["More Instinct from reads", "Perfect Slips charge 2 Counters", "True Read on bosses"]
-  };
-  var TREE_COLOR = { speed: "#22d3ee", power: "#ec4899", technique: "#facc15" };
+  var TREE_COLOR = { speed: CONSTANTS.TREES.speed.color, power: CONSTANTS.TREES.power.color, technique: CONSTANTS.TREES.technique.color };
   var OC_NAMES = { vitality: "oc_vital_surge", nerves: "oc_quick_nerves", focus: "oc_sharp_eye", instinct: "oc_calm_engine", clinch: "oc_clinch_breaker", finish: "oc_clean_finish" };
   function findUpgrade(id) {
     return [...UPGRADE_POOL.orbs, ...UPGRADE_POOL.masteries, ...UPGRADE_POOL.fusions, ...UPGRADE_POOL.overclocks].find((u) => u.id === id);
@@ -5563,12 +7271,14 @@
   function renderLoadout() {
     const el = document.getElementById("loadout-body");
     if (!el) return;
-    const orbRows = ["speed", "power", "technique"].map((tree) => {
+    const cap = CONSTANTS.rankCap(CONSTANTS.getArcIndex(gameState.currentStage));
+    const orbRows = CONSTANTS.TREE_ORDER.map((tree) => {
       const lvl = gameState.orbCounts[tree] || 0;
-      const perks = ORB_PERKS[tree].map((p, i) => `<span class="perk ${i < lvl ? "on" : ""}">${p}</span>`).join("");
-      return `<div class="lo-orb"><span class="lo-orb-name" style="color:${TREE_COLOR[tree]}">${tree.toUpperCase()} ${lvl}/3</span>${perks}</div>`;
+      const ranks = UPGRADE_POOL.orbs.filter((o) => o.tree === tree).sort((a, b) => a.rank - b.rank);
+      const perks = ranks.map((r) => `<span class="lo-rank ${r.rank <= lvl ? "on" : ""} ${r.rank > cap ? "capped" : ""}" title="${escapeAttr(r.desc)}">${r.rank}. ${r.name}${r.rank > cap ? ` \xB7 ARC ${CONSTANTS.arcForRank(r.rank)}` : ""}</span>`).join("");
+      return `<div class="lo-orb" style="--tree-color:${TREE_COLOR[tree]}"><span class="lo-orb-name" style="color:${TREE_COLOR[tree]}">${CONSTANTS.TREES[tree].name} ${lvl}/5</span>${perks}</div>`;
     }).join("");
-    const owned = gameState.acquiredUpgradeIds.map(findUpgrade).filter(Boolean);
+    const owned = gameState.acquiredUpgradeIds.map(findUpgrade).filter((u) => u && u.kind !== "rank");
     const cards = owned.map((u) => {
       const r = upgradeRarity(u);
       return `<div class="lo-card lo-${r}" style="--card-color:${upgradeColor(u)}"><div class="lo-badge">${RARITY_BADGE[r]}</div><div class="lo-name">${u.name}</div><div class="lo-desc">${u.desc}</div></div>`;
@@ -5597,7 +7307,12 @@
       }
       const on = s[row.key] === true;
       return `<div class="set-row${focus}" data-i="${i}"><label>${row.label}</label><button class="set-toggle ${on ? "on" : ""}" onclick="window.engineSetSetting('${row.key}', ${!on})">${on ? "ON" : "OFF"}</button></div>`;
-    }).join("") + '<div class="set-hint">[\u2191/\u2193] select \xB7 [\u2190/\u2192] adjust \xB7 [ENTER] toggle \xB7 saved automatically</div>';
+    }).join("") + '<h4 class="lo-h" style="margin-top:14px">Controls</h4>' + BIND_ACTIONS.map((a, j) => {
+      const i = SETTINGS_ROWS.length + j;
+      const focus = i === settingsFocus ? " focused" : "";
+      const waiting = rebindingAction === a;
+      return `<div class="set-row bind-row${focus}" data-i="${i}"><label>${BIND_LABELS[a]}</label><button class="bind-key ${waiting ? "waiting" : ""}" onclick="window.engineStartRebind('${a}')">${waiting ? "PRESS A KEY\u2026" : keyLabel(getBinds()[a])}</button></div>`;
+    }).join("") + `<div class="set-row${settingsFocus === settingsRowCount() - 1 ? " focused" : ""}" data-i="${settingsRowCount() - 1}"><label>Reset Controls</label><button class="set-toggle" onclick="window.engineResetBinds()">RESET</button></div><div class="set-hint">[\u2191/\u2193] select \xB7 [\u2190/\u2192] adjust \xB7 [ENTER] toggle / rebind \xB7 [ESC] cancels a rebind \xB7 saved automatically \xB7 gamepad layout is fixed</div>`;
   }
   window.engineSetSetting = function(key, value, fromSlider = false) {
     setSetting(key, value);
@@ -5608,7 +7323,23 @@
       if (val) val.innerText = `${Math.round(getSettings()[key] * 100)}%`;
     } else renderSettings();
   };
+  window.engineStartRebind = function(action) {
+    rebindingAction = action;
+    renderSettings();
+  };
+  window.engineResetBinds = function() {
+    resetBinds();
+    rebindingAction = null;
+    renderSettings();
+    renderInstructions();
+  };
   function adjustFocusedSetting(dir) {
+    if (settingsFocus >= SETTINGS_ROWS.length) {
+      const j = settingsFocus - SETTINGS_ROWS.length;
+      if (j < BIND_ACTIONS.length) window.engineStartRebind(BIND_ACTIONS[j]);
+      else window.engineResetBinds();
+      return;
+    }
     const row = SETTINGS_ROWS[settingsFocus];
     const s = getSettings();
     if (row.type === "range") setSetting(row.key, Math.round((s[row.key] + dir * 0.05) * 100) / 100);
@@ -5626,16 +7357,18 @@
       return;
     }
     if (pauseTab === "settings") {
+      const n = settingsRowCount();
+      const onRange = settingsFocus < SETTINGS_ROWS.length && SETTINGS_ROWS[settingsFocus].type === "range";
       if (code === "ArrowUp") {
-        settingsFocus = (settingsFocus - 1 + SETTINGS_ROWS.length) % SETTINGS_ROWS.length;
+        settingsFocus = (settingsFocus - 1 + n) % n;
         renderSettings();
       } else if (code === "ArrowDown") {
-        settingsFocus = (settingsFocus + 1) % SETTINGS_ROWS.length;
+        settingsFocus = (settingsFocus + 1) % n;
         renderSettings();
-      } else if (code === "ArrowLeft") adjustFocusedSetting(-1);
-      else if (code === "ArrowRight") adjustFocusedSetting(1);
+      } else if (code === "ArrowLeft" && onRange) adjustFocusedSetting(-1);
+      else if (code === "ArrowRight" && onRange) adjustFocusedSetting(1);
       else if (code === "Enter" || code === "Space") {
-        if (SETTINGS_ROWS[settingsFocus].type === "toggle") adjustFocusedSetting(1);
+        if (!onRange) adjustFocusedSetting(1);
       }
       return;
     }
@@ -5691,10 +7424,13 @@
       let aU = gp.axes[1] < -0.5 || gp.axes[3] < -0.5, aD = gp.axes[1] > 0.5 || gp.axes[3] > 0.5;
       gameState.pad.up = jp(12) || aU && !gameState.lastGamepadState.axes[0];
       gameState.pad.down = jp(13) || aD && !gameState.lastGamepadState.axes[1];
-      gameState.pad.left = jp(14) || jp(6);
-      gameState.pad.guard = p(4) || p(5) || p(7);
+      gameState.pad.ghost = jp(4) || jp(6);
+      gameState.pad.guard = p(5) || p(7);
+      gameState.pad.leftHeld = p(14) || gp.axes[0] < -0.5;
+      gameState.pad.rightHeld = p(15) || gp.axes[0] > 0.5;
       gameState.pad.jab = jp(2);
       gameState.pad.cross = jp(3);
+      gameState.pad.crossHeld = p(3);
       gameState.pad.hook = jp(1);
       gameState.pad.instinct = jp(0);
       gameState.pad.pause = jp(9) || jp(16);
@@ -5738,6 +7474,16 @@
   window.dismissTutorial = window.engineDismissTutorial = dismissTutorial;
   window.returnToMenu = window.engineReturnToMenu = returnToMenu;
   window.addEventListener("keydown", (e) => {
+    if (rebindingAction) {
+      if (e.preventDefault) e.preventDefault();
+      if (e.code !== "Escape") {
+        if (!rebind(rebindingAction, e.code)) showToast("THAT KEY IS RESERVED", "#ff8800");
+      }
+      rebindingAction = null;
+      renderSettings();
+      renderInstructions();
+      return;
+    }
     gameState.keys[e.code] = true;
     if (gameState.screen === "records") {
       if (e.code === "Escape" || e.code === "KeyH" || e.code === "Enter") toggleRecords();
@@ -5757,7 +7503,7 @@
       return;
     }
     if (e.code === "KeyP" || e.code === "Escape" && gameState.screen !== "howto" && gameState.screen !== "tutorial") {
-      if (gameState.screen === "playing" && !gameState.finisher) openPause();
+      if (gameState.screen === "playing" && !gameState.finisher && !gameState.knockdown) openPause();
       else if (gameState.screen === "paused") closePause();
       return;
     }
@@ -5823,6 +7569,17 @@
       if (typeof updateHUD === "function") updateHUD();
       return;
     }
+    if (gameState.knockdown) {
+      if (gameState.shake > 0) gameState.shake *= 0.9;
+      updateParticlesAndTrails();
+      const r = updateKnockdown();
+      if (r === "out") {
+        endRun();
+        return;
+      }
+      if (typeof updateHUD === "function") updateHUD();
+      return;
+    }
     if (gameState.hitstop > 0) {
       if (!hitStopEnabled()) gameState.hitstop = 0;
       else {
@@ -5854,19 +7611,29 @@
     let banner = document.getElementById("instinct-ready-banner");
     if (gameState.instinctMeter >= 100 && !gameState.isInstinct) {
       if (!gameState.seenTutorials.instinct) {
-        triggerTutorial("instinct", "INSTINCT MAXED", 'Your meter is full!<br><br>Instinct is gained by landing consecutive hits and executing Perfect Slips.<br><br>Press <span class="text-cyan-400 font-bold">[SPACE] / [A]</span> to unleash double knockback and massive hitstop.');
+        triggerTutorial("instinct", "INSTINCT MAXED", `Your meter is full!<br><br>Press <span class="text-cyan-400 font-bold">[${keyName("instinct")}] / pad A</span> to unleash Instinct &mdash; double knockback and massive hitstop.<br><br><b>Or hold it:</b> land a <span class="text-white font-bold">Perfect Slip</span> on a full meter and you drop into <span class="text-white font-bold">THE ZONE</span> &mdash; the world slows down around you.`);
         return;
       } else if (banner) banner.style.display = "block";
     } else if (banner) banner.style.display = "none";
+    let worldTick = true;
+    if (gameState.zoneTimer > 0) {
+      gameState.zoneTimer--;
+      worldTick = gameState.zoneTimer % CONSTANTS.ZONE.enemyTick === 0;
+      if (gameState.zoneTimer === 0) spawnFloatingText(gameState.player.x, gameState.player.y - 140, "ZONE OUT", "#9ca3af");
+    }
     updatePlayer();
-    updateEnemies();
-    if (typeof updateBosses === "function") updateBosses();
+    if (worldTick) {
+      updateEnemies();
+      if (typeof updateBosses === "function") updateBosses();
+    }
     if (gameState.finisher) {
       if (typeof updateHUD === "function") updateHUD();
       return;
     }
-    maybeScheduleHazard();
-    updateHazards();
+    if (worldTick) {
+      maybeScheduleHazard();
+      updateHazards();
+    }
     maybeGrantFirstEvolution();
     while (gameState.exp >= gameState.expNeeded) {
       gameState.exp -= gameState.expNeeded;
@@ -5886,13 +7653,18 @@
       }
     }
     if (gameState.health <= 0) {
+      if (canBeKnockedDown()) {
+        startKnockdown();
+        if (typeof updateHUD === "function") updateHUD();
+        return;
+      }
       endRun();
       return;
     }
     gameState.health = Math.round(gameState.health);
     if (typeof updateHUD === "function") updateHUD();
     if (!gameState.seenTutorials.footwork_tip && gameState.currentStage === 1 && gameState.enemies.length === 0 && (!gameState.tutorialEnabled || gameState.spawnTotal >= 5)) {
-      triggerTutorial("footwork_tip", "FOOTWORK", 'You are not locked to one spot.<br><br>Hold <span class="text-cyan-400 font-bold">[RIGHT]</span> to press forward &mdash; you reach enemies sooner and can interrupt a windup before it becomes a threat, but more of them converge on you at once.<br><br>Hold <span class="text-cyan-400 font-bold">[LEFT]</span> past the initial Ghost Step burst to give ground &mdash; buys you time, at the cost of tempo.<br><br><i>Let go of both and you drift back to a neutral stance on your own.</i>');
+      triggerTutorial("footwork_tip", "FOOTWORK", `You are not locked to one spot.<br><br>Hold <span class="text-cyan-400 font-bold">[${keyName("right")}]</span> to press forward &mdash; reach enemies sooner and drive them into <b>their</b> ropes.<br><br>Hold <span class="text-cyan-400 font-bold">[${keyName("left")}]</span> to give ground &mdash; but your own ropes are right behind you. Pinned on them you are <span class="text-pink-500 font-bold">CORNERED</span>: slip windows tighten.<br><br>Ghost Step has its own button: <span class="text-cyan-400 font-bold">[${keyName("ghost")}]</span>.`);
       return;
     }
     if (gameState.pendingUpgrades > 0 && gameState.enemies.length === 0 && !gameState.bossActive && !gameState.stageClearing && gameState.bossIntroTimer <= 0 && !tutorialRunning()) {
@@ -5959,6 +7731,7 @@
         nb.style.display = runResult.isBest ? "block" : "none";
       }
     }
+    renderInstructions();
     if (HUD.screens.gameover) HUD.screens.gameover.style.display = "flex";
   }
   var SAVE_KEY = "neon_strike_best_v1";
@@ -6127,14 +7900,26 @@
   }
   window.addEventListener("resize", fitViewport);
   var lastCine = "";
+  var lastZone = false;
   function syncCinematicClass() {
-    const mode = gameState.screen === "vignette" ? "vignette" : gameState.finisher ? "finisher" : "";
+    const mode = gameState.screen === "vignette" ? "vignette" : gameState.finisher ? "finisher" : gameState.knockdown ? "knockdown" : gameState.bossIntroTimer > 0 && gameState.bossPoster && gameState.screen === "playing" ? "poster" : "";
+    const zone = gameState.zoneTimer > 0 && gameState.screen === "playing";
+    if (zone !== lastZone) {
+      lastZone = zone;
+      try {
+        document.body.classList.toggle("cine-zone", zone);
+        document.body.classList.toggle("cine-zone-soft", zone && getSettings().flashIntensity < 0.5);
+      } catch (e) {
+      }
+    }
     if (mode === lastCine) return;
     lastCine = mode;
     try {
       const b = document.body;
       b.classList.toggle("cine-vignette", mode === "vignette");
       b.classList.toggle("cine-finisher", mode === "finisher");
+      b.classList.toggle("cine-knockdown", mode === "knockdown");
+      b.classList.toggle("cine-poster", mode === "poster");
     } catch (e) {
     }
   }
@@ -6155,6 +7940,7 @@
       canvas2.height = gameState.height;
     }
     applySettingsSideEffects();
+    renderInstructions();
     resetGame();
     initAtmosphere();
     fitViewport();
@@ -6180,6 +7966,58 @@
         draft(n = 1) {
           gameState.pendingUpgrades += n;
           triggerUpgradeDraft();
+        },
+        // Item-11 onboarding mockup: draws in-world teaching callouts over the
+        // live scene. null clears it. Never set outside ?debug.
+        mockOnboarding(scene) {
+          gameState.onboardingMock = scene || null;
+          draw();
+        },
+        // Save the current frame (canvas + a painted stand-in for the DOM HUD
+        // clusters) to a local receiver — used to export mockup images.
+        capture(name, url = "http://127.0.0.1:8124/") {
+          draw();
+          const c = document.createElement("canvas");
+          c.width = gameState.width;
+          c.height = gameState.height;
+          const x = c.getContext("2d");
+          if (gameState.zoneTimer > 0) x.filter = "invert(1)";
+          x.drawImage(canvas2, 0, 0);
+          x.filter = "none";
+          const hud = (px, py, w, h) => {
+            x.fillStyle = "rgba(0,0,0,0.5)";
+            x.fillRect(px, py, w, h);
+            x.strokeStyle = "rgba(255,255,255,0.08)";
+            x.strokeRect(px, py, w, h);
+          };
+          hud(16, 14, 290, 74);
+          hud(gameState.width - 266, 14, 250, 84);
+          x.fillStyle = "#fff";
+          x.font = "900 italic 24px Orbitron";
+          x.fillText(String(Math.max(0, Math.round(gameState.health))), 26, 44);
+          x.fillStyle = "rgba(255,255,255,0.08)";
+          x.fillRect(96, 30, 200, 10);
+          x.fillStyle = "#ff3355";
+          x.fillRect(96, 30, 200 * Math.max(0, gameState.health) / gameState.maxHealth, 10);
+          x.fillStyle = "rgba(255,255,255,0.06)";
+          x.fillRect(26, 54, 270, 8);
+          const ig = x.createLinearGradient(26, 0, 296, 0);
+          ig.addColorStop(0, "#ff00ff");
+          ig.addColorStop(1, "#00ffff");
+          x.fillStyle = ig;
+          x.fillRect(26, 54, 270 * gameState.instinctMeter / 100, 8);
+          x.font = "900 9px Orbitron";
+          x.fillStyle = "#6b7280";
+          x.fillText("SPD " + gameState.orbCounts.speed + "   PWR " + gameState.orbCounts.power + "   TEC " + gameState.orbCounts.technique, 26, 78);
+          x.textAlign = "right";
+          x.fillStyle = "#fde68a";
+          x.font = "900 italic 28px Orbitron";
+          x.fillText(Math.round(gameState.score).toLocaleString(), gameState.width - 26, 46);
+          x.fillStyle = "#22d3ee";
+          x.font = "900 italic 20px Orbitron";
+          x.fillText(String(gameState.combo) + " COMBO", gameState.width - 26, 72);
+          x.textAlign = "left";
+          return fetch(url, { method: "POST", body: name + "|" + c.toDataURL("image/png") }).then((r) => r.ok).catch(() => false);
         },
         // Advance the real frame loop n times synchronously (works even when the
         // tab is hidden and requestAnimationFrame is paused).

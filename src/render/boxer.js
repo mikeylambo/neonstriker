@@ -1,10 +1,68 @@
 import { gameState as st } from '../state.js';
 
+// v17 SILHOUETTES: every archetype reads by SHAPE, not colour alone (colourblind-
+// safe): head shape + one accessory each. Bosses get their own.
+//   grunt/striker: round head      shield/enforcer: helmet + slab shield
+//   bruiser: wide block head + yoke assassin/phantom: hood + trailing scarf
+//   zoner/monk: halo + arm cannon  live wire: square jaw + lightning bolts
+//   negative: hollow spiked crown (inverted mirror of the Striker)
+export function silhouetteOf(entity, isPlayer) {
+    if (entity.shape) return entity.shape;
+    if (isPlayer) return 'striker';
+    if (entity.controller === 'neon_enforcer') return 'shield';
+    if (entity.controller === 'phantom_boxer') return 'assassin';
+    if (entity.controller === 'static_monk') return 'zoner';
+    if (entity.controller === 'live_wire') return 'live_wire';
+    if (entity.controller === 'negative') return 'negative';
+    return entity.type || 'grunt';
+}
+
+function drawHead(ctx, shape, x, y, r, d, fill, stroke) {
+    ctx.save();
+    ctx.fillStyle = fill; ctx.strokeStyle = stroke;
+    ctx.beginPath();
+    if (shape === 'shield') {                       // helmet with a visor slit
+        const w = r * 2, h = r * 2.1;
+        ctx.roundRect ? ctx.roundRect(x - w / 2, y - h / 2, w, h, r * 0.45) : ctx.rect(x - w / 2, y - h / 2, w, h);
+        ctx.fill();
+        ctx.fillStyle = '#000'; ctx.fillRect(x - r * 0.1 * d - (d > 0 ? 0 : r * 0.8), y - r * 0.25, r * 0.9, r * 0.35);
+    } else if (shape === 'bruiser' || shape === 'live_wire') { // block head / square jaw
+        const w = r * 2.5, h = r * 1.9;
+        ctx.moveTo(x - w / 2, y - h / 2); ctx.lineTo(x + w / 2, y - h / 2);
+        ctx.lineTo(x + w / 2 * 0.85, y + h / 2); ctx.lineTo(x - w / 2 * 0.85, y + h / 2); ctx.closePath(); ctx.fill();
+        if (shape === 'live_wire') {               // two lightning bolts off the crown
+            ctx.strokeStyle = '#fff36b'; ctx.lineWidth = 3;
+            for (const sx of [-0.55, 0.55]) {
+                const bx = x + sx * w * 0.5;
+                ctx.beginPath(); ctx.moveTo(bx, y - h / 2); ctx.lineTo(bx - 5, y - h / 2 - 9); ctx.lineTo(bx + 4, y - h / 2 - 12); ctx.lineTo(bx - 2, y - h / 2 - 22); ctx.stroke();
+            }
+        }
+    } else if (shape === 'assassin') {              // hood: a point swept backwards
+        ctx.arc(x, y + 2, r * 0.95, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(x + r * 0.9 * d, y - r * 0.6); ctx.lineTo(x - r * 2.1 * d, y - r * 1.6); ctx.lineTo(x - r * 0.6 * d, y + r * 0.6); ctx.closePath(); ctx.fill();
+    } else if (shape === 'zoner') {                 // round head + floating halo
+        ctx.arc(x, y, r * 0.9, 0, Math.PI * 2); ctx.fill();
+        ctx.lineWidth = 3; ctx.beginPath(); ctx.ellipse(x, y - r * 1.7, r * 1.3, r * 0.4, 0, 0, Math.PI * 2); ctx.stroke();
+    } else if (shape === 'negative') {              // hollow spiked crown
+        const n = 6;
+        for (let i = 0; i <= n * 2; i++) {
+            const a = -Math.PI / 2 + (i * Math.PI) / n, rr = i % 2 === 0 ? r * 1.55 : r * 0.9;
+            const px = x + Math.cos(a) * rr, py = y + Math.sin(a) * rr;
+            if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        }
+        ctx.closePath(); ctx.fillStyle = '#000'; ctx.fill(); ctx.lineWidth = 3; ctx.stroke();
+    } else {
+        ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+}
+
 export function drawBoxer(ctx, entity, isPlayer, opacity = 1, isTrail = false) {
     const dl = (x1, y1, x2, y2) => { ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); };
     const dc = (x, y, r, f, s) => { ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); if(f) ctx.fill(); if(s) ctx.stroke(); };
 
-    const d = isPlayer ? 1 : -1; 
+    const d = entity.facing !== undefined ? entity.facing : (isPlayer ? 1 : -1); 
+    const shape = silhouetteOf(entity, isPlayer);
     const bS = entity.isBoss ? 1.5 : (entity.type === 'bruiser' ? 1.3 : 1);
     let t = Date.now(), bn = 0, br = 0;
     
@@ -70,6 +128,7 @@ export function drawBoxer(ctx, entity, isPlayer, opacity = 1, isTrail = false) {
         let pT = entity.type === 'zoner' ? 10 : 8;
         if (entity.attackCooldown > 0 && entity.attackCooldown <= pT) dC = '#ffffff';
     }
+    if (entity.overrideColor) dC = entity.overrideColor; // afterimages
     
     ctx.globalAlpha = opacity; ctx.strokeStyle = dC; ctx.lineWidth = (entity.type === 'bruiser' ? 12 : 8) * bS; 
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
@@ -82,7 +141,18 @@ export function drawBoxer(ctx, entity, isPlayer, opacity = 1, isTrail = false) {
     dl(rX + lX, hY, rX + lg1X, rY); dl(rX + lX, hY, rX + lg2X, rY); 
     let sX = rX + (entity.type === 'bruiser' ? 10 * d : 5 * d) + lX; 
     dl(rX + lX, hY, sX, nY); 
-    ctx.fillStyle = entity.stun > 0 ? '#fff' : dC; dc(sX + 3 * d, hdY, hS, true, false);
+    // v17 silhouettes: shape-specific accessories, then the head.
+    if (shape === 'bruiser' || shape === 'live_wire') { ctx.save(); ctx.lineWidth = 6 * bS; dl(sX - 22 * d, nY + 4, sX + 18 * d, nY + 2); ctx.restore(); } // yoke
+    if (shape === 'assassin') {                    // trailing scarf
+        ctx.save(); ctx.lineWidth = 3; const wv = Math.sin(t * 0.012 + entity.x) * 6;
+        ctx.beginPath(); ctx.moveTo(sX, nY - 4); ctx.quadraticCurveTo(sX - 26 * d, nY - 8 + wv, sX - 48 * d, nY + 4 - wv); ctx.stroke(); ctx.restore();
+    }
+    if (shape === 'negative') {                    // jagged shoulder spikes
+        ctx.save(); ctx.lineWidth = 3; ctx.beginPath();
+        ctx.moveTo(sX - 12 * d, nY); ctx.lineTo(sX - 20 * d, nY - 18); ctx.lineTo(sX - 6 * d, nY - 4);
+        ctx.moveTo(sX + 10 * d, nY); ctx.lineTo(sX + 18 * d, nY - 16); ctx.lineTo(sX + 4 * d, nY - 4); ctx.stroke(); ctx.restore();
+    }
+    drawHead(ctx, shape, sX + 3 * d, hdY, hS, d, entity.stun > 0 ? '#fff' : dC, dC);
 
     // DANGER RINGS & CYBER EYE
     if (isPlayer && !isTrail) {
@@ -144,28 +214,44 @@ export function drawBoxer(ctx, entity, isPlayer, opacity = 1, isTrail = false) {
         ldX = sX - 10 * d; ldY = nY - 30; rrX = sX - 20 * d; rrY = nY - 20;
     }
 
+    // v17 PUNCH TRAIL: the build colour streaks BEHIND the striking fist (the
+    // gloves and body keep the Striker's own colour — silhouette stays clean).
+    if (isPlayer && !isTrail && entity.trailColor && entity.state === 'punching') {
+        const fx = entity.punchType === 'cross' || entity.punchType === 'jab2' ? rrX : ldX;
+        const fy = entity.punchType === 'cross' || entity.punchType === 'jab2' ? rrY : ldY;
+        const heat = entity.trailHeat === undefined ? 1 : entity.trailHeat;
+        const g = ctx.createLinearGradient(sX - 30 * d, nY, fx, fy);
+        g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, entity.trailColor);
+        ctx.save(); ctx.globalAlpha = opacity * 0.85 * heat; ctx.strokeStyle = g; ctx.lineWidth = 16 * bS; ctx.lineCap = 'round';
+        ctx.shadowColor = entity.trailColor; ctx.shadowBlur = 18;
+        dl(sX - 30 * d, nY + 2, fx - 6 * d, fy);
+        ctx.restore();
+        ctx.strokeStyle = dC;
+        entity.glovePositions = [[ldX, ldY], [rrX, rrY]];
+    }
+    if (shape === 'shield' && entity.stun <= 0 && !entity.recoverTimer) {  // slab shield held in front
+        ctx.save(); ctx.globalAlpha = opacity * 0.35; ctx.fillStyle = dC;
+        const sx0 = sX + 24 * d - (d > 0 ? 0 : 12 * bS);
+        ctx.fillRect(sx0, nY - 22 * bS, 12 * bS, (hY - nY) + 40 * bS);
+        ctx.globalAlpha = opacity; ctx.lineWidth = 2; ctx.strokeRect(sx0, nY - 22 * bS, 12 * bS, (hY - nY) + 40 * bS);
+        ctx.restore();
+    }
     ctx.lineWidth = 4 * bS; dl(sX, nY, rrX, rrY); ctx.fillStyle = dC; dc(rrX, rrY, gS, true, false); 
     ctx.beginPath(); ctx.moveTo(sX, nY); 
     if (isPlayer && entity.punchType === 'hook' && entity.state === 'punching') ctx.quadraticCurveTo(sX + 30 * d, nY - 20, ldX, ldY); else ctx.lineTo(ldX, ldY);
     ctx.stroke(); ctx.fillStyle = dC; dc(ldX, ldY, gS, true, false);
-    
-    // v16 IDENTITY MOMENT: gloves ignite in the upgrade's tree colour.
-    if (entity.gloveGlow) {
-        const heat = entity.gloveHeat === undefined ? 1 : entity.gloveHeat;
-        const fl = 1 + Math.sin(t * 0.04) * 0.12;
-        ctx.save();
-        ctx.shadowColor = entity.gloveGlow; ctx.shadowBlur = 28 * heat;
-        ctx.fillStyle = entity.gloveGlow;
-        ctx.globalAlpha = opacity * heat;
-        dc(ldX, ldY, (gS + 3) * fl, true, false); dc(rrX, rrY, (gS + 3) * fl, true, false);
-        ctx.globalAlpha = opacity * heat * 0.45;
-        dc(ldX, ldY, (gS + 9) * fl, true, false); dc(rrX, rrY, (gS + 9) * fl, true, false);
-        ctx.fillStyle = '#ffffff'; ctx.globalAlpha = opacity * heat * 0.9;
-        dc(ldX, ldY, gS * 0.45, true, false); dc(rrX, rrY, gS * 0.45, true, false);
-        ctx.restore();
-        entity.glovePositions = [[ldX, ldY], [rrX, rrY]];
+    if (shape === 'zoner') {                        // arm cannon on the lead hand
+        ctx.save(); ctx.lineWidth = 9 * bS; ctx.lineCap = 'butt'; dl(ldX - 6 * d, ldY, ldX + 20 * d, ldY); ctx.fillStyle = '#fff'; dc(ldX + 21 * d, ldY, 3, true, false); ctx.restore();
     }
-
+    if (shape === 'live_wire') {                    // lightning coiled on the forearms
+        ctx.save(); ctx.strokeStyle = '#fff36b'; ctx.lineWidth = 2;
+        for (const [ax, ay] of [[ldX, ldY], [rrX, rrY]]) {
+            ctx.beginPath(); ctx.moveTo(sX, nY); const mx = (sX + ax) / 2, my = (nY + ay) / 2;
+            ctx.lineTo(mx - 5, my - 6); ctx.lineTo(mx + 5, my + 4); ctx.lineTo(ax, ay); ctx.stroke();
+        }
+        ctx.restore();
+    }
+    
     if (isPlayer && !isTrail && isCounterReady) {
         let cP = Math.sin(Date.now() * 0.02) * 2;
         ctx.save(); ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2;

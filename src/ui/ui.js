@@ -44,7 +44,7 @@ export function updateHUD() {
     const key = `${cm}|${st.wagerMult}`;
     if (st.lastHUD.wager !== key) {
         const m = $('score-mult');
-        if (m) { m.innerText = `×${cm.toFixed(2)} COMBO`; m.classList.toggle('hot', cm > 1); }
+        if (m) { m.innerText = `×${cm.toFixed(2)}`; m.classList.toggle('hot', cm > 1); }
         const w = $('wager-badge');
         if (w) { w.innerText = st.wagerMult > 1 ? `×${st.wagerMult} WAGER` : ''; w.style.display = st.wagerMult > 1 ? 'inline-block' : 'none'; }
         st.lastHUD.wager = key;
@@ -79,12 +79,17 @@ export function updateHUD() {
     if (st.lastHUD.instinct !== roundInstinct) { 
         HUD.instinctBar.style.width = roundInstinct + '%'; st.lastHUD.instinct = roundInstinct; 
     }
-    let displayHP = Math.max(0, st.health);
+    let displayHP = Math.max(0, Math.round(st.health));
     if (st.lastHUD.hp !== displayHP) { 
-        HUD.health.innerText = `HP: ${displayHP}`; st.lastHUD.hp = displayHP; 
+        HUD.health.innerText = `${displayHP}`; st.lastHUD.hp = displayHP; 
+        const bar = $('hp-bar');
+        if (bar) { const pct = Math.max(0, Math.min(100, displayHP / (st.maxHealth || 100) * 100)); bar.style.width = pct + '%'; bar.classList.toggle('low', pct <= 25); }
     }
     if (st.player && st.lastHUD.slipBuff !== st.player.slipBuff) { 
-        HUD.counterStatus.innerText = st.player.slipBuff > 0 ? 'READY' : 'INACTIVE'; 
+        HUD.counterStatus.innerText = st.player.slipBuff > 0 ? (st.player.slipBuff > 1 ? 'READY ×2' : 'READY') : '—'; 
+        if (HUD.counterHud) HUD.counterHud.classList.toggle('ready', st.player.slipBuff > 0);
         st.lastHUD.slipBuff = st.player.slipBuff; 
     }
+    // v17 KO SHATTER: the orb landing pulses the EXP bar.
+    if (HUD.expBar) HUD.expBar.classList.toggle('pulse', (st.orbPulse || 0) > 6);
 }

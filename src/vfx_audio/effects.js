@@ -67,6 +67,7 @@ export function createShatter(x, y, color) {
 }
 
 export function updateParticlesAndTrails() {
+    updateKoFx();
     for (let i = st.particles.length - 1; i >= 0; i--) { 
         st.particles[i].x += st.particles[i].vx; 
         st.particles[i].y += st.particles[i].vy; 
@@ -103,4 +104,46 @@ export function updateParticlesAndTrails() {
             if (st.player.trails.length > 6) st.player.trails.shift();
         }
     }
+}
+// ==========================================
+// v17 KO SHATTER: a KO'd enemy breaks into neon light shards in its own colour;
+// after a beat the shards pull together into an orb pickup that streams into the
+// Striker (EXP is already banked on the kill — the orb is the readable payoff).
+// ==========================================
+export function createKoShatter(en) {
+    if (!st.koFx) st.koFx = [];
+    if (st.koFx.length > 14) st.koFx.shift();
+    const cx = en.x + (en.w || 50) / 2, cy = en.y - (en.h || 110) * 0.55;
+    const shards = [];
+    const n = en.isBoss ? 28 : 14;
+    for (let i = 0; i < n; i++) {
+        const a = Math.random() * Math.PI * 2, sp = 3 + Math.random() * 7;
+        shards.push({ x: cx + (Math.random() - 0.5) * 30, y: cy + (Math.random() - 0.5) * 70, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 2, rot: Math.random() * 6, rv: (Math.random() - 0.5) * 0.4, size: 4 + Math.random() * 7 });
+    }
+    st.koFx.push({ shards, color: en.color || '#ff0055', cx, cy, t: 0, orb: null, big: !!en.isBoss });
+    playSound('shatter');
+}
+
+export function updateKoFx() {
+    if (!st.koFx || !st.koFx.length) return;
+    const p = st.player;
+    for (const fx of st.koFx) {
+        fx.t++;
+        if (fx.t < 14) {
+            fx.shards.forEach(s => { s.x += s.vx; s.y += s.vy; s.vx *= 0.9; s.vy *= 0.9; s.rot += s.rv; });
+        } else if (!fx.orb) {
+            // shards converge on the collection point...
+            fx.shards.forEach(s => { s.x += (fx.cx - s.x) * 0.22; s.y += (fx.cy - s.y) * 0.22; s.rot += s.rv * 2; });
+            if (fx.t >= 26) fx.orb = { x: fx.cx, y: fx.cy, vx: 0, vy: -3, life: 1 };
+        } else {
+            // ...into an orb that homes onto the Striker
+            const o = fx.orb, tx = p ? p.x + 25 : 180, ty = p ? p.y - 70 : 300;
+            const dx = tx - o.x, dy = ty - o.y, d = Math.hypot(dx, dy) || 1;
+            o.vx = o.vx * 0.82 + (dx / d) * 2.6; o.vy = o.vy * 0.82 + (dy / d) * 2.6;
+            o.x += o.vx; o.y += o.vy;
+            if (d < 26 || fx.t > 110) { fx.done = true; st.orbPulse = 12; playSound('orb'); }
+        }
+    }
+    st.koFx = st.koFx.filter(fx => !fx.done);
+    if (st.orbPulse > 0) st.orbPulse--;
 }
