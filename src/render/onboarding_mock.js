@@ -123,10 +123,8 @@ export function drawOnboardingMock(ctx) {
         ctx.fillStyle = '#9ca3af'; ctx.font = 'bold 9px Orbitron'; ctx.textAlign = 'center';
         ctx.fillText('HOLD', p.x + 25, p.y + 38);
         const low = st.height * CONSTANTS.LANE_Y[2] + 20;
-        callout(ctx, 90, low, CONSTANTS.ROPES.playerPostX, low - 20, '#ff5a3c', 'YOUR ROPES',
-            ['Pinned on them you’re CORNERED:', 'slip windows tighten.'], []);
-        callout(ctx, 650, low, CONSTANTS.ROPES.enemyPostX, low - 20, '#ffffff', 'THEIR ROPES',
-            ['Drive them here and counters', 'ROPE-BOUNCE for bonus damage.'], []);
+        callout(ctx, 90, low, p.x + 25, p.y + 50, '#22d3ee', 'FOOTWORK',
+            ['Press forward to meet them early,', 'give ground to buy a beat.'], []);
         keycap(ctx, p.x + 25, p.y - 175, L(K.ghost), '#c084fc', 0);
         ctx.fillStyle = '#c084fc'; ctx.font = '900 9px Orbitron'; ctx.fillText('GHOST STEP', p.x + 25, p.y - 196);
     }

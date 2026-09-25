@@ -149,36 +149,39 @@ eq('arc1 theme line: never again after that', apply.openingSubtitle(), CONSTANTS
     ok('arc1 theme line: no stage card repeats it', !repeated);
 }
 
-// ======================= 5. VIGNETTE =======================
-eq('vignette: first view is ~1.5s', vig.vignetteDuration('x', false), 90);
-eq('vignette: repeat view is 0.6s', vig.vignetteDuration('x', true), 36);
+// ======================= 5. VIGNETTE (v18: holds for input, lists stacked picks) =======================
+eq('vignette: first view builds for 70 frames', vig.vignetteDuration('x', false), 70);
+eq('vignette: repeat view builds faster', vig.vignetteDuration('x', true), 36);
 {
     localStorage.clear();
     let done = 0;
     const u = UPGRADE_POOL.orbs[0];
     vig.playUpgradeVignette(u, () => done++);
-    eq('vignette: first pick plays full length', st.vignette.duration, 90);
-    ok('vignette: skip is guarded on its first frames (pick key can\'t skip it)', vig.skipVignette() === false);
-    for (let i = 0; i < 8; i++) vig.updateVignette();
-    ok('vignette: skippable after the guard', vig.skipVignette() === true && done === 1 && st.vignette === null);
+    eq('vignette: first pick plays the full build', st.vignette.duration, 70);
+    ok('vignette: the pick key can\'t dismiss it on its first frames', vig.skipVignette() === false && st.vignette && !st.vignette.holding);
+    for (let i = 0; i < 20; i++) vig.updateVignette();
+    ok('vignette: a press during the build jumps to the finished screen (not out)', vig.skipVignette() === false && st.vignette.holding && done === 0);
+    ok('vignette: a second press continues', vig.skipVignette() === true && done === 1 && st.vignette === null);
     vig.playUpgradeVignette(u, () => done++);
-    eq('vignette: same upgrade again is the short cut', st.vignette.duration, 36);
-    for (let i = 0; i < 40; i++) vig.updateVignette();
-    ok('vignette: plays out and calls back', done === 2 && st.vignette === null);
+    for (let i = 0; i < 400; i++) vig.updateVignette();
+    ok('vignette: it never times out on its own — it waits for input', st.vignette && st.vignette.holding && done === 1);
+    vig.skipVignette();
+    const picks = [UPGRADE_POOL.orbs[0], UPGRADE_POOL.fusions[0], UPGRADE_POOL.masteries[0]];
+    vig.playUpgradeVignette(picks, () => done++);
+    ok('vignette: a stacked chain lists every pick', st.vignette.picks.length === 3);
+    eq('vignette: the rarest pick is the hero', st.vignette.upgrade.id, UPGRADE_POOL.fusions[0].id);
+    for (let i = 0; i < 20; i++) vig.updateVignette(); vig.skipVignette(); vig.skipVignette();
     eq('vignette: fusion wears its mixed colour', vig.upgradeColor(UPGRADE_POOL.fusions[0]), CONSTANTS.FUSION_COLORS[UPGRADE_POOL.fusions[0].id]);
     eq('vignette: mastery wears its tree colour', vig.upgradeColor(UPGRADE_POOL.masteries.find(m => m.tree === 'power')), CONSTANTS.TREES.power.color);
 }
 
-// ======================= 6. DRAFT TEASE =======================
+// ======================= 6. DRAFT: three cards, nothing locked (v18) =======================
 {
-    st.acquiredUpgradeIds = []; st.orbCounts = { speed: 1, power: 0, technique: 0 }; st.recentlyOffered = [];
-    st.currentDraftOptions = draft.buildDraft(st, UPGRADE_POOL);
-    const tease = draft.buildFusionTease(st, UPGRADE_POOL, 1);
-    ok('tease: Arc 1 drafts show one locked Fusion', !!tease && tease.locked === true && tease.kind === 'fusion');
-    ok('tease: it is the fusion the build is closest to', tease && (tease.id === 'fuse_dempsey_circuit' || tease.id === 'fuse_ghost_counter'), tease && tease.id);
-    ok('tease: requirement text shows progress (v17: fusions need rank 3)', tease && /SPD 1\/3/.test(tease.reqText), tease && tease.reqText);
-    ok('tease: never one of the pickable options', !st.currentDraftOptions.some(o => o.locked));
-    eq('tease: not shown after Arc 1', draft.buildFusionTease(st, UPGRADE_POOL, 2), null);
+    st.acquiredUpgradeIds = []; st.orbCounts = { speed: 2, power: 2, technique: 0 }; st.recentlyOffered = []; st.currentStage = 2;
+    const d = draft.buildDraft(st, UPGRADE_POOL);
+    eq('draft: exactly three options', d.length, 3);
+    ok('draft: no locked / teaser cards', !d.some(o => o.locked) && typeof draft.buildFusionTease === 'undefined');
+    ok('draft: nothing offered above the arc cap', !d.some(o => o.kind === 'rank' && o.rank > CONSTANTS.rankCap(1)));
 }
 
 // ======================= 7. FINISHER DATA =======================
@@ -387,6 +390,13 @@ function botKeys(tick, opts) {
     const dummy = st.enemies.find(e => e.tutorialType);
     if (dummy && dummy.tutorialType === 'guard' && dummy.x - p.x < 160) { keys.KeyW = true; return keys; }
     if (dummy && dummy.tutorialType === 'ghost_step' && p.dangerLevel >= 1 && tick % 2 === 0) { keys.ShiftLeft = true; return keys; }
+    const zap = st.enemies.find(e => e.type === 'zoner' && e.lane === p.lane && e.x > p.x - 20 && Math.abs(e.x - p.x) < 500 && e.attackCooldown > 0 && e.attackCooldown <= 12 && e.stun <= 0);
+    if (zap && p.slipCooldown <= 0) {
+        const safe = [p.lane - 1, p.lane + 1].filter(l => l >= 0 && l <= 2 && !st.enemies.some(e => e.type === 'zoner' && e.lane === l && e.attackCooldown <= 14));
+        if (safe.length && tick % 2 === 0) { keys[safe[0] < p.lane ? 'ArrowUp' : 'ArrowDown'] = true; return keys; }
+    }
+    const sweep = st.enemies.find(e => e.currentMove === 'sweep' && e.type === 'bruiser' && Math.abs(p.lane - e.lane) <= 1 && Math.abs(e.x - p.x) < 130 && e.attackCooldown > 0 && e.attackCooldown <= 8);
+    if (sweep) { if (tick % 2 === 0) keys.ShiftLeft = true; return keys; }
     if (p.dangerLevel >= 2 || (st.laneFlash[p.lane] > 0 && !st.enemies.some(e => e.lane === p.lane && e.x - p.x < 120 && e.isBoss && rules.isBossOpen(e)))) {
         if (p.slipCooldown <= 0 && tick % 2 === 0) {
             const opts2 = [p.lane - 1, p.lane + 1].filter(l => l >= 0 && l <= 2).sort((a, b) => laneThreat(a) - laneThreat(b));
@@ -418,6 +428,7 @@ function botRun(opts) {
         log.frames = tick;
         if (opts.god) { st.health = 100; }
         if (st.screen === 'tutorial') { main.__test && window.dismissTutorial(); }
+        if (T.posterWaiting()) T.confirmPoster();
         else if (st.screen === 'upgrading') {
             if (log.firstDraftFrame === null) log.firstDraftFrame = tick;
             window.engineApplyUpgradeState(st.currentDraftOptions[0].id);
@@ -439,7 +450,7 @@ function botRun(opts) {
             // let vignettes play out naturally
         }
         // one frame of the real loop
-        if (st.screen === 'vignette') vig.updateVignette();
+        if (st.screen === 'vignette') { vig.updateVignette(); if (st.vignette && st.vignette.holding) vig.skipVignette(); }
         T.update();
         if (st.currentStage !== stage) { log.stageFrames[stage] = tick - log.stageStart; log.stageStart = tick; stage = st.currentStage; log.transitionsSeen++; }
         if (CONSTANTS.getArcIndex(st.currentStage) >= 2) { log.reachedArc2 = true; if (opts.stopAtArc2 && !SequenceManager.active) break; }

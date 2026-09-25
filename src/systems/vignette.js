@@ -11,9 +11,9 @@ import { playSound } from '../vfx_audio/audio.js';
 import { hasSeenUpgrade, markUpgradeSeen, reducedMotion } from './settings.js';
 import { upgradeColorFor } from './colors.js';
 
-export const VIGNETTE_FULL_FRAMES = 90;   // 1.5s
-export const VIGNETTE_REPEAT_FRAMES = 36; // 0.6s
-const SKIP_GUARD_FRAMES = 6;              // the key that picked the card can't also skip
+export const VIGNETTE_FULL_FRAMES = 70;   // the full build-up (then it holds for input)
+export const VIGNETTE_REPEAT_FRAMES = 36; // every pick already seen before: a shorter build
+const SKIP_GUARD_FRAMES = 16;             // the key that picked the card can't also dismiss it
 
 // v17: colours come from the tree / fusion-mix table (systems/colors.js).
 export function upgradeColor(u) { return upgradeColorFor(u); }
@@ -28,21 +28,49 @@ export function upgradeRarity(u) {
     return 'orb';
 }
 
+// v18 TERMINOLOGY — one vocabulary everywhere the player reads it:
+//   EVOLUTION      every pick you make when the EXP bar fills
+//   RANK n         a step up a tree (Speed / Power / Technique), ranks 1-5
+//   SIGNATURE MOVE rank 3 of a tree: it changes what an action does
+//   APEX           rank 5 of a tree
+//   MASTERY / FUSION / PERFECTED FUSION / OVERCLOCK — the other kinds
+const TREE_NAMES = { speed: 'SPEED', power: 'POWER', technique: 'TECHNIQUE' };
+export function evolutionLabel(u, rarity = upgradeRarity(u)) {
+    if (!u) return '';
+    const tree = TREE_NAMES[u.tree];
+    if (u.kind === 'rank') return `${tree || ''} · RANK ${u.rank}${rarity === 'verb' ? ' · SIGNATURE MOVE' : (rarity === 'apex' ? ' · APEX' : '')}`;
+    if (u.kind === 'mastery') return `${tree ? tree + ' ' : ''}MASTERY`;
+    if (u.kind === 'fusion') {
+        const pair = (u.trees || []).map(t => TREE_NAMES[t] || t).join(' + ');
+        return `${u.evolved ? 'PERFECTED FUSION' : 'FUSION'}${pair ? ' · ' + pair : ''}`;
+    }
+    return 'OVERCLOCK';
+}
+
 const STING = { evolved: 'sting_fusion', fusion: 'sting_fusion', apex: 'sting_fusion', verb: 'sting_mastery', mastery: 'sting_mastery', overclock: 'sting_overclock', orb: 'sting_orb' };
 
-// PURE: how long this upgrade's vignette runs.
+// PURE: how long the build-up animation runs before the screen holds for input.
 export function vignetteDuration(upgradeId, seenBefore, reduced = false) {
     return (seenBefore || reduced) ? VIGNETTE_REPEAT_FRAMES : VIGNETTE_FULL_FRAMES;
 }
 
-export function playUpgradeVignette(upgrade, onDone) {
-    const seen = hasSeenUpgrade(upgrade.id);
-    markUpgradeSeen(upgrade.id);
-    const rarity = upgradeRarity(upgrade);
+const RARITY_ORDER = ['evolved', 'fusion', 'apex', 'verb', 'mastery', 'orb', 'overclock'];
+
+// v18: takes ONE upgrade or a LIST (a stacked chain of evolutions). The rarest
+// pick is the hero (pose + colour); every pick is listed. The screen plays its
+// build-up, then HOLDS until the player presses something (playtest: it used to
+// time out on its own, sometimes before you'd read it).
+export function playUpgradeVignette(upgradeOrList, onDone) {
+    const picks = Array.isArray(upgradeOrList) ? upgradeOrList.filter(Boolean) : [upgradeOrList];
+    if (!picks.length) { if (onDone) onDone(); return; }
+    const allSeen = picks.every(u => hasSeenUpgrade(u.id));
+    picks.forEach(u => markUpgradeSeen(u.id));
+    const hero = picks.slice().sort((a, b) => RARITY_ORDER.indexOf(upgradeRarity(a)) - RARITY_ORDER.indexOf(upgradeRarity(b)))[0];
+    const rarity = upgradeRarity(hero);
     st.vignette = {
-        upgrade, rarity, color: upgradeColor(upgrade), repeat: seen,
-        timer: 0, duration: vignetteDuration(upgrade.id, seen, reducedMotion()),
-        onDone, sparks: []
+        upgrade: hero, picks, rarity, color: upgradeColor(hero), repeat: allSeen,
+        timer: 0, duration: vignetteDuration(hero.id, allSeen, reducedMotion()),
+        holding: false, onDone, sparks: []
     };
     st.screen = 'vignette';
     playSound(STING[rarity] || 'sting_orb');
@@ -58,12 +86,15 @@ export function updateVignette() {
     }
     v.sparks.forEach(s => { s.ox += s.vx; s.oy += s.vy; s.life -= 0.05; });
     v.sparks = v.sparks.filter(s => s.life > 0);
-    if (v.timer >= v.duration) endVignette();
+    if (v.timer >= v.duration) { v.timer = v.duration; v.holding = true; } // wait for the player
 }
 
+// First press during the build-up jumps to the finished screen; a press once it
+// is holding continues the fight.
 export function skipVignette() {
     const v = st.vignette;
     if (!v || v.timer < SKIP_GUARD_FRAMES) return false;
+    if (!v.holding) { v.timer = v.duration; v.holding = true; return false; }
     endVignette();
     return true;
 }

@@ -76,7 +76,7 @@ const frames = (n, fn) => { for (let i = 0; i < n; i++) fn(i); };
         const ranks = UPGRADE_POOL.orbs.filter(o => o.tree === tree).sort((a, b) => a.rank - b.rank);
         eq(`ranks: ${tree} has ranks 1-5`, ranks.map(r => r.rank).join(','), '1,2,3,4,5');
         ok(`ranks: ${tree} rank names are distinct, none say "Evolution"`, new Set(ranks.map(r => r.name)).size === 5 && !ranks.some(r => /evolution/i.test(r.name)), ranks.map(r => r.name).join(' / '));
-        ok(`ranks: ${tree} rank 3 is a VERB`, ranks[2].verb === true && /VERB/.test(ranks[2].desc));
+        ok(`ranks: ${tree} rank 3 is its Signature Move`, ranks[2].verb === true);
         ok(`ranks: ${tree} rank 5 is its Apex`, ranks[4].draftRole === 'apex');
     }
     eq('ranks: Technique rank 3 is Afterimage Slip', UPGRADE_POOL.orbs.find(o => o.tree === 'technique' && o.rank === 3).name, 'Afterimage Slip');
@@ -94,12 +94,8 @@ const frames = (n, fn) => { for (let i = 0; i < n; i++) fn(i); };
     const pools = draft.buildEligiblePool(st, UPGRADE_POOL);
     const offered = pools.orbs.map(o => `${o.tree}${o.rank}`).sort().join(',');
     eq('draft: Arc 1 offers only the NEXT rank of trees under cap 2', offered, 'power2,technique1');
-    const tease = draft.buildDraftTease(st, UPGRADE_POOL, 1);
-    ok('draft: a capped tree shows its next rank LOCKED', tease && tease.locked && tease.tree === 'speed' && tease.rank === 3, JSON.stringify(tease && { tree: tease.tree, rank: tease.rank }));
-    eq('draft: locked card says "Unlocks in Arc 2"', tease && tease.reqText, 'UNLOCKS IN ARC 2');
-    st.currentStage = CONSTANTS.firstStageOfArc(4); st.orbCounts = { speed: 4, power: 4, technique: 4 };
-    eq('draft: Arc 4 locked rank 5 says "Unlocks in Arc 5"', draft.buildDraftTease(st, UPGRADE_POOL, 4).reqText, 'UNLOCKS IN ARC 5');
-    st.currentStage = CONSTANTS.firstStageOfArc(5);
+    ok('draft (v18): no locked next-rank teasers exist any more', typeof draft.buildDraftTease === 'undefined');
+    st.currentStage = CONSTANTS.firstStageOfArc(5); st.orbCounts = { speed: 4, power: 4, technique: 4 };
     ok('draft: Arc 5 offers rank 5', draft.buildEligiblePool(st, UPGRADE_POOL).orbs.every(o => o.rank === 5));
     // incOrb never passes 5; rank order is tracked
     freshArena(40); st.currentDraftOptions = [UPGRADE_POOL.orbs.find(o => o.id === 'spd_r1')];
@@ -250,7 +246,9 @@ const frames = (n, fn) => { for (let i = 0; i < n; i++) fn(i); };
         T.update();
     }
     ok('ten-count: clearing the prompts gets you up', !st.knockdown && st.screen === 'playing');
-    eq('ten-count: back up at 50% HP', st.health, 50);
+    eq('ten-count (v18): all-perfect prompts get you up at 75% HP', st.health, 75);
+    eq('ten-count: recovery HP scales with timing (all merely on time -> 55%)', Math.round(knock.recoveryHpFrac({ perfects: 0, goods: 3, stumbles: 0, prompts: 3 }) * 100), 55);
+    ok('ten-count: stumbles drag recovery toward the floor', knock.recoveryHpFrac({ perfects: 0, goods: 3, stumbles: 4, prompts: 3 }) < knock.recoveryHpFrac({ perfects: 0, goods: 3, stumbles: 0, prompts: 3 }) && knock.recoveryHpFrac({ perfects: 0, goods: 0, stumbles: 9, prompts: 3 }) === CONSTANTS.KNOCKDOWN.hpMin);
     ok('ten-count: short invulnerability after getting up', st.player.invuln > 0);
     st.player.invuln = 0; st.health = 0; T.update();
     eq('ten-count: a second knockdown in the same arc ends the run', st.screen, 'gameover');
@@ -271,30 +269,57 @@ const frames = (n, fn) => { for (let i = 0; i < n; i++) fn(i); };
     ok('ten-count: bosses never get a count (only the player path calls startKnockdown)', !/startKnockdown/.test(bossSrc));
 }
 
-// ======================= 7. ROPES & CORNERS =======================
+// ======================= 7. v18: NO ROPES + HOLD YOUR GROUND =======================
 {
+    ok('ropes: removed from the game (no ROPES config, no cornered rule)', CONSTANTS.ROPES === undefined && CONSTANTS.isCornered === undefined);
+    const fs = await import('fs');
+    const src = ['src/entities/player.js', 'src/entities/enemies.js', 'src/systems/combat.js', 'src/render/draw.js', 'src/render/overlays.js'].map(f => fs.readFileSync(new URL('../' + f, import.meta.url), 'utf8')).join('\n');
+    ok('ropes: no pinning / rope-bounce / cornered code left', !/onRopes|ropeBounce|isCornered|drawRopes/.test(src));
     freshArena(20);
-    st.player.x = CONSTANTS.ROPES.playerMinX;
-    ok('ropes: at the ropes you are CORNERED', CONSTANTS.isCornered(st.player));
-    const open = CONSTANTS.getSlipThresholds('grunt', 0, false), tight = CONSTANTS.getSlipThresholds('grunt', 0, true);
-    ok('ropes: cornered tightens both slip windows', tight.perfect < open.perfect && tight.good < open.good, JSON.stringify({ open, tight }));
-    st.keys = { ArrowLeft: true }; frames(30, () => player.updatePlayer());
-    eq('ropes: no further retreat past the ropes', st.player.x, CONSTANTS.ROPES.playerMinX);
-    freshArena(20); st.player.x = 110;
-    player.takeDamage(10, true, null);
-    ok('ropes: getting hit can\'t push you through the ropes', st.player.x >= CONSTANTS.ROPES.playerMinX);
-    // enemy pinned on its ropes
-    freshArena(20);
-    const e = grunt({ x: CONSTANTS.ROPES.enemyRopeX - 40, vx: 60, stun: 20 }); st.enemies = [e];
+    const e = grunt({ x: 500, vx: 60, stun: 20 }); st.enemies = [e];
     enemies.updateEnemies();
-    ok('ropes: knockback stops at the enemy\'s ropes and PINS it', e.x === CONSTANTS.ROPES.enemyRopeX && e.onRopes > 0);
-    // rope-bounce bonus
+    ok('ropes: knockback is no longer clamped at a rope line', e.x > 540);
+    // hold your ground while engaged; drift home only when clear
+    freshArena(20); st.player.x = 300; st.enemies = [grunt({ x: 400, attackCooldown: 999 })];
+    frames(60, () => player.updatePlayer());
+    eq('footwork: with an enemy in reach you stay planted (no retreating punches)', Math.round(st.player.x), 300);
+    freshArena(20); st.player.x = 300; st.enemies = [];
+    frames(60, () => player.updatePlayer());
+    ok('footwork: with nobody in reach you drift back to neutral', st.player.x < 280);
+    freshArena(20); st.player.x = 300; st.enemies = []; st.player.comboWindow = 20;
+    player.updatePlayer();
+    ok('footwork: a live combo window also holds your ground', st.player.x > 299.5);
+}
+
+// ======================= 7b. v18: BRUISER SWEEP (Guard / Ghost Step matter) =======================
+{
+    freshArena(20); localStorage.clear();
+    const br = grunt({ type: 'bruiser', lane: 1, x: st.player.x + 80, attackCooldown: 2, currentMove: 'sweep', hp: 999, maxHp: 999 });
+    st.enemies = [br]; st.player.lane = 0; st.player.y = st.height * CONSTANTS.LANE_Y[0]; st.health = 100;
+    frames(4, () => enemies.updateEnemies());
+    ok('sweep: hits the lanes next to the bruiser too (can\'t slip it)', st.health < 100, `hp ${st.health}`);
     freshArena(20);
-    const a = grunt({ x: st.player.x + 70, onRopes: 30 }), b = grunt({ x: st.player.x + 70 });
-    st.enemies = [a]; st.player.slipBuff = 1; const ha = a.hp; combat.checkHit('cross'); const dmgPinned = ha - a.hp; const stopPinned = st.hitstop;
-    st.enemies = [b]; st.player.slipBuff = 1; st.hitstop = 0; const hb = b.hp; combat.checkHit('cross'); const dmgFree = hb - b.hp;
-    ok('ropes: a counter on a pinned enemy ROPE-BOUNCES for bonus damage + hitstop', dmgPinned > dmgFree && stopPinned > st.hitstop, `pinned ${dmgPinned} vs free ${dmgFree}`);
-    ok('ropes: the player can press forward to reach the enemy ropes', CONSTANTS.ROPES.playerMaxX + 140 >= CONSTANTS.ROPES.enemyRopeX);
+    const br2 = grunt({ type: 'bruiser', lane: 1, x: st.player.x + 80, attackCooldown: 12, currentMove: 'sweep', hp: 999, maxHp: 999 });
+    st.enemies = [br2];
+    const hp0 = st.health, c0 = st.combo;
+    st.keys = { ArrowUp: true }; player.updatePlayer(); st.keys = {};
+    ok('sweep: slipping it earns no slip reward', st.statTotalSlips === undefined || st.player.slipBuff === 0);
+    freshArena(20);
+    const br3 = grunt({ type: 'bruiser', lane: 1, x: st.player.x + 80, attackCooldown: 3, currentMove: 'sweep', hp: 999, maxHp: 999 });
+    st.enemies = [br3]; st.keys = { ShiftLeft: true }; player.updatePlayer(); st.keys = {};
+    frames(4, () => enemies.updateEnemies());
+    ok('sweep: Ghost Stepping through it is a perfect Ghost Step (+1 combo, no damage)', st.health === 100 && st.combo === 1, `hp ${st.health} combo ${st.combo}`);
+    freshArena(20);
+    const br4 = grunt({ type: 'bruiser', lane: 1, x: st.player.x + 80, attackCooldown: 3, currentMove: 'sweep', hp: 999, maxHp: 999 });
+    st.enemies = [br4]; st.keys = { KeyW: true }; player.updatePlayer();
+    frames(4, () => { player.updatePlayer(); enemies.updateEnemies(); }); st.keys = {};
+    ok('sweep: Guard takes a fraction of it', st.health >= 100 - Math.ceil(CONSTANTS.SWEEP.damage * 0.25) && st.health < 100, `hp ${st.health}`);
+    // bruisers alternate bash / sweep
+    freshArena(20);
+    const br5 = grunt({ type: 'bruiser', lane: 2, x: st.player.x + 80, attackCooldown: 1, currentMove: 'bash', hp: 999, maxHp: 999 });
+    st.enemies = [br5]; st.player.lane = 0; const moves = [];
+    frames(400, () => { const m = br5.currentMove; enemies.updateEnemies(); if (br5.currentMove !== m) moves.push(br5.currentMove); });
+    ok('sweep: bruisers alternate bash and sweep', moves.includes('sweep') && moves.includes('bash'), moves.slice(0, 4).join(','));
 }
 
 // ======================= 8. GHOST STEP INPUT + REMAPPING =======================
@@ -349,21 +374,29 @@ const frames = (n, fn) => { for (let i = 0; i < n; i++) fn(i); };
     }
     ok('Live Wire: throws punch strings and periodic shoves', stringHits > 10 && shoves > 1, `strings ${stringHits}, shoves ${shoves}`);
     ok('Live Wire: every string hit is telegraphed >= minTelegraphLead', minLead >= CONSTANTS.BOSS_OFFENSE.minTelegraphLead, `min ${minLead}`);
+    // v18 LIVE LANES: a finished string leaves his lane live; standing in it shocks
     freshArena(CONSTANTS.bossStageOfArc(4)); bosses.spawnBoss(); st.bossIntroTimer = 0;
-    const lw2 = st.enemies.find(e => e.isBoss); lw2.recoverTimer = 9999; lw2.x = 900;
-    st.player.x = 200; st.player.cornered = false; st.health = 100;
-    frames(200, () => { st.player.cornered = CONSTANTS.isCornered(st.player); bosses.updateBosses(); });
-    eq('Live Wire: ropes don\'t shock you away from them', st.health, 100);
-    st.player.x = CONSTANTS.ROPES.playerMinX;
-    frames(200, () => { st.player.invuln = 0; st.player.cornered = CONSTANTS.isCornered(st.player); bosses.updateBosses(); });
-    ok('Live Wire: cornered on his electrified ropes = shocked', st.health < 100, `hp ${st.health}`);
-    // corner reversal finisher
+    const lw2 = st.enemies.find(e => e.isBoss); st.health = 1e6; st.maxHealth = 1e6;
+    let sawLive = false;
+    for (let f = 0; f < 1500 && !sawLive; f++) { st.player.x = 200; st.player.lane = lw2.lane; st.player.invuln = 0; bosses.updateBosses(); if (lw2.justAttacked > 0) lw2.justAttacked--; sawLive = (st.liveLanes || []).length > 0; }
+    ok('Live Wire: a finished string electrifies the lane he struck', sawLive);
+    st.liveLanes = [{ lane: 1, phase: 'warn', timer: CONSTANTS.LIVE_LANE.warnFrames, tick: 0 }];
+    st.player.lane = 1; st.health = 100; st.maxHealth = 100; lw2.recoverTimer = 9999; lw2.x = 900;
+    frames(CONSTANTS.LIVE_LANE.warnFrames - 1, () => bosses.updateLiveLanes());
+    eq('Live Wire: the warning phase never shocks (it\'s the tell)', st.health, 100);
+    frames(30, () => { st.player.invuln = 0; bosses.updateLiveLanes(); });
+    ok('Live Wire: standing in a live lane shocks you', st.health < 100);
+    st.liveLanes = [{ lane: 1, phase: 'live', timer: 50, tick: 0 }]; st.player.lane = 0; st.health = 100;
+    frames(40, () => bosses.updateLiveLanes());
+    eq('Live Wire: changing lanes is the answer', st.health, 100);
     freshArena(CONSTANTS.bossStageOfArc(4)); bosses.spawnBoss(); st.bossIntroTimer = 0;
-    const lw3 = st.enemies.find(e => e.isBoss); fin.startFinisher(lw3, 'break1');
-    ok('Live Wire: Finisher is a corner reversal (he\'s spun into his own ropes)', lw3.x < st.player.x && lw3.facing === 1 && st.player.facing === -1 && lw3.x < 150);
+    const lw3 = st.enemies.find(e => e.isBoss); lw3.lane = 2; lw3.y = st.height * CONSTANTS.LANE_Y[2];
+    fin.startFinisher(lw3, 'break1');
+    ok('finisher (v18 fix): both fighters are snapped onto the same lane line', lw3.lane === st.player.lane && lw3.y === st.player.y, `boss y ${lw3.y} player y ${st.player.y}`);
+    ok('finisher: no side swap any more', lw3.x > st.player.x && lw3.facing === undefined);
     st.finisher = null;
 
-    // NEGATIVE
+    // NEGATIVE    // NEGATIVE
     freshArena(CONSTANTS.bossStageOfArc(5)); st.strikerColor = '#00ffff'; bosses.spawnBoss(); st.bossIntroTimer = 0;
     const ng = st.enemies.find(e => e.isBoss);
     eq('Negative: colour-inverted mirror of the Striker', ng.color, '#ff0000');

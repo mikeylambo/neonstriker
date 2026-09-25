@@ -96,19 +96,22 @@ export function applyUpgrade(st, upgrade) {
     let upgradeScreen = document.getElementById('upgrade-screen');
     if (upgradeScreen) upgradeScreen.style.display = 'none';
 
-    const proceed = () => {
-        if (st.pendingUpgrades > 0) {
-            // FIXED: Using the global window object to 100% bypass circular module import crashes!
-            if (window.engineTriggerUpgradeDraft) window.engineTriggerUpgradeDraft();
-        } else {
-            st.screen = 'playing';
-        }
-    };
-
-    // v16 IDENTITY MOMENT: every pick gets a short, skippable equip vignette
-    // before play (or the next draft) resumes. See systems/vignette.js.
-    if (window.enginePlayUpgradeVignette) window.enginePlayUpgradeVignette(upgrade, proceed);
-    else proceed();
+    // v18 STACKED EVOLUTIONS: back-to-back picks are drafted one after another,
+    // then celebrated TOGETHER on one screen that lists every pick (playtest:
+    // "stack multiple evolutions and let the end screen read all of them").
+    if (!st.evoChain || !st.evoChain.active) st.evoChain = { active: true, total: 1, picks: [] };
+    st.evoChain.picks.push(upgrade);
+    if (st.pendingUpgrades > 0) {
+        // FIXED: Using the global window object to 100% bypass circular module import crashes!
+        if (window.engineTriggerUpgradeDraft) window.engineTriggerUpgradeDraft();
+        else st.screen = 'playing';
+        return;
+    }
+    const picks = st.evoChain.picks.slice();
+    st.evoChain = { active: false, total: 0, picks: [] };
+    const resume = () => { st.screen = 'playing'; };
+    if (window.enginePlayUpgradeVignette) window.enginePlayUpgradeVignette(picks, resume);
+    else resume();
 }
 
 const ARC_COLORS = { 1: '#22d3ee', 2: '#34d399', 3: '#f87171', 4: '#c084fc', 5: '#facc15' };
@@ -169,16 +172,16 @@ export function advanceStage() {
     // v16 WAGERS: no modifier is active until the player accepts one.
     clearWager();
     st.wagerOffer = rollWagerOffer(st.currentStage);
-    
-    st.stageClearing = false; 
-    st.bossActive = false; 
-    st.stageProgress = 0; 
-    st.wavesCleared = 0; 
+
+    st.stageClearing = false;
+    st.bossActive = false;
+    st.stageProgress = 0;
+    st.wavesCleared = 0;
     st.waveThreshold = 0;
-    
-    st.waveTimer = 90; 
+
+    st.waveTimer = 90;
     st.health = Math.min(st.maxHealth, st.health + 25);
-    
+
     if (st.player) {
         st.player.state = 'idle';
         st.player.punchTimer = 0;
@@ -194,7 +197,7 @@ export function advanceStage() {
     let arcIndex = CONSTANTS.getArcIndex(st.currentStage);
     let levelInArc = CONSTANTS.getLevelInArc(st.currentStage);
     let isBoss = CONSTANTS.isBossStage(st.currentStage);
-    
+
     let safeArcIndex = Math.min(arcIndex, 5);
     let law = CONSTANTS.ARC_LAWS[safeArcIndex] || CONSTANTS.ARC_LAWS[5];
 
@@ -232,7 +235,7 @@ export function advanceStage() {
         ? [{ type: 'text', title: 'LANE SURGE', subtitle: `${LANE_LABEL[st.hotLane]} LANE RUNNING HOT`, duration: 120 }]
         : [];
     let stageData = CONSTANTS.ARC_STAGE_TABLES[safeArcIndex]?.[levelInArc] || { stageName: "UNKNOWN DEPTHS" };
-    
+
     let titleText = isBoss ? stageData.stageName : `${law.shortName} — ${stageData.stageName}`;
     // Arc themes live on the arc's chapter card now; stage cards carry the level's
     // own tagline instead of repeating the arc line every single stage.

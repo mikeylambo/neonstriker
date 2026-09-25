@@ -52,22 +52,12 @@
     // here now. Also where Bruiser/Assassin get their own read-rhythm: a Bruiser's
     // haymaker is slow and wide (forgiving to time, hits like a truck once you do);
     // an Assassin's is fast and narrow (matches its "don't you dare turtle" identity).
-    // v17: `cornered` (Striker pinned on his ropes) tightens BOTH windows — and
-    // because gameplay, lane flashes and "!" text all read this one function, the
-    // telegraph tightens with it. The read never lies, it just gets harder.
-    getSlipThresholds: (enemyType, progressionBonus = 0, cornered = false) => {
-      let w;
-      if (enemyType === "zoner") w = { perfect: 10 + progressionBonus, good: 24 };
-      else if (enemyType === "bruiser") w = { perfect: 14 + progressionBonus, good: 26 };
-      else if (enemyType === "assassin") w = { perfect: 5 + progressionBonus, good: 10 };
-      else w = { perfect: 8 + progressionBonus, good: 16 };
-      if (cornered) {
-        const m = CONSTANTS.ROPES.cornerSlipMult;
-        w = { perfect: Math.max(2, Math.round(w.perfect * m)), good: Math.max(4, Math.round(w.good * m)) };
-      }
-      return w;
+    getSlipThresholds: (enemyType, progressionBonus = 0) => {
+      if (enemyType === "zoner") return { perfect: 10 + progressionBonus, good: 24 };
+      if (enemyType === "bruiser") return { perfect: 14 + progressionBonus, good: 26 };
+      if (enemyType === "assassin") return { perfect: 5 + progressionBonus, good: 10 };
+      return { perfect: 8 + progressionBonus, good: 16 };
     },
-    isCornered: (p) => !!p && p.x <= CONSTANTS.ROPES.cornerX,
     getBossArcMods: (bossId, arcIndex) => {
       const mods = CONSTANTS.BOSS_ARC_MODS[bossId];
       return mods[Math.min(arcIndex, 5)] || mods[5];
@@ -337,28 +327,25 @@
       afterimage: { delay: 16, damage: 26, stun: 22, reach: 150 }
       // Technique R3
     },
-    // --- v17 ROPES & CORNERS -----------------------------------------------------
-    ROPES: {
-      playerPostX: 58,
-      // the post behind the Striker
-      playerMinX: 90,
-      // can't be pushed / retreat past this
-      cornerX: 100,
-      // at or behind this = CORNERED
-      cornerSlipMult: 0.6,
-      // slip windows tighten to 60% when cornered
-      enemyRopeX: 560,
-      // knockback can't carry an enemy past its ropes
-      enemyPostX: 606,
-      playerMaxX: 420,
-      // pressing forward can take you to reach of those ropes
-      pinFrames: 75,
-      // an enemy driven into its ropes stays pinned
-      bounceDmgMult: 1.35,
-      // counter-charged hit on a pinned enemy
-      bounceHitstop: 10,
-      liveWireShock: { damage: 6, every: 45 }
+    // --- FOOTWORK (v18: the v17 ropes are gone — playtest: they cost the game its
+    // lane-boxing identity and its sense of forward motion). Just the stage edges.
+    FOOTWORK: {
+      minX: 90,
+      maxX: 320,
+      advanceSpd: 3,
+      retreatSpd: 3.4,
+      homePull: 0.02,
+      holdGroundWhenEngaged: true
     },
+    // --- v18 LIVE WIRE: "live lanes" replace his electrified corner. After a punch
+    // string the lane he struck charges up (warning), then runs live for a beat:
+    // standing in it shocks you. It forces a lane change — lane boxing, not corners.
+    LIVE_LANE: { warnFrames: 26, liveFrames: 80, tickEvery: 24, damage: 6 },
+    // --- v18 BRUISER SWEEP: every other Bruiser attack is a wide haymaker that
+    // covers its lane AND both neighbours — it can't be slipped. The answers are
+    // Ghost Step (straight through it: a perfect Ghost Step) or Guard. Amber tell,
+    // never the red/white slip colours, so it never baits a slip.
+    SWEEP: { tellFrames: 34, damage: 24, reach: 130, hintsPerSave: 4 },
     // --- v17 PUNCH STRINGS -------------------------------------------------------
     // Selected enemies throw 2-3 hit strings. Every hit re-targets your lane and
     // gets its own full telegraph from getSlipThresholds (the single source of
@@ -378,14 +365,22 @@
       beatFrames: 34,
       windowEarly: 14,
       windowLate: 12,
-      getUpHpFrac: 0.5,
+      // v18: HP on the way up depends on how cleanly you hit the prompts.
+      perfectWindow: 5,
+      hpBase: 0.25,
+      hpSpan: 0.5,
+      hpMin: 0.2,
+      hpMax: 0.75,
       invulnFrames: 90
     },
     // --- v17 INSTINCT ZONE ---------------------------------------------------------
     // A Perfect Slip with a FULL Instinct meter drops the world into slow-mo with a
     // colour-inverted screen (screen effect only). Enemies tick every `enemyTick`
     // frames while the Striker moves at full speed.
-    ZONE: { frames: 180, enemyTick: 2 },
+    ZONE: { frames: 180, enemyTick: 2, maxHold: 120, knockbackMult: 0.45 },
+    // v18: the poster plays in, then HOLDS on this frame until the player presses
+    // something (then "FIGHT!" plays out).
+    POSTER_HOLD_FRAME: 50,
     // --- v17 BOSS BILLING (title-fight posters) ----------------------------------
     BOSS_BILLING: {
       neon_enforcer: { tagline: "THE ARMORED LAW" },
@@ -867,7 +862,8 @@
     const p = safeGet(PROFILE_KEY) || {};
     return {
       flags: p.flags && typeof p.flags === "object" ? p.flags : {},
-      seenUpgrades: Array.isArray(p.seenUpgrades) ? p.seenUpgrades : []
+      seenUpgrades: Array.isArray(p.seenUpgrades) ? p.seenUpgrades : [],
+      counts: p.counts && typeof p.counts === "object" ? p.counts : {}
     };
   }
   function profileFlag(name) {
@@ -877,6 +873,16 @@
     const p = loadProfile();
     p.flags[name] = true;
     safeSet(PROFILE_KEY, p);
+  }
+  function profileCount(name) {
+    const p = loadProfile();
+    return p.counts && p.counts[name] || 0;
+  }
+  function bumpProfileCount(name) {
+    const raw = safeGet(PROFILE_KEY) || {};
+    raw.counts = raw.counts || {};
+    raw.counts[name] = (raw.counts[name] || 0) + 1;
+    safeSet(PROFILE_KEY, raw);
   }
   function hasSeenUpgrade(id) {
     return loadProfile().seenUpgrades.includes(id);
@@ -1064,21 +1070,6 @@
       } else if (type === "knockdown") {
         tone("square", 120, 30, 0.6, 0.3, 0.01);
         tone("sine", 60, 25, 0.8, 0.4, 0.01);
-        return;
-      } else if (type === "rope_buzz") {
-        sq = "sawtooth";
-        f1 = 58;
-        f2 = 62;
-        t = 0.18;
-        v1 = 0.05;
-        v2 = 0.01;
-      } else if (type === "rope_thud") {
-        tone("sine", 90, 40, 0.3, 0.3, 0.01);
-        tone("triangle", 180, 60, 0.25, 0.08, 1e-3);
-        return;
-      } else if (type === "rope_bounce") {
-        tone("sine", 70, 180, 0.2, 0.3, 0.01);
-        tone("square", 900, 200, 0.2, 0.08, 1e-3);
         return;
       } else if (type === "shock") {
         tone("sawtooth", 1200, 90, 0.35, 0.12, 1e-3);
@@ -1368,11 +1359,11 @@
     return SC.kill[type] || SC.kill.grunt;
   }
   function rankForRun({ score, slips = 0, bossKills = 0 }) {
-    const R2 = SC.rank;
+    const R = SC.rank;
     let grade = "C";
-    if (score >= R2.S) grade = "S";
-    else if (score >= R2.A) grade = "A";
-    else if (score >= R2.B) grade = "B";
+    if (score >= R.S) grade = "S";
+    else if (score >= R.A) grade = "A";
+    else if (score >= R.B) grade = "B";
     const reqSlipsForS = Math.max(1, Math.min(bossKills, 3));
     if (grade === "S" && slips < reqSlipsForS) grade = "A";
     if (grade === "A" && slips < 1) grade = "B";
@@ -2026,13 +2017,9 @@
     en.x = p.x + 118;
     en.vx = 0;
     en.stun = 0;
-    if (en.controller === "live_wire") {
-      en.x = CONSTANTS.ROPES.playerPostX + 34;
-      en.facing = 1;
-      p.x = en.x + 118;
-      p.facing = -1;
-      spawnFloatingText(en.x + 20, en.y - 150, "CORNER REVERSAL!", "#fff36b");
-    }
+    const midY = gameState.height * CONSTANTS.LANE_Y[1];
+    en.y = midY;
+    p.y = midY;
     en.recoverTimer = 0;
     en.telegraphed = false;
     en.shiftWarning = 0;
@@ -2041,6 +2028,7 @@
     en.targetLanes = [];
     en.justAttacked = 0;
     gameState.hazards = [];
+    gameState.liveLanes = [];
     gameState.hitstop = 0;
     const label = kind === "ko" ? "FINAL BLOW" : "STAGGERED!";
     spawnFloatingText(en.x + en.w / 2, en.y - 190, label, kind === "ko" ? "#ff0055" : "#ffffff");
@@ -2076,7 +2064,6 @@
       p.lane += LANE_STEP[move];
       p.slipCooldown = 20;
       en.lane = p.lane;
-      en.y = gameState.height * CONSTANTS.LANE_Y[en.lane];
       createShatter(old.x, old.y - 60, gameState.bossThemeColor || "#ffffff");
       p.state = "punching";
       p.punchType = "cross";
@@ -2104,8 +2091,8 @@
     createShatter(en.x, en.y - 70, isPerfect ? "#ffffff" : gameState.bossThemeColor || "#ff0055");
     for (let i = 0; i < 3; i++) createImpact(en.x, en.y - 60 - i * 20, "#ffffff");
     if (en.controller === "live_wire") {
-      createImpact(CONSTANTS.ROPES.playerPostX, en.y - 80, "#fff36b");
-      createImpact(CONSTANTS.ROPES.playerPostX, en.y - 40, "#fff36b");
+      createImpact(en.x + 30, en.y - 80, "#fff36b");
+      createImpact(en.x + 10, en.y - 40, "#fff36b");
       playSound("shock");
     }
     f.freeze = hitStopEnabled() ? isPerfect ? 9 : 6 : 0;
@@ -2143,12 +2130,6 @@
     const f = gameState.finisher, en = f.boss, p = gameState.player;
     p.state = "idle";
     p.punchType = null;
-    if (en.controller === "live_wire") {
-      delete en.facing;
-      delete p.facing;
-      p.x = 180;
-      en.x = p.x + 260;
-    }
     if (f.kind === "ko") {
       en.koDone = true;
       en.hp = 0;
@@ -2176,6 +2157,7 @@
     if (f.freeze > 0) f.freeze--;
     if (f.poseTimer > 0 && --f.poseTimer === 0) gameState.player.state = "idle";
     gameState.player.y += (gameState.height * CONSTANTS.LANE_Y[gameState.player.lane] - gameState.player.y) * 0.35;
+    f.boss.y += (gameState.height * CONSTANTS.LANE_Y[f.boss.lane] - f.boss.y) * 0.35;
     if (gameState.player.slipCooldown > 0) gameState.player.slipCooldown--;
     if (f.phase === "intro") {
       f.timer--;
@@ -2247,7 +2229,11 @@
       fall: 0,
       judge: null,
       judgeTimer: 0,
-      upTimer: 0
+      upTimer: 0,
+      perfects: 0,
+      goods: 0,
+      stumbles: 0,
+      hpFrac: 0
     };
     gameState.knockdownsThisArc = (gameState.knockdownsThisArc || 0) + 1;
     gameState.statKnockdowns = (gameState.statKnockdowns || 0) + 1;
@@ -2280,11 +2266,16 @@
     k.judge = { text, color };
     k.judgeTimer = 26;
   }
+  function recoveryHpFrac({ perfects = 0, goods = 0, stumbles = 0, prompts = 3 }) {
+    const quality = (perfects + goods * 0.6) / Math.max(1, prompts) - stumbles * 0.1;
+    return Math.min(K.hpMax, Math.max(K.hpMin, K.hpBase + K.hpSpan * quality));
+  }
   function getUp() {
     const k = gameState.knockdown, p = gameState.player;
     k.phase = "up";
-    k.upTimer = 36;
-    gameState.health = Math.round(gameState.maxHealth * K.getUpHpFrac);
+    k.upTimer = 50;
+    k.hpFrac = recoveryHpFrac({ perfects: k.perfects, goods: k.goods, stumbles: k.stumbles, prompts: k.seq.length });
+    gameState.health = Math.round(gameState.maxHealth * k.hpFrac);
     gameState.combo = 0;
     p.invuln = K.invulnFrames;
     for (const en of gameState.enemies) {
@@ -2299,7 +2290,7 @@
     playSound("stagger");
     doFlash(0.4);
     triggerShockwave(p.x + 25, p.y - 60, "#ffffff");
-    spawnFloatingText(p.x + 20, p.y - 160, "BACK ON YOUR FEET!", "#22d3ee");
+    spawnFloatingText(p.x + 20, p.y - 160, `BACK UP \xB7 ${Math.round(k.hpFrac * 100)}% HP`, k.hpFrac >= 0.7 ? "#facc15" : "#22d3ee");
   }
   function updateKnockdown() {
     const k = gameState.knockdown;
@@ -2334,11 +2325,15 @@
       };
       if (input) {
         if (t < -K.windowEarly || input !== want) {
+          k.stumbles++;
           judge2("STUMBLE", "#ff8800");
           playSound("finisher_miss");
           advance();
         } else {
-          judge2("UP!", "#22d3ee");
+          const perfect = Math.abs(t) <= K.perfectWindow;
+          if (perfect) k.perfects++;
+          else k.goods++;
+          judge2(perfect ? "PERFECT" : "UP!", perfect ? "#ffffff" : "#22d3ee");
           playSound("perfect_slip");
           k.idx++;
           if (k.idx >= k.seq.length) {
@@ -2348,6 +2343,7 @@
           advance();
         }
       } else if (t > K.windowLate) {
+        k.stumbles++;
         judge2("TOO SLOW", "#ff8800");
         advance();
       }
@@ -2360,6 +2356,189 @@
     const t = k.frame - k.nextBeat;
     if (t < -K.beatFrames) return null;
     return { move: k.seq[k.idx], progress: Math.min(1.2, Math.max(0, (t + K.beatFrames) / K.beatFrames)), t };
+  }
+
+  // src/systems/colors.js
+  function treeColor(tree) {
+    return CONSTANTS.TREES[tree] && CONSTANTS.TREES[tree].color || "#ffffff";
+  }
+  function upgradeColorFor(u) {
+    if (!u) return "#ffffff";
+    if (CONSTANTS.FUSION_COLORS[u.id]) return CONSTANTS.FUSION_COLORS[u.id];
+    if (u.kind === "overclock") return "#c084fc";
+    return treeColor(u.tree);
+  }
+  function buildColor() {
+    const owned = gameState.acquiredUpgradeIds || [];
+    for (let i = owned.length - 1; i >= 0; i--) {
+      if (CONSTANTS.FUSION_COLORS[owned[i]]) return CONSTANTS.FUSION_COLORS[owned[i]];
+    }
+    let best = null, bestRank = 0;
+    const order = gameState.rankOrder || [];
+    for (const tree of CONSTANTS.TREE_ORDER) {
+      const r = gameState.orbCounts && gameState.orbCounts[tree] || 0;
+      if (r > bestRank || r === bestRank && r > 0 && order.lastIndexOf(tree) > order.lastIndexOf(best)) {
+        best = tree;
+        bestRank = r;
+      }
+    }
+    return best ? treeColor(best) : "#ffffff";
+  }
+
+  // src/systems/vignette.js
+  var VIGNETTE_FULL_FRAMES = 70;
+  var VIGNETTE_REPEAT_FRAMES = 36;
+  var SKIP_GUARD_FRAMES = 16;
+  function upgradeColor(u) {
+    return upgradeColorFor(u);
+  }
+  function upgradeRarity(u) {
+    if (!u) return "orb";
+    if (u.kind === "fusion") return u.evolved ? "evolved" : "fusion";
+    if (u.draftRole === "apex") return "apex";
+    if (u.verb) return "verb";
+    if (u.kind === "mastery") return "mastery";
+    if (u.kind === "overclock") return "overclock";
+    return "orb";
+  }
+  var TREE_NAMES = { speed: "SPEED", power: "POWER", technique: "TECHNIQUE" };
+  function evolutionLabel(u, rarity = upgradeRarity(u)) {
+    if (!u) return "";
+    const tree = TREE_NAMES[u.tree];
+    if (u.kind === "rank") return `${tree || ""} \xB7 RANK ${u.rank}${rarity === "verb" ? " \xB7 SIGNATURE MOVE" : rarity === "apex" ? " \xB7 APEX" : ""}`;
+    if (u.kind === "mastery") return `${tree ? tree + " " : ""}MASTERY`;
+    if (u.kind === "fusion") {
+      const pair = (u.trees || []).map((t) => TREE_NAMES[t] || t).join(" + ");
+      return `${u.evolved ? "PERFECTED FUSION" : "FUSION"}${pair ? " \xB7 " + pair : ""}`;
+    }
+    return "OVERCLOCK";
+  }
+  var STING = { evolved: "sting_fusion", fusion: "sting_fusion", apex: "sting_fusion", verb: "sting_mastery", mastery: "sting_mastery", overclock: "sting_overclock", orb: "sting_orb" };
+  function vignetteDuration(upgradeId, seenBefore, reduced = false) {
+    return seenBefore || reduced ? VIGNETTE_REPEAT_FRAMES : VIGNETTE_FULL_FRAMES;
+  }
+  var RARITY_ORDER = ["evolved", "fusion", "apex", "verb", "mastery", "orb", "overclock"];
+  function playUpgradeVignette(upgradeOrList, onDone) {
+    const picks = Array.isArray(upgradeOrList) ? upgradeOrList.filter(Boolean) : [upgradeOrList];
+    if (!picks.length) {
+      if (onDone) onDone();
+      return;
+    }
+    const allSeen = picks.every((u) => hasSeenUpgrade(u.id));
+    picks.forEach((u) => markUpgradeSeen(u.id));
+    const hero = picks.slice().sort((a, b) => RARITY_ORDER.indexOf(upgradeRarity(a)) - RARITY_ORDER.indexOf(upgradeRarity(b)))[0];
+    const rarity = upgradeRarity(hero);
+    gameState.vignette = {
+      upgrade: hero,
+      picks,
+      rarity,
+      color: upgradeColor(hero),
+      repeat: allSeen,
+      timer: 0,
+      duration: vignetteDuration(hero.id, allSeen, reducedMotion()),
+      holding: false,
+      onDone,
+      sparks: []
+    };
+    gameState.screen = "vignette";
+    playSound(STING[rarity] || "sting_orb");
+  }
+  function updateVignette() {
+    const v = gameState.vignette;
+    if (!v) return;
+    v.timer++;
+    if (!reducedMotion() && v.timer < v.duration - 8) {
+      for (let i = 0; i < 3; i++) v.sparks.push({ gx: Math.random() < 0.5 ? 0 : 1, ox: (Math.random() - 0.5) * 14, oy: 0, vx: (Math.random() - 0.5) * 1.6, vy: -1.5 - Math.random() * 2.5, life: 1 });
+    }
+    v.sparks.forEach((s) => {
+      s.ox += s.vx;
+      s.oy += s.vy;
+      s.life -= 0.05;
+    });
+    v.sparks = v.sparks.filter((s) => s.life > 0);
+    if (v.timer >= v.duration) {
+      v.timer = v.duration;
+      v.holding = true;
+    }
+  }
+  function skipVignette() {
+    const v = gameState.vignette;
+    if (!v || v.timer < SKIP_GUARD_FRAMES) return false;
+    if (!v.holding) {
+      v.timer = v.duration;
+      v.holding = true;
+      return false;
+    }
+    endVignette();
+    return true;
+  }
+  function endVignette() {
+    const v = gameState.vignette;
+    if (!v) return;
+    gameState.vignette = null;
+    if (typeof v.onDone === "function") v.onDone();
+  }
+
+  // src/systems/input_device.js
+  function padFamily(id = "") {
+    const s = String(id).toLowerCase();
+    if (/045e|xbox|xinput|x-box/.test(s)) return "xbox";
+    if (/054c|playstation|dualshock|dualsense|ps4|ps5/.test(s)) return "playstation";
+    return "xbox";
+  }
+  function setInputDevice(dev) {
+    if (dev) gameState.inputDevice = dev;
+  }
+  function inputDevice() {
+    return gameState.inputDevice || "keyboard";
+  }
+  var PAD = {
+    playstation: {
+      jab: { label: "\u25A1", color: "#f472b6" },
+      cross: { label: "\u25B3", color: "#34d399" },
+      hook: { label: "\u25CB", color: "#f87171" },
+      instinct: { label: "\xD7", color: "#60a5fa" },
+      confirm: { label: "\xD7", color: "#60a5fa" },
+      back: { label: "\u25CB", color: "#f87171" },
+      ghost: { label: "L1", color: "#e5e7eb" },
+      guard: { label: "R1", color: "#e5e7eb" },
+      up: { label: "\u25B2", color: "#e5e7eb" },
+      down: { label: "\u25BC", color: "#e5e7eb" },
+      left: { label: "\u25C0", color: "#e5e7eb" },
+      right: { label: "\u25B6", color: "#e5e7eb" },
+      pause: { label: "OPTIONS", color: "#e5e7eb" },
+      tabs: { label: "L1 / R1", color: "#e5e7eb" }
+    },
+    xbox: {
+      jab: { label: "X", color: "#60a5fa" },
+      cross: { label: "Y", color: "#facc15" },
+      hook: { label: "B", color: "#f87171" },
+      instinct: { label: "A", color: "#4ade80" },
+      confirm: { label: "A", color: "#4ade80" },
+      back: { label: "B", color: "#f87171" },
+      ghost: { label: "LB", color: "#e5e7eb" },
+      guard: { label: "RB", color: "#e5e7eb" },
+      up: { label: "\u25B2", color: "#e5e7eb" },
+      down: { label: "\u25BC", color: "#e5e7eb" },
+      left: { label: "\u25C0", color: "#e5e7eb" },
+      right: { label: "\u25B6", color: "#e5e7eb" },
+      pause: { label: "MENU", color: "#e5e7eb" },
+      tabs: { label: "LB / RB", color: "#e5e7eb" }
+    }
+  };
+  var KEY_FIXED = { confirm: "ENTER", back: "ESC", pause: "ESC", tabs: "Q / E" };
+  function glyph(action, dev = inputDevice()) {
+    if (dev === "playstation" || dev === "xbox") return PAD[dev][action] || { label: action.toUpperCase(), color: "#e5e7eb" };
+    if (KEY_FIXED[action]) return { label: KEY_FIXED[action], color: "#e5e7eb" };
+    const code = getBinds()[action];
+    return { label: code ? keyLabel(code) : action.toUpperCase(), color: "#e5e7eb" };
+  }
+  function glyphText(action, dev) {
+    return glyph(action, dev).label;
+  }
+  function glyphHTML(action, dev) {
+    const g = glyph(action, dev);
+    return `<span class="glyph" style="--g:${g.color}">${g.label}</span>`;
   }
 
   // src/render/overlays.js
@@ -2492,13 +2671,13 @@
   }
   var PROMPT_X = 0.72;
   var PROMPT_Y = 0.48;
-  var PROMPT_GLYPH = {
-    up: { key: "\u25B2", hint: "\u2191 / D-PAD", color: "#22d3ee" },
-    down: { key: "\u25BC", hint: "\u2193 / D-PAD", color: "#22d3ee" },
-    jab: { key: "A", hint: "JAB \xB7 X", color: "#ffffff" },
-    cross: { key: "S", hint: "CROSS \xB7 Y", color: "#ec4899" },
-    hook: { key: "D", hint: "HOOK \xB7 B", color: "#facc15" }
-  };
+  var MOVE_NAME = { up: "SLIP UP", down: "SLIP DOWN", jab: "JAB", cross: "CROSS", hook: "HOOK" };
+  var KEY_COLOR = { up: "#22d3ee", down: "#22d3ee", jab: "#ffffff", cross: "#ec4899", hook: "#facc15" };
+  function promptGlyph(move) {
+    const g = glyph(move), dev = inputDevice();
+    const key = move === "up" || move === "down" ? move === "up" ? "\u25B2" : "\u25BC" : g.label;
+    return { key, hint: MOVE_NAME[move] || move.toUpperCase(), color: dev === "keyboard" ? KEY_COLOR[move] : move === "up" || move === "down" ? "#22d3ee" : g.color };
+  }
   function drawFinisherUI(ctx3) {
     const f = gameState.finisher;
     if (!f) return;
@@ -2523,7 +2702,7 @@
     for (let i = 0; i < n; i++) {
       const px = W / 2 - total / 2 + i * (pipW + gap);
       const done = i < f.idx, cur = i === f.idx && f.phase === "prompts";
-      const g = PROMPT_GLYPH[f.seq[i]];
+      const g = promptGlyph(f.seq[i]);
       ctx3.fillStyle = done ? g.color : cur ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.06)";
       ctx3.fillRect(px, H - barH + 14, pipW, 22);
       ctx3.fillStyle = done ? "#000" : cur ? "#fff" : "rgba(255,255,255,0.35)";
@@ -2533,9 +2712,9 @@
     ctx3.globalAlpha = 1;
     const pp = promptProgress();
     if (pp) {
-      const g = PROMPT_GLYPH[pp.move];
+      const g = promptGlyph(pp.move);
       const cx = PROMPT_X * W, cy = PROMPT_Y * H;
-      const box = 38;
+      const box = 46;
       const ringR = box + 70 * (1 - Math.min(1, pp.progress));
       const inWindow = pp.t >= -CONSTANTS.FINISHER.windowEarly;
       ctx3.lineWidth = 4;
@@ -2556,11 +2735,13 @@
       ctx3.stroke();
       ctx3.shadowBlur = 0;
       ctx3.fillStyle = g.color;
-      ctx3.font = "900 34px Orbitron";
-      ctx3.fillText(g.key, cx, cy + 12);
-      ctx3.fillStyle = "rgba(255,255,255,0.8)";
-      ctx3.font = "bold 11px Orbitron";
-      ctx3.fillText(g.hint, cx, cy + box + 22);
+      ctx3.font = `900 ${g.key.length > 2 ? 24 : 40}px Orbitron`;
+      ctx3.textBaseline = "middle";
+      ctx3.fillText(g.key, cx, cy + 2);
+      ctx3.textBaseline = "alphabetic";
+      ctx3.fillStyle = "#ffffff";
+      ctx3.font = "900 16px Orbitron";
+      ctx3.fillText(g.hint, cx, cy + box + 30);
     } else if (f.phase === "intro") {
       ctx3.fillStyle = `rgba(255,255,255,${f.bars})`;
       ctx3.font = "bold 13px Orbitron";
@@ -2586,12 +2767,11 @@
     const v = gameState.vignette;
     if (!v) return;
     const W = gameState.width, H = gameState.height, t = v.timer, D = v.duration;
-    const inA = Math.min(1, t / 8), outA = Math.min(1, (D - t) / 8);
-    const a = Math.min(inA, outA);
+    const a = Math.min(1, t / 8);
     const rm = reducedMotion();
     ctx3.save();
     ctx3.globalAlpha = a;
-    ctx3.fillStyle = "rgba(0,0,0,0.86)";
+    ctx3.fillStyle = "rgba(0,0,0,0.88)";
     ctx3.fillRect(0, 0, W, H);
     const slashIn = rm ? 1 : Math.min(1, t / 10);
     ctx3.save();
@@ -2601,15 +2781,12 @@
     sg.addColorStop(0, "rgba(0,0,0,0)");
     sg.addColorStop(0.5, v.color);
     sg.addColorStop(1, "rgba(0,0,0,0)");
-    ctx3.globalAlpha = a * 0.28;
+    ctx3.globalAlpha = a * 0.22;
     ctx3.fillStyle = sg;
     ctx3.fillRect(-W * slashIn, -70, W * 2 * slashIn, 140);
-    ctx3.globalAlpha = a * 0.9;
-    ctx3.fillStyle = v.color;
-    ctx3.fillRect(-W * slashIn, 72, W * 2 * slashIn, 3);
     ctx3.restore();
-    const pose = { speed: "jab3", power: "cross", technique: "guard_jab" }[v.upgrade.tree] || (v.rarity === "fusion" ? "hook" : "cross");
-    const S = 2.3, bx = 250, by = 430;
+    const pose = { speed: "jab3", power: "cross", technique: "guard_jab" }[v.upgrade.tree] || (v.rarity === "fusion" || v.rarity === "evolved" ? "hook" : "cross");
+    const S = 2.1, bx = 150, by = 440;
     const ent = {
       x: bx / S - 25,
       y: by / S,
@@ -2623,12 +2800,15 @@
       slipBuff: 0,
       color: gameState.strikerColor || "#00ffff",
       trails: [],
-      // v17 colour rule: the upgrade's colour rides the PUNCH TRAIL and sparks,
+      // colour rule: the upgrade's colour rides the PUNCH TRAIL and sparks,
       // never the Striker's body or gloves.
       trailColor: v.color,
       trailHeat: Math.min(1, t / 10)
     };
     ctx3.save();
+    ctx3.beginPath();
+    ctx3.rect(0, 0, 380, H);
+    ctx3.clip();
     ctx3.scale(S, S);
     drawBoxer(ctx3, ent, true, a);
     ctx3.restore();
@@ -2637,54 +2817,94 @@
       v.sparks.forEach((sp) => {
         const gp = ent.glovePositions[sp.gx];
         ctx3.globalAlpha = a * sp.life;
-        ctx3.fillRect(gp[0] * S + sp.ox, gp[1] * S + sp.oy, 3, 3);
+        ctx3.fillRect(Math.min(370, gp[0] * S + sp.ox), gp[1] * S + sp.oy, 3, 3);
       });
       ctx3.globalAlpha = a;
     }
+    const TX = 410, TW = W - TX - 40;
+    const fit = (text, font, size, maxW) => {
+      let s = size;
+      do {
+        ctx3.font = font.replace("#", s);
+        s -= 2;
+      } while (ctx3.measureText(text).width > maxW && s > 14);
+    };
     const slamK = rm ? 1 : Math.min(1, Math.max(0, (t - 4) / 8));
-    const scale = rm ? 1 : 1 + (1 - slamK) * 1.6;
-    const rankTag = v.upgrade.rank ? `RANK ${v.upgrade.rank} \xB7 ` : "";
-    const kindLabel = rankTag + ({ evolved: "\u2726 EVOLVED FUSION \u2726", fusion: "\u2726 FUSION \u2726", apex: "\u2605 APEX \u2605", verb: "\u27E1 NEW VERB", mastery: "\u25C6 MASTERY", overclock: "OVERCLOCK", orb: "STAT" }[v.rarity] || "STAT");
-    ctx3.save();
-    ctx3.translate(W * 0.64, H * 0.46);
-    ctx3.globalAlpha = a * slamK;
-    ctx3.fillStyle = v.color;
-    ctx3.font = "bold 14px Orbitron";
-    ctx3.textAlign = "center";
-    ctx3.fillText(kindLabel + (v.upgrade.tree && TREE_NAME[v.upgrade.tree] ? ` \xB7 ${TREE_NAME[v.upgrade.tree]}` : ""), 0, -48);
-    ctx3.scale(scale, scale);
-    ctx3.fillStyle = "#ffffff";
-    ctx3.font = "900 italic 44px Orbitron";
-    ctx3.shadowColor = v.color;
-    ctx3.shadowBlur = 24;
-    ctx3.fillText(v.upgrade.name.toUpperCase(), 0, 0);
-    ctx3.restore();
-    if (!v.repeat) {
-      ctx3.globalAlpha = a * Math.min(1, Math.max(0, (t - 16) / 10));
-      ctx3.fillStyle = "rgba(255,255,255,0.8)";
-      ctx3.font = "13px Orbitron";
-      ctx3.textAlign = "center";
-      wrapText(ctx3, v.upgrade.desc, W * 0.64, H * 0.46 + 40, 440, 18);
+    ctx3.textAlign = "left";
+    const picks = v.picks && v.picks.length ? v.picks : [v.upgrade];
+    if (picks.length === 1) {
+      const u = picks[0];
+      ctx3.globalAlpha = a * slamK;
+      ctx3.fillStyle = v.color;
+      ctx3.font = "bold 14px Orbitron";
+      ctx3.fillText(evolutionLabel(u), TX, H * 0.4);
+      ctx3.save();
+      const sc = rm ? 1 : 1 + (1 - slamK) * 0.6;
+      ctx3.translate(TX, H * 0.4 + 52);
+      ctx3.scale(sc, sc);
+      fit(u.name.toUpperCase(), "900 italic #px Orbitron", 44, TW);
+      ctx3.fillStyle = "#ffffff";
+      ctx3.shadowColor = v.color;
+      ctx3.shadowBlur = 20;
+      ctx3.fillText(u.name.toUpperCase(), 0, 0);
+      ctx3.restore();
+      ctx3.globalAlpha = a * Math.min(1, Math.max(0, (t - 14) / 10));
+      ctx3.fillStyle = "rgba(255,255,255,0.85)";
+      ctx3.font = "14px Orbitron";
+      wrapText(ctx3, u.desc, TX, H * 0.4 + 92, TW, 20, "left");
+    } else {
+      ctx3.globalAlpha = a * slamK;
+      ctx3.fillStyle = "#ffffff";
+      ctx3.font = "900 italic 34px Orbitron";
+      ctx3.shadowColor = v.color;
+      ctx3.shadowBlur = 16;
+      ctx3.fillText(`${picks.length} EVOLUTIONS`, TX, 118);
+      ctx3.shadowBlur = 0;
+      const rowH = Math.min(110, (H - 190) / picks.length);
+      picks.forEach((u, i) => {
+        const y = 150 + i * rowH, col = upgradeColor(u);
+        const k = rm ? 1 : Math.min(1, Math.max(0, (t - 8 - i * 6) / 10));
+        ctx3.globalAlpha = a * k;
+        ctx3.fillStyle = col;
+        ctx3.fillRect(TX, y, 4, rowH - 14);
+        ctx3.font = "bold 11px Orbitron";
+        ctx3.fillText(evolutionLabel(u), TX + 16, y + 14);
+        fit(u.name.toUpperCase(), "900 italic #px Orbitron", 24, TW - 16);
+        ctx3.fillStyle = "#ffffff";
+        ctx3.fillText(u.name.toUpperCase(), TX + 16, y + 42);
+        ctx3.fillStyle = "rgba(255,255,255,0.75)";
+        ctx3.font = "12px Orbitron";
+        wrapText(ctx3, u.desc, TX + 16, y + 62, TW - 16, 16, "left", Math.max(1, Math.floor((rowH - 70) / 16) + 1));
+      });
     }
+    ctx3.globalAlpha = a;
     if (!rm && t >= 10 && t <= 13) {
-      ctx3.globalAlpha = 0.25 * (14 - t) / 4;
+      ctx3.globalAlpha = 0.22 * (14 - t) / 4;
       ctx3.fillStyle = "#fff";
       ctx3.fillRect(0, 0, W, H);
+      ctx3.globalAlpha = a;
     }
-    ctx3.globalAlpha = a * 0.55;
-    ctx3.fillStyle = "#fff";
-    ctx3.font = "11px Orbitron";
-    ctx3.textAlign = "center";
-    ctx3.fillText("ANY KEY TO SKIP", W / 2, H - 96);
+    if (v.holding) {
+      const pulse = 0.55 + 0.45 * Math.sin(Date.now() * 6e-3);
+      ctx3.globalAlpha = pulse;
+      ctx3.fillStyle = "#ffffff";
+      ctx3.font = "900 13px Orbitron";
+      ctx3.textAlign = "center";
+      ctx3.fillText(`PRESS ${glyphText("confirm")} TO CONTINUE`, W / 2, H - 40);
+    }
     ctx3.restore();
   }
-  var TREE_NAME = { speed: "SPEED", power: "POWER", technique: "TECHNIQUE" };
-  function wrapText(ctx3, text, x, y, maxW, lh) {
+  function wrapText(ctx3, text, x, y, maxW, lh, align = "center", maxLines = 99) {
+    ctx3.textAlign = align;
     const words = String(text || "").split(" ");
-    let line = "", yy = y;
+    let line = "", yy = y, n = 0;
     for (const w of words) {
       const test = line ? line + " " + w : w;
       if (ctx3.measureText(test).width > maxW && line) {
+        if (++n >= maxLines) {
+          ctx3.fillText(line + "\u2026", x, yy);
+          return;
+        }
         ctx3.fillText(line, x, yy);
         line = w;
         yy += lh;
@@ -2732,70 +2952,53 @@
     }
     ctx3.restore();
   }
-  function drawRopes(ctx3) {
-    const R2 = CONSTANTS.ROPES, H = gameState.height, t = Date.now();
-    const top = H * CONSTANTS.LANE_Y[0] - 110, bot = H * CONSTANTS.LANE_Y[2] + 14;
-    const cornered = !!(gameState.player && gameState.player.cornered);
-    const live = gameState.enemies.some((e) => e.isBoss && e.controller === "live_wire");
-    const ropeYs = [0.3, 0.55, 0.8].map((f) => top + (bot - top) * f);
+  function drawLiveLanes(ctx3) {
+    if (!gameState.liveLanes || !gameState.liveLanes.length) return;
     ctx3.save();
-    const px = R2.playerPostX;
-    const buzz = cornered ? Math.sin(t * 0.09) * 2.5 : 0;
-    let ropeCol = "rgba(200, 220, 255, 0.35)", glow = 0;
-    if (live) {
-      ropeCol = cornered ? "#fff36b" : "rgba(255, 243, 107, 0.75)";
-      glow = cornered ? 26 : 12;
-    } else if (cornered) {
-      ropeCol = "#ff5a3c";
-      glow = 18;
-    }
-    ctx3.shadowColor = ropeCol;
-    ctx3.shadowBlur = glow;
-    ctx3.fillStyle = "rgba(20, 20, 30, 0.9)";
-    ctx3.fillRect(px - 7, top - 10, 14, bot - top + 14);
-    ctx3.fillStyle = ropeCol;
-    ctx3.fillRect(px - 2, top - 10, 4, bot - top + 14);
-    ctx3.strokeStyle = ropeCol;
-    ctx3.lineWidth = cornered ? 4 : 3;
-    ropeYs.forEach((y, i) => {
-      ctx3.beginPath();
-      ctx3.moveTo(0, y - 18 + buzz * (i % 2 ? 1 : -1));
-      ctx3.lineTo(px, y + buzz * (i % 2 ? -1 : 1));
-      ctx3.stroke();
-    });
-    if (live) {
-      ctx3.lineWidth = 1.5;
-      ctx3.strokeStyle = "#ffffff";
-      ropeYs.forEach((y) => {
-        if (Math.random() < (cornered ? 0.9 : 0.35)) {
+    for (const z of gameState.liveLanes) {
+      const y = gameState.height * CONSTANTS.LANE_Y[z.lane];
+      if (z.phase === "warn") {
+        const a = 0.35 + 0.35 * Math.sin(Date.now() * 0.04);
+        ctx3.strokeStyle = `rgba(255, 243, 107, ${a.toFixed(3)})`;
+        ctx3.lineWidth = 3;
+        ctx3.setLineDash([10, 10]);
+        ctx3.lineDashOffset = -Date.now() * 0.1 % 20;
+        ctx3.beginPath();
+        ctx3.moveTo(0, y);
+        ctx3.lineTo(gameState.width, y);
+        ctx3.stroke();
+        ctx3.setLineDash([]);
+      } else {
+        ctx3.shadowColor = "#fff36b";
+        ctx3.shadowBlur = 20;
+        ctx3.strokeStyle = "rgba(255, 243, 107, 0.35)";
+        ctx3.lineWidth = 22;
+        ctx3.beginPath();
+        ctx3.moveTo(0, y);
+        ctx3.lineTo(gameState.width, y);
+        ctx3.stroke();
+        ctx3.strokeStyle = "#fff36b";
+        ctx3.lineWidth = 3;
+        ctx3.beginPath();
+        ctx3.moveTo(0, y);
+        ctx3.lineTo(gameState.width, y);
+        ctx3.stroke();
+        ctx3.shadowBlur = 0;
+        ctx3.strokeStyle = "#ffffff";
+        ctx3.lineWidth = 1.5;
+        for (let k = 0; k < 4; k++) {
+          let x0 = Math.random() * gameState.width, y0 = y - 10 + Math.random() * 20;
           ctx3.beginPath();
-          let x0 = Math.random() * px, y0 = y - 12 + Math.random() * 6;
           ctx3.moveTo(x0, y0);
-          for (let k = 0; k < 4; k++) {
-            x0 += 6 + Math.random() * 8;
-            y0 += (Math.random() - 0.5) * 12;
+          for (let s = 0; s < 5; s++) {
+            x0 += 10 + Math.random() * 14;
+            y0 += (Math.random() - 0.5) * 18;
             ctx3.lineTo(x0, y0);
           }
           ctx3.stroke();
         }
-      });
+      }
     }
-    ctx3.shadowBlur = 0;
-    const ex = R2.enemyPostX;
-    const pinned = gameState.enemies.some((e) => (e.onRopes || 0) > 0);
-    const eCol = pinned ? "rgba(255,255,255,0.8)" : "rgba(200, 220, 255, 0.16)";
-    ctx3.fillStyle = "rgba(20, 20, 30, 0.6)";
-    ctx3.fillRect(ex - 6, top - 10, 12, bot - top + 14);
-    ctx3.fillStyle = eCol;
-    ctx3.fillRect(ex - 1.5, top - 10, 3, bot - top + 14);
-    ctx3.strokeStyle = eCol;
-    ctx3.lineWidth = 2;
-    ropeYs.forEach((y) => {
-      ctx3.beginPath();
-      ctx3.moveTo(ex, y);
-      ctx3.lineTo(gameState.width, y - 18);
-      ctx3.stroke();
-    });
     ctx3.restore();
   }
   function drawAfterimages(ctx3) {
@@ -2843,7 +3046,7 @@
     if (count > 0 && k.phase !== "up") {
       const pulse = 1 + Math.max(0, 1 - k.frame % CONSTANTS.KNOCKDOWN.framesPerCount / 10) * 0.35;
       ctx3.save();
-      ctx3.translate(rx + 25, ry - 190);
+      ctx3.translate(rx + 25, Math.max(150, ry - 190));
       ctx3.scale(pulse, pulse);
       ctx3.fillStyle = count >= 8 ? "#ff3355" : "#ffffff";
       ctx3.font = "900 italic 64px Orbitron";
@@ -2856,10 +3059,10 @@
     ctx3.textAlign = "center";
     ctx3.fillStyle = "#ffffff";
     ctx3.font = "900 italic 26px Orbitron";
-    ctx3.fillText(k.phase === "up" ? "BACK ON YOUR FEET" : "GET UP!", W / 2, 60);
+    ctx3.fillText(k.phase === "up" ? `BACK ON YOUR FEET \xB7 ${Math.round((k.hpFrac || 0) * 100)}% HP` : "GET UP!", W / 2, 60);
     ctx3.font = "bold 12px Orbitron";
     ctx3.fillStyle = "rgba(255,255,255,0.7)";
-    ctx3.fillText(k.phase === "up" ? "" : "HIT THE LANE PROMPTS BEFORE TEN \xB7 ONE COUNT PER ARC", W / 2, 82);
+    ctx3.fillText(k.phase === "up" ? "" : "HIT EACH PROMPT ON THE BEAT \xB7 CLEANER = MORE HEALTH", W / 2, 82);
     const n = k.seq.length;
     for (let i = 0; i < n; i++) {
       ctx3.fillStyle = i < k.idx ? "#22d3ee" : "rgba(255,255,255,0.2)";
@@ -2961,6 +3164,14 @@
     ctx3.fillStyle = "rgba(255,255,255,0.75)";
     ctx3.font = "bold 12px Orbitron";
     ctx3.fillText(P.tagline, px + pw - 150, py + 130);
+    if (!gameState.posterConfirmed && gameState.bossIntroTimer <= CONSTANTS.POSTER_HOLD_FRAME) {
+      const pulse = 0.55 + 0.45 * Math.sin(Date.now() * 6e-3);
+      ctx3.globalAlpha = a * pulse;
+      ctx3.fillStyle = "#ffffff";
+      ctx3.font = "900 16px Orbitron";
+      ctx3.shadowBlur = 0;
+      ctx3.fillText(`PRESS ${glyphText("confirm")} TO FIGHT`, W / 2, py + ph - 30);
+    }
     if (gameState.bossIntroTimer < 40) {
       ctx3.globalAlpha = Math.min(1, (40 - gameState.bossIntroTimer) / 8) * outK;
       ctx3.fillStyle = "#ffffff";
@@ -3002,6 +3213,88 @@
       ctx3.fillStyle = "rgba(255,255,255,0.7)";
       ctx3.font = "bold 12px Orbitron";
       ctx3.fillText(card.tagline, W / 2, by + 132);
+    }
+    ctx3.restore();
+  }
+  function drawSweep(ctx3) {
+    const lanes = gameState.sweepLanes || [];
+    if (lanes.some(Boolean)) {
+      const pulse = 0.5 + 0.5 * Math.sin(Date.now() * 0.03);
+      ctx3.save();
+      lanes.forEach((on, l) => {
+        if (!on) return;
+        const y = gameState.height * CONSTANTS.LANE_Y[l];
+        ctx3.strokeStyle = `rgba(255, 176, 32, ${(0.25 + 0.25 * pulse).toFixed(3)})`;
+        ctx3.lineWidth = 18;
+        ctx3.beginPath();
+        ctx3.moveTo(0, y);
+        ctx3.lineTo(gameState.width, y);
+        ctx3.stroke();
+        ctx3.strokeStyle = "#ffb020";
+        ctx3.lineWidth = 3;
+        ctx3.setLineDash([16, 10]);
+        ctx3.lineDashOffset = Date.now() * 0.08 % 26;
+        ctx3.beginPath();
+        ctx3.moveTo(0, y);
+        ctx3.lineTo(gameState.width, y);
+        ctx3.stroke();
+        ctx3.setLineDash([]);
+      });
+      ctx3.restore();
+    }
+    if ((gameState.sweepHint || 0) > 0 && gameState.player) {
+      const p = gameState.player, a = Math.min(1, gameState.sweepHint / 12);
+      const g1 = glyph("ghost"), g2 = glyph("guard");
+      const top = p.y - 214 < 100 ? p.y + 26 : p.y - 214;
+      ctx3.save();
+      ctx3.globalAlpha = a;
+      ctx3.textAlign = "center";
+      ctx3.fillStyle = "rgba(6,8,14,0.88)";
+      ctx3.fillRect(p.x - 70, top, 190, 50);
+      ctx3.fillStyle = "#ffb020";
+      ctx3.fillRect(p.x - 70, top, 190, 3);
+      ctx3.font = "900 11px Orbitron";
+      ctx3.fillStyle = "#ffb020";
+      ctx3.fillText("CAN'T SLIP A SWEEP", p.x + 25, top + 16);
+      ctx3.font = "900 12px Orbitron";
+      ctx3.fillStyle = "#ffffff";
+      ctx3.fillText(`${g1.label} GHOST  \xB7  ${g2.label} GUARD`, p.x + 25, top + 38);
+      ctx3.restore();
+    }
+  }
+  function drawChargeRing(ctx3) {
+    const p = gameState.player;
+    if (!p || !p.charging || !gameState.progressionMods.loadedCross) return;
+    const LC = CONSTANTS.VERBS.loadedCross;
+    const k = Math.min(1, p.crossCharge / LC.chargeFrames), loaded = k >= 1;
+    const cx = p.x + 25, cy = p.y - 62, col = buildColor();
+    const r = loaded ? 70 + Math.sin(Date.now() * 0.03) * 4 : 70;
+    ctx3.save();
+    ctx3.lineWidth = 3;
+    ctx3.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx3.beginPath();
+    ctx3.arc(cx, cy, 70, 0, Math.PI * 2);
+    ctx3.stroke();
+    ctx3.shadowColor = col;
+    ctx3.shadowBlur = loaded ? 28 : 12;
+    ctx3.strokeStyle = loaded ? "#ffffff" : col;
+    ctx3.lineWidth = loaded ? 7 : 5;
+    ctx3.beginPath();
+    ctx3.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * k);
+    ctx3.stroke();
+    if (loaded) {
+      ctx3.strokeStyle = col;
+      ctx3.lineWidth = 3;
+      ctx3.globalAlpha = 0.6;
+      ctx3.beginPath();
+      ctx3.arc(cx, cy, r + 10, 0, Math.PI * 2);
+      ctx3.stroke();
+      ctx3.globalAlpha = 1;
+      ctx3.shadowBlur = 0;
+      ctx3.fillStyle = "#ffffff";
+      ctx3.font = "900 italic 14px Orbitron";
+      ctx3.textAlign = "center";
+      ctx3.fillText("LOADED \u2014 RELEASE", cx, cy + r + 26);
     }
     ctx3.restore();
   }
@@ -3220,21 +3513,21 @@
       // ---- SPEED (cyan) ----
       { id: "spd_r1", kind: "rank", tree: "speed", rank: 1, memoryPolicy: "none", name: "Quick Hands", desc: "Faster jabs, hooks and recoveries.", weight: 10, effects: [{ op: "incOrb", tree: "speed", amount: 1 }, { op: "mulStat", stat: "speedMult", amount: 0.25 }] },
       { id: "spd_r2", kind: "rank", tree: "speed", rank: 2, memoryPolicy: "none", name: "Rhythm Keeper", desc: "Faster still \u2014 and a missed Jab no longer snaps your Combo.", weight: 10, effects: [{ op: "incOrb", tree: "speed", amount: 1 }, { op: "mulStat", stat: "speedMult", amount: 0.2 }] },
-      { id: "spd_r3", kind: "rank", tree: "speed", rank: 3, verb: true, memoryPolicy: "none", name: "Pivot Slip", desc: "VERB: every slip carries you forward into punching range, and the first punch out of it is instant.", weight: 12, effects: [{ op: "incOrb", tree: "speed", amount: 1 }, { op: "setFlag", key: "pivotSlip", value: true }] },
+      { id: "spd_r3", kind: "rank", tree: "speed", rank: 3, verb: true, memoryPolicy: "none", name: "Pivot Slip", desc: "Every slip carries you forward into punching range \u2014 and your first punch out of it lands instantly.", weight: 12, effects: [{ op: "incOrb", tree: "speed", amount: 1 }, { op: "setFlag", key: "pivotSlip", value: true }] },
       { id: "spd_r4", kind: "rank", tree: "speed", rank: 4, memoryPolicy: "none", name: "Hair Trigger", desc: "Faster again \u2014 and a landed Jab or Hook can be cancelled straight into a slip.", weight: 10, effects: [{ op: "incOrb", tree: "speed", amount: 1 }, { op: "mulStat", stat: "speedMult", amount: 0.2 }] },
-      { id: "apex_speed_blur_step", kind: "rank", draftRole: "apex", tree: "speed", rank: 5, memoryPolicy: "none", name: "Blur Step", desc: "APEX: Ghost Step gains a second charge \u2014 dash twice in a row before it has to refill.", weight: 8, effects: [{ op: "incOrb", tree: "speed", amount: 1 }, { op: "grantUpgradeId", id: "apex_speed_blur_step" }, { op: "setFlag", key: "blurStep", value: true }] },
+      { id: "apex_speed_blur_step", kind: "rank", draftRole: "apex", tree: "speed", rank: 5, memoryPolicy: "none", name: "Blur Step", desc: "Ghost Step gains a second charge \u2014 dash twice in a row before it has to refill.", weight: 8, effects: [{ op: "incOrb", tree: "speed", amount: 1 }, { op: "grantUpgradeId", id: "apex_speed_blur_step" }, { op: "setFlag", key: "blurStep", value: true }] },
       // ---- POWER (magenta) ----
       { id: "pwr_r1", kind: "rank", tree: "power", rank: 1, memoryPolicy: "none", name: "Heavy Shoulders", desc: "Every blow carries more knockback authority.", weight: 10, effects: [{ op: "incOrb", tree: "power", amount: 1 }, { op: "mulStat", stat: "powerMult", amount: 0.35 }] },
       { id: "pwr_r2", kind: "rank", tree: "power", rank: 2, memoryPolicy: "none", name: "Long Reach", desc: "Heavier still \u2014 and your Cross reaches 25% further.", weight: 10, effects: [{ op: "incOrb", tree: "power", amount: 1 }, { op: "mulStat", stat: "powerMult", amount: 0.3 }] },
-      { id: "pwr_r3", kind: "rank", tree: "power", rank: 3, verb: true, memoryPolicy: "none", name: "Loaded Cross", desc: "VERB: Cross now fires on release. Hold it to load a guard-breaking blow that drives enemies into their ropes.", weight: 12, effects: [{ op: "incOrb", tree: "power", amount: 1 }, { op: "setFlag", key: "loadedCross", value: true }] },
+      { id: "pwr_r3", kind: "rank", tree: "power", rank: 3, verb: true, memoryPolicy: "none", name: "Loaded Cross", desc: "Hold Cross to load it, release to throw. A loaded Cross breaks any guard and blasts enemies across the ring. A quick tap is still a normal Cross.", weight: 12, effects: [{ op: "incOrb", tree: "power", amount: 1 }, { op: "setFlag", key: "loadedCross", value: true }] },
       { id: "pwr_r4", kind: "rank", tree: "power", rank: 4, memoryPolicy: "none", name: "Iron Frame", desc: "Heavier again \u2014 knocked-back enemies bowl through everyone behind them.", weight: 10, effects: [{ op: "incOrb", tree: "power", amount: 1 }, { op: "mulStat", stat: "powerMult", amount: 0.3 }] },
-      { id: "apex_power_executioner", kind: "rank", draftRole: "apex", tree: "power", rank: 5, memoryPolicy: "none", name: "Executioner's Cross", desc: "APEX: a Cross against an enemy below 25% health is a guaranteed finish.", weight: 8, effects: [{ op: "incOrb", tree: "power", amount: 1 }, { op: "grantUpgradeId", id: "apex_power_executioner" }, { op: "setFlag", key: "executionerCross", value: true }] },
+      { id: "apex_power_executioner", kind: "rank", draftRole: "apex", tree: "power", rank: 5, memoryPolicy: "none", name: "Executioner's Cross", desc: "a Cross against an enemy below 25% health is a guaranteed finish.", weight: 8, effects: [{ op: "incOrb", tree: "power", amount: 1 }, { op: "grantUpgradeId", id: "apex_power_executioner" }, { op: "setFlag", key: "executionerCross", value: true }] },
       // ---- TECHNIQUE (yellow) ----
       { id: "tec_r1", kind: "rank", tree: "technique", rank: 1, memoryPolicy: "none", name: "Sharp Eyes", desc: "More Instinct from clean reads and Perfect Slips.", weight: 10, effects: [{ op: "incOrb", tree: "technique", amount: 1 }, { op: "mulStat", stat: "techMult", amount: 0.3 }] },
       { id: "tec_r2", kind: "rank", tree: "technique", rank: 2, memoryPolicy: "none", name: "Double Tap", desc: "Sharper still \u2014 a Perfect Slip charges TWO Counter hits.", weight: 10, effects: [{ op: "incOrb", tree: "technique", amount: 1 }, { op: "mulStat", stat: "techMult", amount: 0.25 }] },
-      { id: "tec_r3", kind: "rank", tree: "technique", rank: 3, verb: true, memoryPolicy: "none", name: "Afterimage Slip", desc: "VERB: a Perfect Slip leaves a neon afterimage in the lane you left \u2014 it throws a delayed echo punch at whoever swung.", weight: 12, effects: [{ op: "incOrb", tree: "technique", amount: 1 }, { op: "setFlag", key: "afterimageSlip", value: true }] },
+      { id: "tec_r3", kind: "rank", tree: "technique", rank: 3, verb: true, memoryPolicy: "none", name: "Afterimage Slip", desc: "A Perfect Slip leaves a neon afterimage in the lane you left \u2014 a beat later it throws an echo punch at whoever swung.", weight: 12, effects: [{ op: "incOrb", tree: "technique", amount: 1 }, { op: "setFlag", key: "afterimageSlip", value: true }] },
       { id: "tec_r4", kind: "rank", tree: "technique", rank: 4, memoryPolicy: "none", name: "True Read", desc: "Sharper again \u2014 a Perfect Slip on a boss EXPOSES it for a True Read.", weight: 10, effects: [{ op: "incOrb", tree: "technique", amount: 1 }, { op: "mulStat", stat: "techMult", amount: 0.25 }] },
-      { id: "apex_technique_flow_state", kind: "rank", draftRole: "apex", tree: "technique", rank: 5, memoryPolicy: "none", name: "Flow State", desc: "APEX: a sustained streak of clean hits and Perfect Slips ramps Instinct and EXP gain. Getting hit resets it.", weight: 8, effects: [{ op: "incOrb", tree: "technique", amount: 1 }, { op: "grantUpgradeId", id: "apex_technique_flow_state" }, { op: "setFlag", key: "flowState", value: true }] }
+      { id: "apex_technique_flow_state", kind: "rank", draftRole: "apex", tree: "technique", rank: 5, memoryPolicy: "none", name: "Flow State", desc: "a sustained streak of clean hits and Perfect Slips ramps Instinct and EXP gain. Getting hit resets it.", weight: 8, effects: [{ op: "incOrb", tree: "technique", amount: 1 }, { op: "grantUpgradeId", id: "apex_technique_flow_state" }, { op: "setFlag", key: "flowState", value: true }] }
     ],
     masteries: [
       { id: "mast_weavers_step", kind: "mastery", draftRole: "evolution", tree: "speed", tier: 2, repeatable: false, memoryPolicy: "hard", name: "Weaver's Step", desc: "Ghost Step cooldown reduced by 20%.", weight: 8, reqs: { orbTreeAtLeast: { speed: 2 }, notOwned: ["mast_weavers_step"] }, effects: [{ op: "grantUpgradeId", id: "mast_weavers_step" }, { op: "mulMod", key: "ghostStepCooldownMult", amount: 0.8 }] },
@@ -3255,9 +3548,9 @@
       { id: "fuse_ghost_counter", kind: "fusion", draftRole: "capstone", tree: "general", trees: ["speed", "technique"], tier: 3, repeatable: false, memoryPolicy: "hard", name: "Ghost Counter", desc: "Ghost Step through an active hitbox to gain Counter Charge.", weight: 6, reqs: { orbTreeAtLeast: { speed: 3, technique: 3 }, notOwned: ["fuse_ghost_counter"] }, effects: [{ op: "grantUpgradeId", id: "fuse_ghost_counter" }, { op: "setFlag", key: "ghostCounter", value: true }] },
       { id: "fuse_shatter_read", kind: "fusion", draftRole: "capstone", tree: "general", trees: ["power", "technique"], tier: 3, repeatable: false, memoryPolicy: "hard", name: "Shatter Read", desc: "A Counter-Charged Cross partially bypasses boss resistance and forces a stronger stagger.", weight: 6, reqs: { orbTreeAtLeast: { power: 3, technique: 3 }, notOwned: ["fuse_shatter_read"] }, effects: [{ op: "grantUpgradeId", id: "fuse_shatter_read" }, { op: "setFlag", key: "shatterRead", value: true }, { op: "addMod", key: "shatterReadBossBypass", amount: 0.35 }, { op: "addMod", key: "shatterReadStaggerBonus", amount: 12 }] },
       // ---- EVOLVED (both trees at rank 5, base Fusion owned) ----
-      { id: "evo_infinite_circuit", kind: "fusion", evolved: true, draftRole: "capstone", tree: "general", trees: ["speed", "power"], tier: 4, repeatable: false, memoryPolicy: "hard", name: "Infinite Circuit", desc: "EVOLVED: an alternating Jab/Hook string never drops Combo on a whiff, and every 4th alternation charges a Counter.", weight: 8, reqs: { orbTreeAtLeast: { speed: 5, power: 5 }, hasUpgradeIds: ["fuse_dempsey_circuit"], notOwned: ["evo_infinite_circuit"] }, effects: [{ op: "grantUpgradeId", id: "evo_infinite_circuit" }, { op: "setFlag", key: "infiniteCircuit", value: true }] },
-      { id: "evo_phantom_riposte", kind: "fusion", evolved: true, draftRole: "capstone", tree: "general", trees: ["speed", "technique"], tier: 4, repeatable: false, memoryPolicy: "hard", name: "Phantom Riposte", desc: "EVOLVED: a perfect Ghost Step leaves an afterimage that instantly echoes a punch back at the attacker.", weight: 8, reqs: { orbTreeAtLeast: { speed: 5, technique: 5 }, hasUpgradeIds: ["fuse_ghost_counter"], notOwned: ["evo_phantom_riposte"] }, effects: [{ op: "grantUpgradeId", id: "evo_phantom_riposte" }, { op: "setFlag", key: "phantomRiposte", value: true }] },
-      { id: "evo_shatter_nova", kind: "fusion", evolved: true, draftRole: "capstone", tree: "general", trees: ["power", "technique"], tier: 4, repeatable: false, memoryPolicy: "hard", name: "Shatter Nova", desc: "EVOLVED: a Counter-Charged Cross on a boss tears off an extra 8% of its health; on anyone else it shatters every enemy in the lane.", weight: 8, reqs: { orbTreeAtLeast: { power: 5, technique: 5 }, hasUpgradeIds: ["fuse_shatter_read"], notOwned: ["evo_shatter_nova"] }, effects: [{ op: "grantUpgradeId", id: "evo_shatter_nova" }, { op: "setFlag", key: "shatterNova", value: true }] }
+      { id: "evo_infinite_circuit", kind: "fusion", evolved: true, draftRole: "capstone", tree: "general", trees: ["speed", "power"], tier: 4, repeatable: false, memoryPolicy: "hard", name: "Infinite Circuit", desc: "an alternating Jab/Hook string never drops Combo on a whiff, and every 4th alternation charges a Counter.", weight: 8, reqs: { orbTreeAtLeast: { speed: 5, power: 5 }, hasUpgradeIds: ["fuse_dempsey_circuit"], notOwned: ["evo_infinite_circuit"] }, effects: [{ op: "grantUpgradeId", id: "evo_infinite_circuit" }, { op: "setFlag", key: "infiniteCircuit", value: true }] },
+      { id: "evo_phantom_riposte", kind: "fusion", evolved: true, draftRole: "capstone", tree: "general", trees: ["speed", "technique"], tier: 4, repeatable: false, memoryPolicy: "hard", name: "Phantom Riposte", desc: "a perfect Ghost Step leaves an afterimage that instantly echoes a punch back at the attacker.", weight: 8, reqs: { orbTreeAtLeast: { speed: 5, technique: 5 }, hasUpgradeIds: ["fuse_ghost_counter"], notOwned: ["evo_phantom_riposte"] }, effects: [{ op: "grantUpgradeId", id: "evo_phantom_riposte" }, { op: "setFlag", key: "phantomRiposte", value: true }] },
+      { id: "evo_shatter_nova", kind: "fusion", evolved: true, draftRole: "capstone", tree: "general", trees: ["power", "technique"], tier: 4, repeatable: false, memoryPolicy: "hard", name: "Shatter Nova", desc: "a Counter-Charged Cross on a boss tears off an extra 8% of its health; on anyone else it shatters every enemy in the lane.", weight: 8, reqs: { orbTreeAtLeast: { power: 5, technique: 5 }, hasUpgradeIds: ["fuse_shatter_read"], notOwned: ["evo_shatter_nova"] }, effects: [{ op: "grantUpgradeId", id: "evo_shatter_nova" }, { op: "setFlag", key: "shatterNova", value: true }] }
     ],
     overclocks: [
       { id: "oc_vital_surge", kind: "overclock", draftRole: "fallback", tree: "general", tier: 4, repeatable: true, memoryPolicy: "soft", name: "Vital Surge", desc: "Restore +20 health.", weight: 20, reqs: {}, effects: [{ op: "heal", amount: 20 }, { op: "incOverclock", key: "vitality", amount: 1 }] },
@@ -3393,15 +3686,20 @@
     st.currentDraftOptions = [];
     let upgradeScreen = document.getElementById("upgrade-screen");
     if (upgradeScreen) upgradeScreen.style.display = "none";
-    const proceed = () => {
-      if (st.pendingUpgrades > 0) {
-        if (window.engineTriggerUpgradeDraft) window.engineTriggerUpgradeDraft();
-      } else {
-        st.screen = "playing";
-      }
+    if (!st.evoChain || !st.evoChain.active) st.evoChain = { active: true, total: 1, picks: [] };
+    st.evoChain.picks.push(upgrade);
+    if (st.pendingUpgrades > 0) {
+      if (window.engineTriggerUpgradeDraft) window.engineTriggerUpgradeDraft();
+      else st.screen = "playing";
+      return;
+    }
+    const picks = st.evoChain.picks.slice();
+    st.evoChain = { active: false, total: 0, picks: [] };
+    const resume = () => {
+      st.screen = "playing";
     };
-    if (window.enginePlayUpgradeVignette) window.enginePlayUpgradeVignette(upgrade, proceed);
-    else proceed();
+    if (window.enginePlayUpgradeVignette) window.enginePlayUpgradeVignette(picks, resume);
+    else resume();
   }
   var ARC_COLORS = { 1: "#22d3ee", 2: "#34d399", 3: "#f87171", 4: "#c084fc", 5: "#facc15" };
   var ARC_TINTS = {
@@ -3665,39 +3963,6 @@
     pushRecentlyOffered(st, chosen.map((c) => c.id));
     return chosen;
   }
-  var TREE_SHORT = { speed: "SPD", power: "PWR", technique: "TEC" };
-  function buildRankTease(st, pool) {
-    const cap = currentRankCap(st);
-    const order = st.rankOrder || [];
-    let best = null;
-    for (const tree of CONSTANTS.TREE_ORDER) {
-      const r = st.orbCounts[tree] || 0;
-      if (r < cap || r >= CONSTANTS.MAX_RANK) continue;
-      if (!best || r > best.r || r === best.r && order.lastIndexOf(tree) > order.lastIndexOf(best.tree)) best = { tree, r };
-    }
-    if (!best) return null;
-    const next = nextRank(st, pool, best.tree);
-    if (!next) return null;
-    return { ...next, locked: true, reqText: `UNLOCKS IN ARC ${CONSTANTS.arcForRank(next.rank)}` };
-  }
-  function buildDraftTease(st, pool, arcIndex) {
-    return buildRankTease(st, pool) || buildFusionTease(st, pool, arcIndex);
-  }
-  function buildFusionTease(st, pool, arcIndex) {
-    if (arcIndex !== 1) return null;
-    if ((st.currentDraftOptions || []).some((o) => o.kind === "fusion")) return null;
-    let best = null;
-    for (const f of pool.fusions) {
-      if (f.evolved || st.acquiredUpgradeIds.includes(f.id)) continue;
-      const need = f.reqs && f.reqs.orbTreeAtLeast || {};
-      let missing = 0;
-      for (const [tree, lvl] of Object.entries(need)) missing += Math.max(0, lvl - (st.orbCounts[tree] || 0));
-      if (!best || missing < best.missing) best = { fusion: f, missing, need };
-    }
-    if (!best) return null;
-    const reqText = Object.entries(best.need).map(([t, l]) => `${TREE_SHORT[t] || t} ${Math.min(st.orbCounts[t] || 0, l)}/${l}`).join(" \xB7 ");
-    return { ...best.fusion, locked: true, reqText };
-  }
 
   // src/systems/tutorial.js
   function triggerTutorial(id, title, text) {
@@ -3790,33 +4055,6 @@
     });
   }
 
-  // src/systems/colors.js
-  function treeColor(tree) {
-    return CONSTANTS.TREES[tree] && CONSTANTS.TREES[tree].color || "#ffffff";
-  }
-  function upgradeColorFor(u) {
-    if (!u) return "#ffffff";
-    if (CONSTANTS.FUSION_COLORS[u.id]) return CONSTANTS.FUSION_COLORS[u.id];
-    if (u.kind === "overclock") return "#c084fc";
-    return treeColor(u.tree);
-  }
-  function buildColor() {
-    const owned = gameState.acquiredUpgradeIds || [];
-    for (let i = owned.length - 1; i >= 0; i--) {
-      if (CONSTANTS.FUSION_COLORS[owned[i]]) return CONSTANTS.FUSION_COLORS[owned[i]];
-    }
-    let best = null, bestRank = 0;
-    const order = gameState.rankOrder || [];
-    for (const tree of CONSTANTS.TREE_ORDER) {
-      const r = gameState.orbCounts && gameState.orbCounts[tree] || 0;
-      if (r > bestRank || r === bestRank && r > 0 && order.lastIndexOf(tree) > order.lastIndexOf(best)) {
-        best = tree;
-        bestRank = r;
-      }
-    }
-    return best ? treeColor(best) : "#ffffff";
-  }
-
   // src/systems/negative.js
   var ECHO_DELAY = 26;
   function invertHex(hex) {
@@ -3862,7 +4100,7 @@
     let buffActive = gameState.player.slipBuff > 0;
     const loaded = type === "cross" && !!gameState.player.crossLoaded;
     const spark = buildColor();
-    let ropeBounce = false, novaLanes = [];
+    let novaLanes = [];
     if (gameState.player.slipBuff > 0) gameState.player.slipBuff--;
     const jX = () => Math.random() * 50 - 25;
     const jY = () => Math.random() * 30 - 15;
@@ -3933,12 +4171,6 @@
         }
         if (buffActive) dmg *= 2;
         if (loaded) dmg = Math.round(dmg * 1.3);
-        if ((en.onRopes || 0) > 0 && (buffActive || loaded)) {
-          dmg = Math.round(dmg * CONSTANTS.ROPES.bounceDmgMult);
-          ropeBounce = true;
-          en.ropeBounce = 8;
-          spawnFloatingText(en.x + jX(), en.y - 130 + jY(), "ROPE BOUNCE!", spark);
-        }
         if (gameState.progressionMods.shatterNova && buffActive && type === "cross") {
           if (en.isBoss) dmg += Math.round(en.maxHp * 0.08);
           else novaLanes.push(en.lane);
@@ -4069,7 +4301,8 @@
           spawnFloatingText(en.x + jX(), en.y - 100 + jY(), "EXECUTED!", "#ff0055");
           createShatter(en.x, en.y - 60, "#ff0055");
         }
-        let powerFactor = gameState.stats.powerMult * (gameState.isInstinct ? 2 : 1) * (buffActive ? 1.5 : 1);
+        const instinctKB = gameState.isInstinct ? (gameState.zoneTimer || 0) > 0 ? CONSTANTS.ZONE.knockbackMult : 2 : 1;
+        let powerFactor = gameState.stats.powerMult * instinctKB * (buffActive ? 1.5 : 1);
         if (trueReadActive) powerFactor *= 1.5;
         let baseKB = 0;
         if (loaded) {
@@ -4179,10 +4412,6 @@
       let stopMult = 1 + (gameState.isInstinct ? 0.5 : 0) + (buffActive ? 0.5 : 0);
       gameState.hitstop = isJab ? Math.floor(2 * stopMult) : type === "cross" ? Math.floor(5 * stopMult) : Math.floor(3 * stopMult);
       if (loaded) gameState.hitstop += 6;
-      if (ropeBounce) {
-        gameState.hitstop += CONSTANTS.ROPES.bounceHitstop;
-        playSound("rope_bounce");
-      }
       gameState.shake = (type === "cross" ? 8 : isJab ? 2 : 4) * stopMult;
       if (type === "cross" || buffActive) doFlash(buffActive ? 0.6 : 0.2);
       if (type === "cross" && gameState.orbCounts.power >= 2) {
@@ -4245,17 +4474,15 @@
       crossCharge: 0,
       crossLoaded: false,
       bufferedCharge: 0,
-      cornered: false,
-      cornerTimer: 0,
       dempseyAlternations: 0
     };
   }
-  var R = CONSTANTS.ROPES;
-  var FOOTWORK_MIN_X = R.playerMinX;
-  var FOOTWORK_MAX_X = R.playerMaxX;
-  var FOOTWORK_ADVANCE_SPD = 4.2;
-  var FOOTWORK_RETREAT_SPD = 3.4;
-  var FOOTWORK_HOME_PULL = 0.02;
+  var FW = CONSTANTS.FOOTWORK;
+  var FOOTWORK_MIN_X = FW.minX;
+  var FOOTWORK_MAX_X = FW.maxX;
+  var FOOTWORK_ADVANCE_SPD = FW.advanceSpd;
+  var FOOTWORK_RETREAT_SPD = FW.retreatSpd;
+  var FOOTWORK_HOME_PULL = FW.homePull;
   function resetJabString() {
     if (gameState.player) {
       gameState.player.jabStep = 0;
@@ -4342,11 +4569,10 @@
   }
   function checkPerfectSlip(oldLane) {
     let slipQuality = "none", bossSlipped = null;
-    const cornered = CONSTANTS.isCornered(gameState.player);
     gameState.enemies.forEach((en) => {
-      if (en.lane === oldLane && en.stun <= 0) {
+      if (en.lane === oldLane && en.stun <= 0 && en.currentMove !== "sweep") {
         let isThreat = false;
-        const { perfect: perfectThresh, good: goodThresh } = CONSTANTS.getSlipThresholds(en.type, gameState.progressionMods.perfectSlipWindowBonus, cornered);
+        const { perfect: perfectThresh, good: goodThresh } = CONSTANTS.getSlipThresholds(en.type, gameState.progressionMods.perfectSlipWindowBonus);
         if (en.type === "zoner") {
           if (en.attackCooldown <= 40 && en.x > gameState.player.x - 20) isThreat = true;
         } else if (Math.abs(en.x - gameState.player.x) < 130 && en.attackCooldown <= 22 && en.x > gameState.player.x - 20) {
@@ -4438,6 +4664,7 @@
     playSound("perfect_slip");
     if (zone) {
       gameState.zoneTimer = CONSTANTS.ZONE.frames;
+      gameState.zoneHold = 0;
       playSound("zone");
       spawnFloatingText(gameState.player.x, gameState.player.y - 140, "THE ZONE", "#ffffff");
     }
@@ -4537,6 +4764,13 @@
       gameState.player.punchTimer = Math.max(8, Math.floor(16 * sF));
       gameState.player.hitFrame = Math.max(3, Math.floor(6 * sF));
     }
+    if ((gameState.zoneTimer || 0) > 0 && t !== "guard_jab" && t !== "check_hook") {
+      const tgt = gameState.enemies.filter((e) => e.lane === gameState.player.lane && e.x > gameState.player.x && e.x - gameState.player.x < 320).sort((a, b) => a.x - b.x)[0];
+      if (tgt && tgt.x - gameState.player.x > 95) {
+        gameState.player.x = Math.min(tgt.x - 90, FOOTWORK_MAX_X + 120);
+        for (let i = 0; i < 6; i++) gameState.particles.push({ x: gameState.player.x - 20 - Math.random() * 40, y: gameState.player.y - 30 - Math.random() * 60, vx: -9, vy: 0, life: 0.5, color: "#ffffff", type: "dash_line" });
+      }
+    }
     if (gameState.player.pivotTimer > 0 && t !== "guard_jab" && t !== "check_hook") {
       gameState.player.hitFrame = 1;
       gameState.player.pivotTimer = 0;
@@ -4584,6 +4818,10 @@
     }
     if (gameState.enemies.some((e) => e.isBoss && e.desperation)) gameState.statDespDamage++;
   }
+  function isEngaged(p) {
+    if (p.comboWindow > 0 || p.state === "punching" || p.state === "recovery") return true;
+    return gameState.enemies.some((e) => e.hp > 0 && e.lane === p.lane && e.x > p.x - 30 && e.x - p.x < 160);
+  }
   function readInput() {
     const K2 = getBinds();
     const jp = (code) => !!gameState.keys[code] && !gameState.lastKeys[code];
@@ -4624,14 +4862,8 @@
     if (p.state !== "hurt" && p.state !== "punching") {
       if (input.holdRight) p.x = Math.min(FOOTWORK_MAX_X, p.x + FOOTWORK_ADVANCE_SPD);
       else if (input.holdLeft) p.x = Math.max(FOOTWORK_MIN_X, p.x - FOOTWORK_RETREAT_SPD);
-      else p.x += (180 - p.x) * FOOTWORK_HOME_PULL;
+      else if (!FW.holdGroundWhenEngaged || !isEngaged(p)) p.x += (180 - p.x) * FOOTWORK_HOME_PULL;
     }
-    p.cornered = CONSTANTS.isCornered(p);
-    if (p.cornered) {
-      if (p.cornerTimer === 0) spawnFloatingText(p.x + 10, p.y - 150, "CORNERED", "#ff5a3c");
-      if (p.cornerTimer % 30 === 0) playSound("rope_buzz");
-      p.cornerTimer++;
-    } else p.cornerTimer = 0;
     if (input.instinct && gameState.instinctMeter >= 100 && !gameState.isInstinct) activateInstinct(false);
     if (p.inputBufferTimer > 0) {
       if (--p.inputBufferTimer <= 0) {
@@ -4653,28 +4885,31 @@
     }
     let crossAttempt = input.cross, crossCharge = 0;
     if (gameState.progressionMods.loadedCross) {
+      const LC = CONSTANTS.VERBS.loadedCross;
       crossAttempt = false;
+      if (input.cross) {
+        p.charging = true;
+        p.crossCharge = 0;
+      }
       if (p.charging) {
         if (input.crossHeld) {
-          p.crossCharge = Math.min(CONSTANTS.VERBS.loadedCross.maxFrames, p.crossCharge + 1);
-          if (p.crossCharge === CONSTANTS.VERBS.loadedCross.chargeFrames) {
+          p.crossCharge = Math.min(LC.maxFrames, p.crossCharge + 1);
+          if (p.crossCharge === LC.chargeFrames) {
             playSound("charge_ready");
-            createImpact(p.x + 60, p.y - 70, buildColor());
+            doFlash(0.15);
+            gameState.shake = Math.max(gameState.shake, 6);
+            triggerShockwave(p.x + 25, p.y - 60, buildColor());
+            spawnFloatingText(p.x + 25, p.y - 150, "LOADED", buildColor());
           }
-          if (gameState.particles.length < 90 && p.crossCharge % 3 === 0) {
-            const a = Math.random() * Math.PI * 2, d = 40 + Math.random() * 20;
-            gameState.particles.push({ x: p.x + 55 + Math.cos(a) * d, y: p.y - 70 + Math.sin(a) * d, vx: -Math.cos(a) * 4, vy: -Math.sin(a) * 4, life: 0.4, color: buildColor(), type: "spark" });
+          if (gameState.particles.length < 110 && p.crossCharge % 2 === 0) {
+            const a = Math.random() * Math.PI * 2, d = 50 + Math.random() * 25;
+            gameState.particles.push({ x: p.x + 45 + Math.cos(a) * d, y: p.y - 65 + Math.sin(a) * d, vx: -Math.cos(a) * 5, vy: -Math.sin(a) * 5, life: 0.45, color: buildColor(), type: "spark" });
           }
         } else {
           crossAttempt = true;
           crossCharge = p.crossCharge;
           p.charging = false;
         }
-      } else if (input.cross) {
-        if (p.state === "idle") {
-          p.charging = true;
-          p.crossCharge = 0;
-        } else crossAttempt = true;
       }
     }
     if (input.guard) {
@@ -4718,7 +4953,7 @@
         }
       } else if (moveAction) {
         if (p.state === "guarding") p.state = "idle";
-        p.charging = false;
+        if (moveAction === "ghost") p.charging = false;
         executeMovementInput(moveAction);
       } else if (input.guard && !p.charging) {
         executeMovementInput("guard");
@@ -4807,20 +5042,18 @@
 
   // src/entities/enemies.js
   function applyKnockback(en) {
-    const preX = en.x;
     en.x += en.vx;
     en.vx *= 0.85;
-    const ROPE = CONSTANTS.ROPES.enemyRopeX;
-    if (en.controller !== "static_monk" && preX <= ROPE && en.x > ROPE) {
-      en.x = ROPE;
-      en.vx = 0;
-      if ((en.onRopes || 0) <= 0) {
-        playSound("rope_thud");
-        createImpact(ROPE + 30, en.y - 70, "#ffffff");
-        spawnFloatingText(en.x + 20, en.y - 150, "ON THE ROPES", "#ffffff");
-      }
-      en.onRopes = CONSTANTS.ROPES.pinFrames;
-    }
+  }
+  function isSweep(en) {
+    return en.type === "bruiser" && !en.isBoss && !en.tutorialType && en.currentMove === "sweep";
+  }
+  function maybeSweepHint() {
+    if ((gameState.sweepHint || 0) > 0) return;
+    const shown = Number(profileCount("sweepHints")) || 0;
+    if (shown >= CONSTANTS.SWEEP.hintsPerSave) return;
+    bumpProfileCount("sweepHints");
+    gameState.sweepHint = 70;
   }
   function endAttack(en) {
     if ((en.stringLen || 1) > 1 && (en.stringIdx || 0) < en.stringLen - 1) {
@@ -4830,7 +5063,10 @@
       return;
     }
     en.stringIdx = 0;
-    if (en.type === "bruiser") en.currentMove = "bash";
+    if (en.type === "bruiser") {
+      en.attackCount = (en.attackCount || 0) + 1;
+      en.currentMove = en.attackCount % 2 === 1 ? "sweep" : "bash";
+    }
     en.attackCooldown = en.maxCooldown;
   }
   function applyMenace(en) {
@@ -4851,6 +5087,7 @@
     let blockedX = [-1e3, -1e3, -1e3];
     let frontEnemy = [null, null, null];
     gameState.laneFlash[0] = gameState.laneFlash[1] = gameState.laneFlash[2] = 0;
+    gameState.sweepLanes = [false, false, false];
     gameState.player.dangerLevel = 0;
     gameState.enemies.forEach((en) => {
       if (en.x >= gameState.player.x - 60) {
@@ -4949,8 +5186,16 @@
         }
         continue;
       }
+      if (isSweep(en) && Math.abs(en.x - gameState.player.x) < CONSTANTS.SWEEP.reach && en.attackCooldown <= CONSTANTS.SWEEP.tellFrames && en.stun <= 0 && gameState.tutorialGrace <= 0) {
+        for (let l = en.lane - 1; l <= en.lane + 1; l++) if (l >= 0 && l <= 2) gameState.sweepLanes[l] = true;
+        if (Math.abs(gameState.player.lane - en.lane) <= 1) {
+          gameState.player.dangerLevel = Math.max(gameState.player.dangerLevel, en.attackCooldown <= 10 ? 2 : 1);
+          maybeSweepHint();
+        }
+        continue;
+      }
       if (en.isActiveThreat && en.name !== "STATIC MONK") {
-        const { perfect: perfectThresh, good: goodThresh } = CONSTANTS.getSlipThresholds(en.type, gameState.progressionMods.perfectSlipWindowBonus, CONSTANTS.isCornered(gameState.player));
+        const { perfect: perfectThresh, good: goodThresh } = CONSTANTS.getSlipThresholds(en.type, gameState.progressionMods.perfectSlipWindowBonus);
         if (Math.abs(en.x - gameState.player.x) < 130) {
           if (en.attackCooldown <= perfectThresh) gameState.laneFlash[en.lane] = 2;
           else if (en.attackCooldown <= goodThresh + 6) gameState.laneFlash[en.lane] = Math.max(gameState.laneFlash[en.lane], 1);
@@ -5012,8 +5257,6 @@
           en.vx = 0;
           if (en.isBoss && en.x < gameState.player.x + 100 && en.name !== "STATIC MONK") {
             en.x = gameState.player.x + 100;
-          } else if ((en.onRopes || 0) > 0) {
-            en.onRopes--;
           } else if (!isBlockedByEnemy && !isAtPlayer && gameState.tutorialGrace <= 0 && en.name !== "STATIC MONK") {
             en.x -= en.speed;
           }
@@ -5028,6 +5271,24 @@
           en.attackCooldown--;
           if (en.attackCooldown <= 0) {
             en.justAttacked = 5;
+            if (isSweep(en)) {
+              const inArc = Math.abs(gameState.player.lane - en.lane) <= 1 && Math.abs(en.x - gameState.player.x) < CONSTANTS.SWEEP.reach;
+              createImpact(en.x - 30, en.y - 60, "#ffb020");
+              if (inArc) {
+                if (gameState.player.state === "ghost_step" && gameState.player.ghostStepTimer > 2) {
+                  spawnFloatingText(gameState.player.x, gameState.player.y - 50, "THROUGH IT!", "#e5e7eb");
+                  registerPerfectGhostStep();
+                } else {
+                  let dmg = Math.round(CONSTANTS.SWEEP.damage * CONSTANTS.affixMod(gameState.currentAffix, "bruiserDamageMult", 1));
+                  if (gameState.isInstinct) dmg = Math.floor(dmg * 0.5);
+                  const guarded = gameState.player.state === "guarding";
+                  takeDamage(dmg, true, en);
+                  if (guarded) spawnFloatingText(gameState.player.x, gameState.player.y - 80, "BLOCKED", "#9ca3af");
+                }
+              }
+              endAttack(en);
+              continue;
+            }
             if (gameState.player.state === "ghost_step" && gameState.player.ghostStepTimer > 4 && isAtPlayer && en.isActiveThreat) {
               spawnFloatingText(gameState.player.x, gameState.player.y - 50, "GHOST STEP", "#888888");
               if (!en.tutorialType) registerPerfectGhostStep();
@@ -5564,6 +5825,7 @@
   function spawnBoss() {
     gameState.bossActive = true;
     gameState.bossIntroTimer = 180;
+    gameState.posterConfirmed = false;
     gameState.shake = 15;
     playSound("bash_tell");
     setMusicIntensity(1);
@@ -5853,20 +6115,34 @@
       }
     }
   }
-  function liveWireShocks(en) {
-    const p = gameState.player;
-    if (!p.cornered) {
-      en.shockTimer = 0;
-      return;
+  function updateLiveLanes() {
+    if (!gameState.liveLanes || !gameState.liveLanes.length) return;
+    const L = CONSTANTS.LIVE_LANE, p = gameState.player;
+    for (const z of gameState.liveLanes) {
+      z.timer--;
+      if (z.phase === "warn") {
+        if (z.timer <= 0) {
+          z.phase = "live";
+          z.timer = L.liveFrames;
+          z.tick = 0;
+          playSound("shock");
+        }
+      } else {
+        if (p.lane === z.lane && !(p.invuln > 0) && p.state !== "ghost_step" && z.tick++ % L.tickEvery === 0) {
+          takeDamage(L.damage, false, null);
+          playSound("shock");
+          createImpact(p.x + 20, p.y - 70, "#fff36b");
+          spawnFloatingText(p.x + 10, p.y - 130, "SHOCKED!", "#fff36b");
+        }
+      }
     }
-    const S = CONSTANTS.ROPES.liveWireShock;
-    if (++en.shockTimer % S.every === 0 && !(p.invuln > 0) && p.state !== "ghost_step") {
-      takeDamage(S.damage, false, null);
-      playSound("shock");
-      createImpact(p.x - 10, p.y - 70, "#fff36b");
-      createImpact(p.x - 10, p.y - 30, "#ffffff");
-      spawnFloatingText(p.x + 10, p.y - 130, "SHOCKED!", "#fff36b");
-    }
+    gameState.liveLanes = gameState.liveLanes.filter((z) => z.phase === "warn" || z.timer > 0);
+  }
+  function electrifyLane(lane) {
+    if (!gameState.liveLanes) gameState.liveLanes = [];
+    if (gameState.liveLanes.some((z) => z.lane === lane)) return;
+    gameState.liveLanes.push({ lane, phase: "warn", timer: CONSTANTS.LIVE_LANE.warnFrames, tick: 0 });
+    spawnFloatingText(gameState.width * 0.5, gameState.height * CONSTANTS.LANE_Y[lane] - 50, "LIVE LANE", "#fff36b");
   }
   function handleLiveWire(en) {
     if (en.recoverTimer > 0) {
@@ -5878,7 +6154,7 @@
     if (en.x > p.x + 100) en.x -= en.speed * 0.6 * (en.arcMods.walkDownMult || 1);
     const K2 = getBinds();
     const holding = gameState.keys[K2.right] || gameState.pad.rightHeld;
-    if (Math.abs(en.x - p.x) < 112 && !holding && p.state !== "punching") p.x = Math.max(CONSTANTS.ROPES.playerMinX, p.x - 0.7);
+    if (Math.abs(en.x - p.x) < 112 && !holding && p.state !== "punching") p.x = Math.max(CONSTANTS.FOOTWORK.minX, p.x - 0.7);
     const inRange = Math.abs(en.x - p.x) < 140 && en.stun <= 0;
     meleeTelegraph(en, inRange, () => {
       playSound(en.currentMove === "shove" ? "bash_tell" : "jab_tell");
@@ -5901,6 +6177,7 @@
       }
       en.stringIdx = 0;
       en.stringsThrown = (en.stringsThrown || 0) + 1;
+      electrifyLane(en.lane);
       const shoveNext = en.stringsThrown % (en.arcMods.shoveEvery || 3) === 0;
       en.currentMove = shoveNext ? "shove" : "string";
       en.maxCooldown = nextCycle(en, shoveNext ? 60 : 44);
@@ -5910,7 +6187,7 @@
       const connected = en.lane === p.lane && Math.abs(en.x - p.x) <= 100 && p.state !== "ghost_step";
       resolveBossStrike(en, 14, true);
       if (connected) {
-        p.x = Math.max(CONSTANTS.ROPES.playerMinX, p.x - 60);
+        p.x = Math.max(CONSTANTS.FOOTWORK.minX, p.x - 60);
         spawnFloatingText(p.x, p.y - 120, "WALKED BACK", "#ffe14d");
       }
       en.currentMove = "string";
@@ -5970,9 +6247,9 @@
   }
   function updateBosses() {
     updateEnemyEchoes();
+    if (!gameState.finisher) updateLiveLanes();
     for (const en of gameState.enemies) {
       if (!en.isBoss) continue;
-      if (en.controller === "live_wire" && gameState.bossIntroTimer <= 0 && !gameState.finisher) liveWireShocks(en);
       checkBossThresholds(en);
       if (en.pendingFinisher && !gameState.finisher) {
         const kind = en.pendingFinisher;
@@ -6575,22 +6852,11 @@
         ctx3,
         90,
         low,
-        CONSTANTS.ROPES.playerPostX,
-        low - 20,
-        "#ff5a3c",
-        "YOUR ROPES",
-        ["Pinned on them you\u2019re CORNERED:", "slip windows tighten."],
-        []
-      );
-      callout(
-        ctx3,
-        650,
-        low,
-        CONSTANTS.ROPES.enemyPostX,
-        low - 20,
-        "#ffffff",
-        "THEIR ROPES",
-        ["Drive them here and counters", "ROPE-BOUNCE for bonus damage."],
+        p.x + 25,
+        p.y + 50,
+        "#22d3ee",
+        "FOOTWORK",
+        ["Press forward to meet them early,", "give ground to buy a beat."],
         []
       );
       keycap(ctx3, p.x + 25, p.y - 175, L(K2.ghost), "#c084fc", 0);
@@ -6735,7 +7001,8 @@
       }
     });
     ctx.globalAlpha = 1;
-    drawRopes(ctx);
+    drawLiveLanes(ctx);
+    drawSweep(ctx);
     drawFinisherDim(ctx);
     drawAfterimages(ctx);
     gameState.player.trails.forEach((t) => {
@@ -6747,7 +7014,7 @@
       if (gameState.purifyTimer > 0) opacity *= 0.5;
       drawBoxer(ctx, en, false, opacity);
       if (en.isActiveThreat) {
-        const { perfect: perfectThresh, good: goodThresh } = CONSTANTS.getSlipThresholds(en.type, gameState.progressionMods.perfectSlipWindowBonus, CONSTANTS.isCornered(gameState.player));
+        const { perfect: perfectThresh, good: goodThresh } = CONSTANTS.getSlipThresholds(en.type, gameState.progressionMods.perfectSlipWindowBonus);
         if (en.type === "zoner" && en.attackCooldown < 40 && en.stun <= 0 && gameState.bossIntroTimer <= 0) {
           let intensity = 1 - en.attackCooldown / 40;
           ctx.strokeStyle = `rgba(0, 255, 0, ${intensity})`;
@@ -6783,6 +7050,9 @@
               telColor = "#aa00ff";
               telText = "?";
             }
+          } else if (en.currentMove === "sweep" && en.type === "bruiser") {
+            telColor = "#ffb020";
+            telText = "SWEEP";
           } else if (en.type === "shield" || en.type === "bruiser") {
             telColor = "#ffaa00";
             telText = "BREAK";
@@ -6793,7 +7063,7 @@
           ctx.fillText(telText, en.x + en.w / 2 + xOff, en.y - en.h - 10);
           ctx.textAlign = "left";
         }
-      } else if (en.attackCooldown <= CONSTANTS.getSlipThresholds(en.type, 0, CONSTANTS.isCornered(gameState.player)).good + 6 && en.stun <= 0 && en.type !== "zoner" && gameState.bossIntroTimer <= 0) {
+      } else if (en.attackCooldown <= CONSTANTS.getSlipThresholds(en.type, 0).good + 6 && en.stun <= 0 && en.type !== "zoner" && gameState.bossIntroTimer <= 0) {
         let telColor = "rgba(255,255,255,0.3)";
         let telText = "!";
         if (en.isBoss) {
@@ -6851,6 +7121,8 @@
     });
     gameState.player.trailColor = buildColor();
     if (gameState.knockdown) {
+      ctx.fillStyle = `rgba(0, 0, 0, ${(0.72 * Math.max(0.25, gameState.knockdown.fall)).toFixed(3)})`;
+      ctx.fillRect(-200, -200, gameState.width + 400, gameState.height + 400);
       const k = gameState.knockdown.fall, p = gameState.player;
       ctx.save();
       ctx.translate(p.x + 25, p.y);
@@ -6861,6 +7133,7 @@
     } else {
       const inv = (gameState.player.invuln || 0) > 0 && Math.floor(Date.now() / 80) % 2 === 0;
       drawBoxer(ctx, gameState.player, true, inv ? 0.45 : 1);
+      drawChargeRing(ctx);
     }
     gameState.floatingTexts.forEach((ft) => {
       ctx.globalAlpha = Math.max(0, ft.life);
@@ -6883,140 +7156,83 @@
     drawVignette(ctx);
   }
 
-  // src/systems/vignette.js
-  var VIGNETTE_FULL_FRAMES = 90;
-  var VIGNETTE_REPEAT_FRAMES = 36;
-  var SKIP_GUARD_FRAMES = 6;
-  function upgradeColor(u) {
-    return upgradeColorFor(u);
-  }
-  function upgradeRarity(u) {
-    if (!u) return "orb";
-    if (u.kind === "fusion") return u.evolved ? "evolved" : "fusion";
-    if (u.draftRole === "apex") return "apex";
-    if (u.verb) return "verb";
-    if (u.kind === "mastery") return "mastery";
-    if (u.kind === "overclock") return "overclock";
-    return "orb";
-  }
-  var STING = { evolved: "sting_fusion", fusion: "sting_fusion", apex: "sting_fusion", verb: "sting_mastery", mastery: "sting_mastery", overclock: "sting_overclock", orb: "sting_orb" };
-  function vignetteDuration(upgradeId, seenBefore, reduced = false) {
-    return seenBefore || reduced ? VIGNETTE_REPEAT_FRAMES : VIGNETTE_FULL_FRAMES;
-  }
-  function playUpgradeVignette(upgrade, onDone) {
-    const seen = hasSeenUpgrade(upgrade.id);
-    markUpgradeSeen(upgrade.id);
-    const rarity = upgradeRarity(upgrade);
-    gameState.vignette = {
-      upgrade,
-      rarity,
-      color: upgradeColor(upgrade),
-      repeat: seen,
-      timer: 0,
-      duration: vignetteDuration(upgrade.id, seen, reducedMotion()),
-      onDone,
-      sparks: []
-    };
-    gameState.screen = "vignette";
-    playSound(STING[rarity] || "sting_orb");
-  }
-  function updateVignette() {
-    const v = gameState.vignette;
-    if (!v) return;
-    v.timer++;
-    if (!reducedMotion() && v.timer < v.duration - 8) {
-      for (let i = 0; i < 3; i++) v.sparks.push({ gx: Math.random() < 0.5 ? 0 : 1, ox: (Math.random() - 0.5) * 14, oy: 0, vx: (Math.random() - 0.5) * 1.6, vy: -1.5 - Math.random() * 2.5, life: 1 });
-    }
-    v.sparks.forEach((s) => {
-      s.ox += s.vx;
-      s.oy += s.vy;
-      s.life -= 0.05;
-    });
-    v.sparks = v.sparks.filter((s) => s.life > 0);
-    if (v.timer >= v.duration) endVignette();
-  }
-  function skipVignette() {
-    const v = gameState.vignette;
-    if (!v || v.timer < SKIP_GUARD_FRAMES) return false;
-    endVignette();
-    return true;
-  }
-  function endVignette() {
-    const v = gameState.vignette;
-    if (!v) return;
-    gameState.vignette = null;
-    if (typeof v.onDone === "function") v.onDone();
-  }
-
   // src/main.js
   var $2 = function(id) {
     return document.getElementById(id);
   };
   var canvas2 = document.getElementById("gameCanvas");
   var ctx2 = canvas2 ? canvas2.getContext("2d", { alpha: false }) : null;
-  var RARITY_BADGE = { orb: "STAT", verb: "\u27E1 NEW VERB", mastery: "\u25C6 MASTERY", apex: "\u2605 APEX", fusion: "\u2726 FUSION \u2726", evolved: "\u2726 EVOLVED FUSION \u2726", overclock: "OVERCLOCK" };
-  function cardBadge(option, rarity) {
-    const tree = CONSTANTS.TREES[option.tree];
-    if (option.kind === "rank") return `${tree ? tree.name : ""} \xB7 RANK ${option.rank}${rarity === "orb" ? "" : " \xB7 " + RARITY_BADGE[rarity]}`;
-    return RARITY_BADGE[rarity] + (tree ? ` \xB7 ${tree.name}` : "");
-  }
+  var evolutionBadge = (option, rarity) => evolutionLabel(option, rarity);
   function escapeAttr(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   }
+  var DRAFT_GRACE_FRAMES = 20;
+  function renderDraftFocus() {
+    const cards = document.querySelectorAll ? document.querySelectorAll("#draft-container .draft-card") : [];
+    cards.forEach((c, i) => c.classList.toggle("focused", i === gameState.draftFocus));
+    const hint = document.getElementById("upgrade-hint");
+    if (hint) {
+      const dev = inputDevice();
+      hint.innerHTML = dev === "keyboard" ? `${glyphHTML("left")}${glyphHTML("right")} CHOOSE &nbsp;\xB7&nbsp; <span class="glyph">1</span><span class="glyph">2</span><span class="glyph">3</span> OR ${glyphHTML("confirm")} TAKE IT` : `${glyphHTML("left")}${glyphHTML("right")} CHOOSE &nbsp;\xB7&nbsp; ${glyphHTML("confirm")} TAKE IT`;
+    }
+  }
+  function moveDraftFocus(dir) {
+    const n = gameState.currentDraftOptions.length;
+    if (!n) return;
+    gameState.draftFocus = ((gameState.draftFocus || 0) + dir + n) % n;
+    playSound("slip");
+    renderDraftFocus();
+  }
+  function confirmDraftFocus() {
+    if (gameState.uiFrame - (gameState.draftOpenedAt || 0) < DRAFT_GRACE_FRAMES) return;
+    const opt = gameState.currentDraftOptions[gameState.draftFocus || 0];
+    if (opt) applyUpgrade(gameState, opt);
+  }
+  window.engineFocusDraft = function(i) {
+    gameState.draftFocus = i;
+    renderDraftFocus();
+  };
   function triggerUpgradeDraft() {
     gameState.screen = "upgrading";
     gameState.draftHold = 0;
+    gameState.draftOpenedAt = gameState.uiFrame || 0;
+    gameState.draftFocus = 0;
+    if (!gameState.evoChain || !gameState.evoChain.active) gameState.evoChain = { active: true, total: gameState.pendingUpgrades, picks: [] };
     const title = document.getElementById("upgrade-title");
     if (title) {
-      if (gameState.pendingUpgrades > 1) {
-        title.innerText = `EVOLUTIONS REMAINING: ${gameState.pendingUpgrades}`;
-        title.style.color = "#ff00ff";
-      } else {
-        title.innerText = "EVOLUTION READY";
-        title.style.color = "#ffffff";
-      }
+      const idx = gameState.evoChain.picks.length + 1, total = Math.max(gameState.evoChain.total, idx);
+      title.innerText = total > 1 ? `EVOLUTION ${idx} OF ${total}` : "EVOLUTION";
+      title.style.color = total > 1 ? "#ff4fd8" : "#ffffff";
     }
+    const sub = document.getElementById("upgrade-sub");
+    if (sub) sub.innerText = "CHOOSE ONE";
     let draftOptions = buildDraft(gameState, UPGRADE_POOL);
-    const tease = buildDraftTease(gameState, UPGRADE_POOL, CONSTANTS.getArcIndex(gameState.currentStage));
     const container = document.getElementById("draft-container");
     if (container) {
       container.innerHTML = "";
-      const PAD_LABEL = ["X", "Y", "B"];
       draftOptions.forEach((option, index) => {
         const rarity = upgradeRarity(option);
         const color = upgradeColor(option);
-        const iconText = `[${index + 1}] / [${PAD_LABEL[index] || "?"}]`;
         const btnHTML = `
-                <div class="draft-card card-${rarity}" style="--card-color:${color}; animation-delay:${index * 90 + (rarity === "fusion" || rarity === "evolved" || rarity === "apex" ? 220 : 0)}ms" onclick="window.engineApplyUpgradeState('${escapeAttr(option.id)}')">
+                <div class="draft-card card-${rarity}" style="--card-color:${color}; animation-delay:${index * 90 + (rarity === "fusion" || rarity === "evolved" || rarity === "apex" ? 220 : 0)}ms" onmouseenter="window.engineFocusDraft(${index})" onclick="window.engineApplyUpgradeState('${escapeAttr(option.id)}')">
                     <div class="card-inner">
-                        <div class="card-badge">${cardBadge(option, rarity)}</div>
+                        <div class="card-badge">${evolutionBadge(option, rarity)}</div>
                         <div class="card-name">${option.name}</div>
                         <div class="card-desc">${option.desc}</div>
-                        <div class="card-key">${iconText}</div>
+                        <div class="card-key">${inputDevice() === "keyboard" ? `<span class="glyph">${index + 1}</span>` : ""}</div>
                     </div>
                 </div>
             `;
         container.insertAdjacentHTML("beforeend", btnHTML);
       });
-      if (tease) {
-        const tr = upgradeRarity(tease), tc = upgradeColor(tease);
-        const tBadge = tease.kind === "rank" ? `\u{1F512} ${cardBadge(tease, tr)}` : "\u{1F512} FUSION \xB7 LOCKED";
-        container.insertAdjacentHTML("beforeend", `
-                <div class="draft-card card-${tr} card-locked" style="--card-color:${tc}; animation-delay:${draftOptions.length * 90 + 260}ms" title="Locked \u2014 build toward it">
-                    <div class="card-inner">
-                        <div class="card-badge">${tBadge}</div>
-                        <div class="card-name">${tease.name}</div>
-                        <div class="card-desc">${tease.desc}</div>
-                        <div class="card-key card-req">${tease.kind === "rank" ? "" : "REQUIRES "}${tease.reqText}</div>
-                    </div>
-                </div>`);
-      }
     }
+    renderDraftFocus();
     const rs = draftOptions.map(upgradeRarity);
     const rarest = rs.find((r) => r === "evolved" || r === "fusion" || r === "apex") || rs.find((r) => r === "verb" || r === "mastery");
     if (rarest) setTimeout(() => playSound(rarest === "verb" || rarest === "mastery" ? "sting_mastery" : "sting_fusion"), rarest === "verb" || rarest === "mastery" ? 120 : 300);
     if (HUD.screens.upgrade) HUD.screens.upgrade.style.display = "flex";
   }
+  window.engineTriggerUpgradeDraft = triggerUpgradeDraft;
   window.engineTriggerUpgradeDraft = triggerUpgradeDraft;
   window.enginePlayUpgradeVignette = playUpgradeVignette;
   function resetGame() {
@@ -7268,32 +7484,60 @@
   function findUpgrade(id) {
     return [...UPGRADE_POOL.orbs, ...UPGRADE_POOL.masteries, ...UPGRADE_POOL.fusions, ...UPGRADE_POOL.overclocks].find((u) => u.id === id);
   }
+  var loadoutSel = { row: 0, col: 0 };
+  function loadoutRows() {
+    const rows = CONSTANTS.TREE_ORDER.map((tree) => UPGRADE_POOL.orbs.filter((o) => o.tree === tree).sort((a, b) => a.rank - b.rank));
+    const owned = gameState.acquiredUpgradeIds.map(findUpgrade).filter((u) => u && u.kind !== "rank");
+    const ocs = Object.entries(gameState.overclockCounts).filter(([, n]) => n > 0).map(([k, n]) => {
+      const u = findUpgrade(OC_NAMES[k]);
+      return u ? { ...u, stack: n } : null;
+    }).filter(Boolean);
+    const extra = [...owned, ...ocs];
+    if (extra.length) rows.push(extra);
+    return rows;
+  }
+  function loadoutStatus(u) {
+    if (u.kind !== "rank") return { text: u.stack ? `OWNED \xD7${u.stack}` : "OWNED", cls: "on" };
+    const have = gameState.orbCounts[u.tree] || 0;
+    if (u.rank <= have) return { text: "OWNED", cls: "on" };
+    if (u.rank === have + 1) return { text: "NEXT", cls: "next" };
+    return { text: "NOT YET", cls: "" };
+  }
   function renderLoadout() {
     const el = document.getElementById("loadout-body");
     if (!el) return;
-    const cap = CONSTANTS.rankCap(CONSTANTS.getArcIndex(gameState.currentStage));
-    const orbRows = CONSTANTS.TREE_ORDER.map((tree) => {
+    const rows = loadoutRows();
+    loadoutSel.row = Math.min(loadoutSel.row, rows.length - 1);
+    loadoutSel.col = Math.min(loadoutSel.col, rows[loadoutSel.row].length - 1);
+    const sel = rows[loadoutSel.row][loadoutSel.col];
+    const sStat = loadoutStatus(sel);
+    const detail = `<div class="lo-detail" style="--card-color:${upgradeColor(sel)}">
+        <div class="lo-badge">${evolutionBadge(sel, upgradeRarity(sel))} \xB7 <span class="lo-state ${sStat.cls}">${sStat.text}</span></div>
+        <div class="lo-name">${sel.name}</div><div class="lo-desc">${sel.desc}</div></div>`;
+    const chip = (u, r, c) => {
+      const s = loadoutStatus(u), selected = r === loadoutSel.row && c === loadoutSel.col;
+      const label = u.kind === "rank" ? `${u.rank}. ${u.name}` : u.name + (u.stack ? ` \xD7${u.stack}` : "");
+      return `<span class="lo-rank ${s.cls} ${selected ? "sel" : ""}" style="--tree-color:${upgradeColor(u)}" onmouseenter="window.engineLoadoutSelect(${r},${c})" onclick="window.engineLoadoutSelect(${r},${c})">${label}</span>`;
+    };
+    const treeRows = CONSTANTS.TREE_ORDER.map((tree, r) => {
       const lvl = gameState.orbCounts[tree] || 0;
-      const ranks = UPGRADE_POOL.orbs.filter((o) => o.tree === tree).sort((a, b) => a.rank - b.rank);
-      const perks = ranks.map((r) => `<span class="lo-rank ${r.rank <= lvl ? "on" : ""} ${r.rank > cap ? "capped" : ""}" title="${escapeAttr(r.desc)}">${r.rank}. ${r.name}${r.rank > cap ? ` \xB7 ARC ${CONSTANTS.arcForRank(r.rank)}` : ""}</span>`).join("");
-      return `<div class="lo-orb" style="--tree-color:${TREE_COLOR[tree]}"><span class="lo-orb-name" style="color:${TREE_COLOR[tree]}">${CONSTANTS.TREES[tree].name} ${lvl}/5</span>${perks}</div>`;
+      return `<div class="lo-orb" style="--tree-color:${TREE_COLOR[tree]}"><span class="lo-orb-name" style="color:${TREE_COLOR[tree]}">${CONSTANTS.TREES[tree].name} ${lvl}/5</span>${rows[r].map((u, c) => chip(u, r, c)).join("")}</div>`;
     }).join("");
-    const owned = gameState.acquiredUpgradeIds.map(findUpgrade).filter((u) => u && u.kind !== "rank");
-    const cards = owned.map((u) => {
-      const r = upgradeRarity(u);
-      return `<div class="lo-card lo-${r}" style="--card-color:${upgradeColor(u)}"><div class="lo-badge">${RARITY_BADGE[r]}</div><div class="lo-name">${u.name}</div><div class="lo-desc">${u.desc}</div></div>`;
-    }).join("");
-    const ocs = Object.entries(gameState.overclockCounts).filter(([, n]) => n > 0).map(([k, n]) => {
-      const u = findUpgrade(OC_NAMES[k]);
-      return u ? `<div class="lo-oc"><b>${u.name}</b> \xD7${n} <span>${u.desc}</span></div>` : "";
-    }).join("");
+    const extraRow = rows.length > 3 ? `<h4 class="lo-h">Masteries, Fusions &amp; Overclocks</h4><div class="lo-orb">${rows[3].map((u, c) => chip(u, 3, c)).join("")}</div>` : '<div class="lo-empty">Masteries and Fusions you pick will appear here.</div>';
     const wager = gameState.wagerMult > 1 && gameState.currentAffix ? `<div class="lo-wager">ACTIVE WAGER: <b>${gameState.currentAffix.name}</b> \xD7${gameState.wagerMult} score \u2014 ${gameState.currentAffix.desc}</div>` : "";
-    el.innerHTML = `
-        ${wager}
-        <h4 class="lo-h">Evolution Trees</h4>${orbRows}
-        <h4 class="lo-h">Masteries &amp; Fusions</h4>
-        ${cards || '<div class="lo-empty">None yet \u2014 Masteries unlock at tree level 2; Fusions combine two trees at level 2.</div>'}
-        ${ocs ? `<h4 class="lo-h">Overclocks</h4>${ocs}` : ""}`;
+    el.innerHTML = `${wager}${detail}<h4 class="lo-h">Evolution Trees</h4>${treeRows}${extraRow}
+        <div class="set-hint">${glyphHTML("up")}${glyphHTML("down")}${glyphHTML("left")}${glyphHTML("right")} browse \xB7 every evolution explained above</div>`;
+  }
+  window.engineLoadoutSelect = function(r, c) {
+    loadoutSel = { row: r, col: c };
+    renderLoadout();
+  };
+  function moveLoadoutSel(dr, dc) {
+    const rows = loadoutRows();
+    let r = Math.max(0, Math.min(rows.length - 1, loadoutSel.row + dr));
+    let c = dr ? Math.min(loadoutSel.col, rows[r].length - 1) : (loadoutSel.col + dc + rows[r].length) % rows[r].length;
+    loadoutSel = { row: r, col: c };
+    renderLoadout();
   }
   function renderSettings() {
     const el = document.getElementById("settings-body");
@@ -7372,9 +7616,23 @@
       }
       return;
     }
+    if (pauseTab === "loadout") {
+      if (code === "ArrowUp") moveLoadoutSel(-1, 0);
+      else if (code === "ArrowDown") moveLoadoutSel(1, 0);
+      else if (code === "ArrowLeft") moveLoadoutSel(0, -1);
+      else if (code === "ArrowRight") moveLoadoutSel(0, 1);
+      return;
+    }
     if (pauseTab === "resume" && (code === "Enter" || code === "Space")) closePause();
   }
+  function renderWagerPrompts() {
+    const a = document.getElementById("wager-accept-key"), d = document.getElementById("wager-decline-key");
+    const kb = inputDevice() === "keyboard";
+    if (a) a.innerHTML = kb ? '<span class="glyph">1</span> / <span class="glyph">ENTER</span>' : glyphHTML("confirm");
+    if (d) d.innerHTML = kb ? '<span class="glyph">2</span> / <span class="glyph">ESC</span>' : glyphHTML("back");
+  }
   function showWager() {
+    renderWagerPrompts();
     const offer = gameState.wagerOffer;
     if (!offer) {
       SequenceManager.resumeFromWait();
@@ -7422,6 +7680,8 @@
       let p = (btn) => gp.buttons[btn] && gp.buttons[btn].pressed;
       let jp = (btn) => p(btn) && !gameState.lastGamepadState.buttons[btn];
       let aU = gp.axes[1] < -0.5 || gp.axes[3] < -0.5, aD = gp.axes[1] > 0.5 || gp.axes[3] > 0.5;
+      const aL = gp.axes[0] < -0.5, aR = gp.axes[0] > 0.5;
+      const stickLeft = aL && !gameState.lastGamepadState.axes[2], stickRight = aR && !gameState.lastGamepadState.axes[3];
       gameState.pad.up = jp(12) || aU && !gameState.lastGamepadState.axes[0];
       gameState.pad.down = jp(13) || aD && !gameState.lastGamepadState.axes[1];
       gameState.pad.ghost = jp(4) || jp(6);
@@ -7435,10 +7695,19 @@
       gameState.pad.instinct = jp(0);
       gameState.pad.pause = jp(9) || jp(16);
       const anyPress = gp.buttons.some((b, i) => jp(i));
+      if (anyPress || aU || aD || aL || aR) {
+        const fam = padFamily(gp.id);
+        if (gameState.inputDevice !== fam) {
+          setInputDevice(fam);
+          onDeviceChanged();
+        }
+      }
       if (gameState.screen === "start") {
         if (gameState.pad.instinct || gameState.pad.pause || gameState.pad.jab) startGame();
       } else if (gameState.screen === "playing") {
-        if (gameState.pad.pause && !SequenceManager.active && !gameState.finisher) openPause();
+        if (posterWaiting()) {
+          if (anyPress) confirmPoster();
+        } else if (gameState.pad.pause && !SequenceManager.active && !gameState.finisher) openPause();
       } else if (gameState.screen === "paused") {
         if (gameState.pad.pause) closePause();
         else if (jp(4)) cyclePauseTab(-1);
@@ -7454,12 +7723,12 @@
       } else if (gameState.screen === "vignette") {
         if (anyPress) skipVignette();
       } else if (gameState.screen === "wager") {
-        if (gameState.pad.jab || gameState.pad.instinct) resolveWager(true);
-        else if (gameState.pad.hook) resolveWager(false);
+        if (jp(0)) resolveWager(true);
+        else if (jp(1)) resolveWager(false);
       } else if (gameState.screen === "upgrading") {
-        if (gameState.pad.jab && gameState.currentDraftOptions[0]) applyUpgrade(gameState, gameState.currentDraftOptions[0]);
-        else if (gameState.pad.cross && gameState.currentDraftOptions[1]) applyUpgrade(gameState, gameState.currentDraftOptions[1]);
-        else if (gameState.pad.hook && gameState.currentDraftOptions[2]) applyUpgrade(gameState, gameState.currentDraftOptions[2]);
+        if (jp(14) || stickLeft) moveDraftFocus(-1);
+        else if (jp(15) || stickRight) moveDraftFocus(1);
+        else if (jp(0)) confirmDraftFocus();
       } else if (gameState.screen === "gameover") {
         if (gameState.pad.instinct || gameState.pad.jab) startGame();
         if (gameState.pad.hook || gameState.pad.cross) returnToMenu();
@@ -7467,6 +7736,8 @@
       for (let i = 0; i < gp.buttons.length; i++) gameState.lastGamepadState.buttons[i] = p(i);
       gameState.lastGamepadState.axes[0] = aU;
       gameState.lastGamepadState.axes[1] = aD;
+      gameState.lastGamepadState.axes[2] = aL;
+      gameState.lastGamepadState.axes[3] = aR;
     }
   }
   window.startGame = window.engineStartGame = startGame;
@@ -7485,6 +7756,10 @@
       return;
     }
     gameState.keys[e.code] = true;
+    if (gameState.inputDevice !== "keyboard") {
+      setInputDevice("keyboard");
+      onDeviceChanged();
+    }
     if (gameState.screen === "records") {
       if (e.code === "Escape" || e.code === "KeyH" || e.code === "Enter") toggleRecords();
       return;
@@ -7495,6 +7770,10 @@
     }
     if (gameState.screen === "vignette") {
       if (!e.repeat) skipVignette();
+      return;
+    }
+    if (posterWaiting()) {
+      if (!e.repeat) confirmPoster();
       return;
     }
     if (gameState.screen === "wager") {
@@ -7529,6 +7808,9 @@
       if (e.code === "Digit1" && gameState.currentDraftOptions[0]) applyUpgrade(gameState, gameState.currentDraftOptions[0]);
       else if (e.code === "Digit2" && gameState.currentDraftOptions[1]) applyUpgrade(gameState, gameState.currentDraftOptions[1]);
       else if (e.code === "Digit3" && gameState.currentDraftOptions[2]) applyUpgrade(gameState, gameState.currentDraftOptions[2]);
+      else if (e.code === "ArrowLeft") moveDraftFocus(-1);
+      else if (e.code === "ArrowRight") moveDraftFocus(1);
+      else if (e.code === "Enter" || e.code === "Space") confirmDraftFocus();
       return;
     }
     if (gameState.screen === "gameover" && e.code === "KeyR") {
@@ -7541,6 +7823,7 @@
   });
   window.addEventListener("pointerdown", () => {
     if (gameState.screen === "vignette") skipVignette();
+    else confirmPoster();
   });
   function tutorialRunning() {
     return gameState.currentStage === 1 && gameState.tutorialEnabled && (gameState.spawnTotal < 5 || gameState.enemies.some((e) => e.tutorialType));
@@ -7597,11 +7880,12 @@
     }
     if (gameState.tutorialGrace > 0) gameState.tutorialGrace--;
     if (gameState.tutorialDelay > 0) gameState.tutorialDelay--;
-    if (gameState.bossIntroTimer > 0) gameState.bossIntroTimer--;
+    if (gameState.bossIntroTimer > 0 && !posterWaiting()) gameState.bossIntroTimer--;
+    if (gameState.sweepHint > 0) gameState.sweepHint--;
     if (gameState.instinctPauseTimer > 0) {
       gameState.instinctPauseTimer--;
     } else if (gameState.isInstinct) {
-      gameState.instinctMeter -= 0.25;
+      if (!(gameState.zoneTimer > 0)) gameState.instinctMeter -= 0.25;
       if (gameState.instinctMeter <= 0) {
         gameState.isInstinct = false;
         let barCont = document.getElementById("bar-cont");
@@ -7617,8 +7901,10 @@
     } else if (banner) banner.style.display = "none";
     let worldTick = true;
     if (gameState.zoneTimer > 0) {
-      gameState.zoneTimer--;
-      worldTick = gameState.zoneTimer % CONSTANTS.ZONE.enemyTick === 0;
+      const inReach = gameState.enemies.some((e) => e.hp > 0 && Math.abs(e.x - gameState.player.x) < 280);
+      const anyOnScreen = gameState.enemies.some((e) => e.hp > 0 && e.x < gameState.width);
+      if (inReach || !anyOnScreen || (gameState.zoneHold = (gameState.zoneHold || 0) + 1) > CONSTANTS.ZONE.maxHold) gameState.zoneTimer--;
+      worldTick = (gameState.frameCount = (gameState.frameCount || 0) + 1) % CONSTANTS.ZONE.enemyTick === 0;
       if (gameState.zoneTimer === 0) spawnFloatingText(gameState.player.x, gameState.player.y - 140, "ZONE OUT", "#9ca3af");
     }
     updatePlayer();
@@ -7664,7 +7950,7 @@
     gameState.health = Math.round(gameState.health);
     if (typeof updateHUD === "function") updateHUD();
     if (!gameState.seenTutorials.footwork_tip && gameState.currentStage === 1 && gameState.enemies.length === 0 && (!gameState.tutorialEnabled || gameState.spawnTotal >= 5)) {
-      triggerTutorial("footwork_tip", "FOOTWORK", `You are not locked to one spot.<br><br>Hold <span class="text-cyan-400 font-bold">[${keyName("right")}]</span> to press forward &mdash; reach enemies sooner and drive them into <b>their</b> ropes.<br><br>Hold <span class="text-cyan-400 font-bold">[${keyName("left")}]</span> to give ground &mdash; but your own ropes are right behind you. Pinned on them you are <span class="text-pink-500 font-bold">CORNERED</span>: slip windows tighten.<br><br>Ghost Step has its own button: <span class="text-cyan-400 font-bold">[${keyName("ghost")}]</span>.`);
+      triggerTutorial("footwork_tip", "FOOTWORK", `You are not locked to one spot.<br><br>Hold <span class="text-cyan-400 font-bold">[${keyName("right")}]</span> to press forward and meet them early; hold <span class="text-cyan-400 font-bold">[${keyName("left")}]</span> to give ground and buy a beat. While you're fighting you hold your position.<br><br>Ghost Step has its own button: <span class="text-cyan-400 font-bold">[${keyName("ghost")}]</span> &mdash; a short invincible dash straight through an attack.`);
       return;
     }
     if (gameState.pendingUpgrades > 0 && gameState.enemies.length === 0 && !gameState.bossActive && !gameState.stageClearing && gameState.bossIntroTimer <= 0 && !tutorialRunning()) {
@@ -7923,7 +8209,28 @@
     } catch (e) {
     }
   }
+  function posterWaiting() {
+    return gameState.screen === "playing" && !!gameState.bossPoster && !gameState.posterConfirmed && gameState.bossIntroTimer === CONSTANTS.POSTER_HOLD_FRAME;
+  }
+  function confirmPoster() {
+    if (!posterWaiting()) return false;
+    gameState.posterConfirmed = true;
+    playSound("bell");
+    return true;
+  }
+  window.engineConfirmPoster = confirmPoster;
+  function onDeviceChanged() {
+    if (gameState.screen === "upgrading") {
+      renderDraftFocus();
+      document.querySelectorAll("#draft-container .draft-card .card-key").forEach((el, i) => {
+        el.innerHTML = inputDevice() === "keyboard" ? `<span class="glyph">${i + 1}</span>` : "";
+      });
+    }
+    if (gameState.screen === "wager") renderWagerPrompts();
+    renderInstructions();
+  }
   function loop() {
+    gameState.uiFrame = (gameState.uiFrame || 0) + 1;
     pollGamepad();
     syncCinematicClass();
     if (gameState.screen === "vignette") updateVignette();
@@ -7949,7 +8256,7 @@
     loop();
   }
   init();
-  var __test = { startGame, resetGame, update, triggerUpgradeDraft, resolveWager, openPause, closePause, setPauseTab, renderLoadout, renderSettings, endRun };
+  var __test = { posterWaiting, confirmPoster, startGame, resetGame, update, triggerUpgradeDraft, resolveWager, openPause, closePause, setPauseTab, renderLoadout, renderSettings, endRun };
   try {
     if (typeof location !== "undefined" && /[?&]debug\b/.test(location.search)) {
       window.__ns = {

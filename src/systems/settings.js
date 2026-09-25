@@ -153,13 +153,21 @@ function loadProfile() {
     const p = safeGet(PROFILE_KEY) || {};
     return {
         flags: (p.flags && typeof p.flags === 'object') ? p.flags : {},
-        seenUpgrades: Array.isArray(p.seenUpgrades) ? p.seenUpgrades : []
+        seenUpgrades: Array.isArray(p.seenUpgrades) ? p.seenUpgrades : [],
+        counts: (p.counts && typeof p.counts === 'object') ? p.counts : {}
     };
 }
 
 export function profileFlag(name) { return loadProfile().flags[name] === true; }
 export function setProfileFlag(name) {
     const p = loadProfile(); p.flags[name] = true; safeSet(PROFILE_KEY, p);
+}
+
+export function profileCount(name) { const p = loadProfile(); return (p.counts && p.counts[name]) || 0; }
+export function bumpProfileCount(name) {
+    const raw = safeGet(PROFILE_KEY) || {};
+    raw.counts = raw.counts || {}; raw.counts[name] = (raw.counts[name] || 0) + 1;
+    safeSet(PROFILE_KEY, raw);
 }
 
 export function hasSeenUpgrade(id) { return loadProfile().seenUpgrades.includes(id); }

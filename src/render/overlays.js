@@ -11,6 +11,9 @@ import { isBossOpen } from '../systems/boss_rules.js';
 import { promptProgress } from '../systems/finisher.js';
 import { reducedMotion } from '../systems/settings.js';
 import { knockdownPrompt } from '../systems/knockdown.js';
+import { buildColor } from '../systems/colors.js';
+import { evolutionLabel, upgradeColor } from '../systems/vignette.js';
+import { glyph, glyphText, inputDevice } from '../systems/input_device.js';
 
 const MOVE_STYLE = {
     bash:  { label: 'BASH',  color: '#ffaa00' },
@@ -124,13 +127,15 @@ export function drawFinisherDim(ctx) {
 // of the boss HP bar up top and the fighters themselves.
 const PROMPT_X = 0.72, PROMPT_Y = 0.48;
 
-const PROMPT_GLYPH = {
-    up:    { key: '▲', hint: '↑ / D-PAD', color: '#22d3ee' },
-    down:  { key: '▼', hint: '↓ / D-PAD', color: '#22d3ee' },
-    jab:   { key: 'A', hint: 'JAB · X', color: '#ffffff' },
-    cross: { key: 'S', hint: 'CROSS · Y', color: '#ec4899' },
-    hook:  { key: 'D', hint: 'HOOK · B', color: '#facc15' }
-};
+// v18: prompts show the glyph for the device you're actually holding — a PS4
+// pad sees □ △ ○, an Xbox pad X Y B, the keyboard your bound keys.
+const MOVE_NAME = { up: 'SLIP UP', down: 'SLIP DOWN', jab: 'JAB', cross: 'CROSS', hook: 'HOOK' };
+const KEY_COLOR = { up: '#22d3ee', down: '#22d3ee', jab: '#ffffff', cross: '#ec4899', hook: '#facc15' };
+function promptGlyph(move) {
+    const g = glyph(move), dev = inputDevice();
+    const key = (move === 'up' || move === 'down') ? (move === 'up' ? '▲' : '▼') : g.label;
+    return { key, hint: MOVE_NAME[move] || move.toUpperCase(), color: dev === 'keyboard' ? KEY_COLOR[move] : (move === 'up' || move === 'down' ? '#22d3ee' : g.color) };
+}
 
 // ---------- finisher UI (screen space) ----------
 export function drawFinisherUI(ctx) {
@@ -159,7 +164,7 @@ export function drawFinisherUI(ctx) {
     for (let i = 0; i < n; i++) {
         const px = W / 2 - total / 2 + i * (pipW + gap);
         const done = i < f.idx, cur = i === f.idx && f.phase === 'prompts';
-        const g = PROMPT_GLYPH[f.seq[i]];
+        const g = promptGlyph(f.seq[i]);
         ctx.fillStyle = done ? g.color : (cur ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.06)');
         ctx.fillRect(px, H - barH + 14, pipW, 22);
         ctx.fillStyle = done ? '#000' : (cur ? '#fff' : 'rgba(255,255,255,0.35)');
@@ -171,9 +176,9 @@ export function drawFinisherUI(ctx) {
     // the live prompt: key box + closing beat ring
     const pp = promptProgress();
     if (pp) {
-        const g = PROMPT_GLYPH[pp.move];
+        const g = promptGlyph(pp.move);
         const cx = PROMPT_X * W, cy = PROMPT_Y * H;
-        const box = 38;
+        const box = 46;
         const ringR = box + 70 * (1 - Math.min(1, pp.progress));
         const inWindow = pp.t >= -CONSTANTS.FINISHER.windowEarly;
         ctx.lineWidth = 4;
@@ -184,10 +189,10 @@ export function drawFinisherUI(ctx) {
         ctx.strokeStyle = g.color; ctx.lineWidth = 3; ctx.shadowColor = g.color; ctx.shadowBlur = 18;
         ctx.beginPath(); ctx.arc(cx, cy, box, 0, Math.PI * 2); ctx.stroke();
         ctx.shadowBlur = 0;
-        ctx.fillStyle = g.color; ctx.font = '900 34px Orbitron';
-        ctx.fillText(g.key, cx, cy + 12);
-        ctx.fillStyle = 'rgba(255,255,255,0.8)'; ctx.font = 'bold 11px Orbitron';
-        ctx.fillText(g.hint, cx, cy + box + 22);
+        ctx.fillStyle = g.color; ctx.font = `900 ${g.key.length > 2 ? 24 : 40}px Orbitron`;
+        ctx.textBaseline = 'middle'; ctx.fillText(g.key, cx, cy + 2); ctx.textBaseline = 'alphabetic';
+        ctx.fillStyle = '#ffffff'; ctx.font = '900 16px Orbitron';
+        ctx.fillText(g.hint, cx, cy + box + 30);
     } else if (f.phase === 'intro') {
         ctx.fillStyle = `rgba(255,255,255,${f.bars})`; ctx.font = 'bold 13px Orbitron';
         ctx.fillText('HIT EACH PROMPT ON THE BEAT', PROMPT_X * W, PROMPT_Y * H);
@@ -212,86 +217,109 @@ export function drawVignette(ctx) {
     const v = st.vignette;
     if (!v) return;
     const W = st.width, H = st.height, t = v.timer, D = v.duration;
-    const inA = Math.min(1, t / 8), outA = Math.min(1, (D - t) / 8);
-    const a = Math.min(inA, outA);
+    const a = Math.min(1, t / 8);
     const rm = reducedMotion();
     ctx.save();
     ctx.globalAlpha = a;
-    ctx.fillStyle = 'rgba(0,0,0,0.86)'; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = 'rgba(0,0,0,0.88)'; ctx.fillRect(0, 0, W, H);
 
-    // diagonal colour slash
+    // diagonal colour slash (hero pick's colour)
     const slashIn = rm ? 1 : Math.min(1, t / 10);
     ctx.save();
     ctx.translate(W / 2, H / 2); ctx.rotate(-0.22);
     const sg = ctx.createLinearGradient(-W, 0, W, 0);
     sg.addColorStop(0, 'rgba(0,0,0,0)'); sg.addColorStop(0.5, v.color); sg.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.globalAlpha = a * 0.28;
+    ctx.globalAlpha = a * 0.22;
     ctx.fillStyle = sg; ctx.fillRect(-W * slashIn, -70, W * 2 * slashIn, 140);
-    ctx.globalAlpha = a * 0.9;
-    ctx.fillStyle = v.color; ctx.fillRect(-W * slashIn, 72, W * 2 * slashIn, 3);
     ctx.restore();
 
-    // the Striker, posed and scaled up, gloves ignited
-    const pose = { speed: 'jab3', power: 'cross', technique: 'guard_jab' }[v.upgrade.tree] || (v.rarity === 'fusion' ? 'hook' : 'cross');
-    const S = 2.3, bx = 250, by = 430;
+    // v18 LAYOUT: the Striker owns the left third, the text owns the right —
+    // they never overlap (playtest: the pose covered the upgrade name).
+    const pose = { speed: 'jab3', power: 'cross', technique: 'guard_jab' }[v.upgrade.tree] || (v.rarity === 'fusion' || v.rarity === 'evolved' ? 'hook' : 'cross');
+    const S = 2.1, bx = 150, by = 440;
     const ent = {
         x: bx / S - 25, y: by / S, w: 50, h: 110, lane: 1, state: 'punching', punchType: pose,
         hitFrame: 0, didHit: true, slipBuff: 0, color: st.strikerColor || '#00ffff', trails: [],
-        // v17 colour rule: the upgrade's colour rides the PUNCH TRAIL and sparks,
+        // colour rule: the upgrade's colour rides the PUNCH TRAIL and sparks,
         // never the Striker's body or gloves.
         trailColor: v.color, trailHeat: Math.min(1, t / 10)
     };
-    ctx.save();
-    ctx.scale(S, S);
-    drawBoxer(ctx, ent, true, a);
+    ctx.save(); ctx.beginPath(); ctx.rect(0, 0, 380, H); ctx.clip();
+    ctx.scale(S, S); drawBoxer(ctx, ent, true, a);
     ctx.restore();
-    // sparks off the gloves
     if (ent.glovePositions) {
         ctx.fillStyle = v.color;
         v.sparks.forEach(sp => {
             const gp = ent.glovePositions[sp.gx];
             ctx.globalAlpha = a * sp.life;
-            ctx.fillRect(gp[0] * S + sp.ox, gp[1] * S + sp.oy, 3, 3);
+            ctx.fillRect(Math.min(370, gp[0] * S + sp.ox), gp[1] * S + sp.oy, 3, 3);
         });
         ctx.globalAlpha = a;
     }
 
-    // name slam
+    const TX = 410, TW = W - TX - 40;           // text column
+    const fit = (text, font, size, maxW) => { let s = size; do { ctx.font = font.replace('#', s); s -= 2; } while (ctx.measureText(text).width > maxW && s > 14); };
     const slamK = rm ? 1 : Math.min(1, Math.max(0, (t - 4) / 8));
-    const scale = rm ? 1 : 1 + (1 - slamK) * 1.6;
-    const rankTag = v.upgrade.rank ? `RANK ${v.upgrade.rank} · ` : '';
-    const kindLabel = rankTag + ({ evolved: '✦ EVOLVED FUSION ✦', fusion: '✦ FUSION ✦', apex: '★ APEX ★', verb: '⟡ NEW VERB', mastery: '◆ MASTERY', overclock: 'OVERCLOCK', orb: 'STAT' }[v.rarity] || 'STAT');
-    ctx.save();
-    ctx.translate(W * 0.64, H * 0.46);
-    ctx.globalAlpha = a * slamK;
-    ctx.fillStyle = v.color; ctx.font = 'bold 14px Orbitron'; ctx.textAlign = 'center';
-    ctx.fillText(kindLabel + (v.upgrade.tree && TREE_NAME[v.upgrade.tree] ? ` · ${TREE_NAME[v.upgrade.tree]}` : ''), 0, -48);
-    ctx.scale(scale, scale);
-    ctx.fillStyle = '#ffffff'; ctx.font = '900 italic 44px Orbitron';
-    ctx.shadowColor = v.color; ctx.shadowBlur = 24;
-    ctx.fillText(v.upgrade.name.toUpperCase(), 0, 0);
-    ctx.restore();
-    if (!v.repeat) {
-        ctx.globalAlpha = a * Math.min(1, Math.max(0, (t - 16) / 10));
-        ctx.fillStyle = 'rgba(255,255,255,0.8)'; ctx.font = '13px Orbitron'; ctx.textAlign = 'center';
-        wrapText(ctx, v.upgrade.desc, W * 0.64, H * 0.46 + 40, 440, 18);
+    ctx.textAlign = 'left';
+    const picks = v.picks && v.picks.length ? v.picks : [v.upgrade];
+    if (picks.length === 1) {
+        const u = picks[0];
+        ctx.globalAlpha = a * slamK;
+        ctx.fillStyle = v.color; ctx.font = 'bold 14px Orbitron';
+        ctx.fillText(evolutionLabel(u), TX, H * 0.40);
+        ctx.save();
+        const sc = rm ? 1 : 1 + (1 - slamK) * 0.6;
+        ctx.translate(TX, H * 0.40 + 52); ctx.scale(sc, sc);
+        fit(u.name.toUpperCase(), '900 italic #px Orbitron', 44, TW);
+        ctx.fillStyle = '#ffffff'; ctx.shadowColor = v.color; ctx.shadowBlur = 20;
+        ctx.fillText(u.name.toUpperCase(), 0, 0);
+        ctx.restore();
+        ctx.globalAlpha = a * Math.min(1, Math.max(0, (t - 14) / 10));
+        ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.font = '14px Orbitron';
+        wrapText(ctx, u.desc, TX, H * 0.40 + 92, TW, 20, 'left');
+    } else {
+        // a stacked chain: every pick, in the order they were taken
+        ctx.globalAlpha = a * slamK;
+        ctx.fillStyle = '#ffffff'; ctx.font = '900 italic 34px Orbitron'; ctx.shadowColor = v.color; ctx.shadowBlur = 16;
+        ctx.fillText(`${picks.length} EVOLUTIONS`, TX, 118); ctx.shadowBlur = 0;
+        const rowH = Math.min(110, (H - 190) / picks.length);
+        picks.forEach((u, i) => {
+            const y = 150 + i * rowH, col = upgradeColor(u);
+            const k = rm ? 1 : Math.min(1, Math.max(0, (t - 8 - i * 6) / 10));
+            ctx.globalAlpha = a * k;
+            ctx.fillStyle = col; ctx.fillRect(TX, y, 4, rowH - 14);
+            ctx.font = 'bold 11px Orbitron'; ctx.fillText(evolutionLabel(u), TX + 16, y + 14);
+            fit(u.name.toUpperCase(), '900 italic #px Orbitron', 24, TW - 16);
+            ctx.fillStyle = '#ffffff'; ctx.fillText(u.name.toUpperCase(), TX + 16, y + 42);
+            ctx.fillStyle = 'rgba(255,255,255,0.75)'; ctx.font = '12px Orbitron';
+            wrapText(ctx, u.desc, TX + 16, y + 62, TW - 16, 16, 'left', Math.max(1, Math.floor((rowH - 70) / 16) + 1));
+        });
     }
+    ctx.globalAlpha = a;
     // impact flash on the slam frame
-    if (!rm && t >= 10 && t <= 13) { ctx.globalAlpha = 0.25 * (14 - t) / 4; ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H); }
+    if (!rm && t >= 10 && t <= 13) { ctx.globalAlpha = 0.22 * (14 - t) / 4; ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H); ctx.globalAlpha = a; }
 
-    ctx.globalAlpha = a * 0.55; ctx.fillStyle = '#fff'; ctx.font = '11px Orbitron'; ctx.textAlign = 'center';
-    ctx.fillText('ANY KEY TO SKIP', W / 2, H - 96);
+    // v18: it waits for you — a clear, pulsing continue prompt once it holds.
+    if (v.holding) {
+        const pulse = 0.55 + 0.45 * Math.sin(Date.now() * 0.006);
+        ctx.globalAlpha = pulse; ctx.fillStyle = '#ffffff'; ctx.font = '900 13px Orbitron'; ctx.textAlign = 'center';
+        ctx.fillText(`PRESS ${glyphText('confirm')} TO CONTINUE`, W / 2, H - 40);
+    }
     ctx.restore();
 }
 
 const TREE_NAME = { speed: 'SPEED', power: 'POWER', technique: 'TECHNIQUE' };
 
-function wrapText(ctx, text, x, y, maxW, lh) {
+function wrapText(ctx, text, x, y, maxW, lh, align = 'center', maxLines = 99) {
+    ctx.textAlign = align;
     const words = String(text || '').split(' ');
-    let line = '', yy = y;
+    let line = '', yy = y, n = 0;
     for (const w of words) {
         const test = line ? line + ' ' + w : w;
-        if (ctx.measureText(test).width > maxW && line) { ctx.fillText(line, x, yy); line = w; yy += lh; }
+        if (ctx.measureText(test).width > maxW && line) {
+            if (++n >= maxLines) { ctx.fillText(line + '…', x, yy); return; }
+            ctx.fillText(line, x, yy); line = w; yy += lh;
+        }
         else line = test;
     }
     if (line) ctx.fillText(line, x, yy);
@@ -321,46 +349,31 @@ export function drawKoFx(ctx) {
     ctx.restore();
 }
 
-// ---------- v17 ROPES (world space) ----------
-// The Striker's corner (behind him) and the enemy's ropes (right). Cornered: the
-// ropes buzz red. In LIVE WIRE's fight the Striker's ropes are electrified.
-export function drawRopes(ctx) {
-    const R = CONSTANTS.ROPES, H = st.height, t = Date.now();
-    const top = H * CONSTANTS.LANE_Y[0] - 110, bot = H * CONSTANTS.LANE_Y[2] + 14;
-    const cornered = !!(st.player && st.player.cornered);
-    const live = st.enemies.some(e => e.isBoss && e.controller === 'live_wire');
-    const ropeYs = [0.3, 0.55, 0.8].map(f => top + (bot - top) * f);
+// ---------- v18 LIVE WIRE's LIVE LANES (world space) ----------
+// Warning: a thin crackling yellow line. Live: a thick electric band with arcs.
+export function drawLiveLanes(ctx) {
+    if (!st.liveLanes || !st.liveLanes.length) return;
     ctx.save();
-    // --- Striker's ropes ---
-    const px = R.playerPostX;
-    const buzz = cornered ? Math.sin(t * 0.09) * 2.5 : 0;
-    let ropeCol = 'rgba(200, 220, 255, 0.35)', glow = 0;
-    if (live) { ropeCol = cornered ? '#fff36b' : 'rgba(255, 243, 107, 0.75)'; glow = cornered ? 26 : 12; }
-    else if (cornered) { ropeCol = '#ff5a3c'; glow = 18; }
-    ctx.shadowColor = ropeCol; ctx.shadowBlur = glow;
-    ctx.fillStyle = 'rgba(20, 20, 30, 0.9)'; ctx.fillRect(px - 7, top - 10, 14, bot - top + 14);
-    ctx.fillStyle = ropeCol; ctx.fillRect(px - 2, top - 10, 4, bot - top + 14);
-    ctx.strokeStyle = ropeCol; ctx.lineWidth = cornered ? 4 : 3;
-    ropeYs.forEach((y, i) => { ctx.beginPath(); ctx.moveTo(0, y - 18 + buzz * (i % 2 ? 1 : -1)); ctx.lineTo(px, y + buzz * (i % 2 ? -1 : 1)); ctx.stroke(); });
-    if (live) { // crackling arcs along the live wires
-        ctx.lineWidth = 1.5; ctx.strokeStyle = '#ffffff';
-        ropeYs.forEach(y => {
-            if (Math.random() < (cornered ? 0.9 : 0.35)) {
-                ctx.beginPath(); let x0 = Math.random() * px, y0 = y - 12 + Math.random() * 6; ctx.moveTo(x0, y0);
-                for (let k = 0; k < 4; k++) { x0 += 6 + Math.random() * 8; y0 += (Math.random() - 0.5) * 12; ctx.lineTo(x0, y0); }
+    for (const z of st.liveLanes) {
+        const y = st.height * CONSTANTS.LANE_Y[z.lane];
+        if (z.phase === 'warn') {
+            const a = 0.35 + 0.35 * Math.sin(Date.now() * 0.04);
+            ctx.strokeStyle = `rgba(255, 243, 107, ${a.toFixed(3)})`; ctx.lineWidth = 3; ctx.setLineDash([10, 10]);
+            ctx.lineDashOffset = -Date.now() * 0.1 % 20;
+            ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(st.width, y); ctx.stroke(); ctx.setLineDash([]);
+        } else {
+            ctx.shadowColor = '#fff36b'; ctx.shadowBlur = 20;
+            ctx.strokeStyle = 'rgba(255, 243, 107, 0.35)'; ctx.lineWidth = 22; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(st.width, y); ctx.stroke();
+            ctx.strokeStyle = '#fff36b'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(st.width, y); ctx.stroke();
+            ctx.shadowBlur = 0; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.5;
+            for (let k = 0; k < 4; k++) {
+                let x0 = Math.random() * st.width, y0 = y - 10 + Math.random() * 20;
+                ctx.beginPath(); ctx.moveTo(x0, y0);
+                for (let s = 0; s < 5; s++) { x0 += 10 + Math.random() * 14; y0 += (Math.random() - 0.5) * 18; ctx.lineTo(x0, y0); }
                 ctx.stroke();
             }
-        });
+        }
     }
-    ctx.shadowBlur = 0;
-    // --- enemy ropes (the far corner): faint, flash when someone's pinned ---
-    const ex = R.enemyPostX;
-    const pinned = st.enemies.some(e => (e.onRopes || 0) > 0);
-    const eCol = pinned ? 'rgba(255,255,255,0.8)' : 'rgba(200, 220, 255, 0.16)';
-    ctx.fillStyle = 'rgba(20, 20, 30, 0.6)'; ctx.fillRect(ex - 6, top - 10, 12, bot - top + 14);
-    ctx.fillStyle = eCol; ctx.fillRect(ex - 1.5, top - 10, 3, bot - top + 14);
-    ctx.strokeStyle = eCol; ctx.lineWidth = 2;
-    ropeYs.forEach(y => { ctx.beginPath(); ctx.moveTo(ex, y); ctx.lineTo(st.width, y - 18); ctx.stroke(); });
     ctx.restore();
 }
 
@@ -399,16 +412,16 @@ export function drawKnockdownUI(ctx) {
     const count = Math.max(0, Math.min(10, k.count));
     if (count > 0 && k.phase !== 'up') {
         const pulse = 1 + Math.max(0, 1 - (k.frame % CONSTANTS.KNOCKDOWN.framesPerCount) / 10) * 0.35;
-        ctx.save(); ctx.translate(rx + 25, ry - 190); ctx.scale(pulse, pulse);
+        ctx.save(); ctx.translate(rx + 25, Math.max(150, ry - 190)); ctx.scale(pulse, pulse); // never clipped on the top lane
         ctx.fillStyle = count >= 8 ? '#ff3355' : '#ffffff'; ctx.font = '900 italic 64px Orbitron'; ctx.textAlign = 'center';
         ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = 20;
         ctx.fillText(String(count), 0, 0); ctx.restore();
     }
     ctx.textAlign = 'center';
     ctx.fillStyle = '#ffffff'; ctx.font = '900 italic 26px Orbitron';
-    ctx.fillText(k.phase === 'up' ? 'BACK ON YOUR FEET' : 'GET UP!', W / 2, 60);
+    ctx.fillText(k.phase === 'up' ? `BACK ON YOUR FEET · ${Math.round((k.hpFrac || 0) * 100)}% HP` : 'GET UP!', W / 2, 60);
     ctx.font = 'bold 12px Orbitron'; ctx.fillStyle = 'rgba(255,255,255,0.7)';
-    ctx.fillText(k.phase === 'up' ? '' : 'HIT THE LANE PROMPTS BEFORE TEN · ONE COUNT PER ARC', W / 2, 82);
+    ctx.fillText(k.phase === 'up' ? '' : 'HIT EACH PROMPT ON THE BEAT · CLEANER = MORE HEALTH', W / 2, 82);
     // progress pips
     const n = k.seq.length;
     for (let i = 0; i < n; i++) {
@@ -481,6 +494,12 @@ export function drawBossPoster(ctx) {
     ctx.shadowBlur = 0;
     ctx.fillStyle = 'rgba(255,255,255,0.75)'; ctx.font = 'bold 12px Orbitron';
     ctx.fillText(P.tagline, px + pw - 150, py + 130);
+    // v18: holds until you're ready
+    if (!st.posterConfirmed && st.bossIntroTimer <= CONSTANTS.POSTER_HOLD_FRAME) {
+        const pulse = 0.55 + 0.45 * Math.sin(Date.now() * 0.006);
+        ctx.globalAlpha = a * pulse; ctx.fillStyle = '#ffffff'; ctx.font = '900 16px Orbitron'; ctx.shadowBlur = 0;
+        ctx.fillText(`PRESS ${glyphText('confirm')} TO FIGHT`, W / 2, py + ph - 30);
+    }
     // FIGHT! on the way out
     if (st.bossIntroTimer < 40) {
         ctx.globalAlpha = Math.min(1, (40 - st.bossIntroTimer) / 8) * outK;
@@ -509,5 +528,63 @@ export function drawBillingCard(ctx, card, age, alpha) {
     ctx.fillStyle = card.color || '#22d3ee'; ctx.font = '900 18px Orbitron';
     ctx.fillText(String(card.venue).toUpperCase(), W / 2, by + 108);
     if (card.tagline) { ctx.fillStyle = 'rgba(255,255,255,0.7)'; ctx.font = 'bold 12px Orbitron'; ctx.fillText(card.tagline, W / 2, by + 132); }
+    ctx.restore();
+}
+
+// ---------- v18 BRUISER SWEEP tell + first-time hint (world space) ----------
+export function drawSweep(ctx) {
+    const lanes = st.sweepLanes || [];
+    if (lanes.some(Boolean)) {
+        const pulse = 0.5 + 0.5 * Math.sin(Date.now() * 0.03);
+        ctx.save();
+        lanes.forEach((on, l) => {
+            if (!on) return;
+            const y = st.height * CONSTANTS.LANE_Y[l];
+            ctx.strokeStyle = `rgba(255, 176, 32, ${(0.25 + 0.25 * pulse).toFixed(3)})`; ctx.lineWidth = 18;
+            ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(st.width, y); ctx.stroke();
+            ctx.strokeStyle = '#ffb020'; ctx.lineWidth = 3; ctx.setLineDash([16, 10]); ctx.lineDashOffset = Date.now() * 0.08 % 26;
+            ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(st.width, y); ctx.stroke(); ctx.setLineDash([]);
+        });
+        ctx.restore();
+    }
+    if ((st.sweepHint || 0) > 0 && st.player) {
+        const p = st.player, a = Math.min(1, st.sweepHint / 12);
+        const g1 = glyph('ghost'), g2 = glyph('guard');
+        // above the Striker — or below him on the top lane, clear of the HUD
+        const top = p.y - 214 < 100 ? p.y + 26 : p.y - 214;
+        ctx.save(); ctx.globalAlpha = a; ctx.textAlign = 'center';
+        ctx.fillStyle = 'rgba(6,8,14,0.88)'; ctx.fillRect(p.x - 70, top, 190, 50);
+        ctx.fillStyle = '#ffb020'; ctx.fillRect(p.x - 70, top, 190, 3);
+        ctx.font = '900 11px Orbitron'; ctx.fillStyle = '#ffb020';
+        ctx.fillText("CAN'T SLIP A SWEEP", p.x + 25, top + 16);
+        ctx.font = '900 12px Orbitron'; ctx.fillStyle = '#ffffff';
+        ctx.fillText(`${g1.label} GHOST  ·  ${g2.label} GUARD`, p.x + 25, top + 38);
+        ctx.restore();
+    }
+}
+
+// ---------- v18 LOADED CROSS charge ring (world space) ----------
+// Playtest: "make the visual more prominent". A ring AROUND the Striker (never
+// on his body/gloves) fills while Cross is held, then locks bright when loaded.
+export function drawChargeRing(ctx) {
+    const p = st.player;
+    if (!p || !p.charging || !st.progressionMods.loadedCross) return;
+    const LC = CONSTANTS.VERBS.loadedCross;
+    const k = Math.min(1, p.crossCharge / LC.chargeFrames), loaded = k >= 1;
+    const cx = p.x + 25, cy = p.y - 62, col = buildColor();
+    const r = loaded ? 70 + Math.sin(Date.now() * 0.03) * 4 : 70;
+    ctx.save();
+    ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+    ctx.beginPath(); ctx.arc(cx, cy, 70, 0, Math.PI * 2); ctx.stroke();
+    ctx.shadowColor = col; ctx.shadowBlur = loaded ? 28 : 12;
+    ctx.strokeStyle = loaded ? '#ffffff' : col; ctx.lineWidth = loaded ? 7 : 5;
+    ctx.beginPath(); ctx.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * k); ctx.stroke();
+    if (loaded) {
+        ctx.strokeStyle = col; ctx.lineWidth = 3; ctx.globalAlpha = 0.6;
+        ctx.beginPath(); ctx.arc(cx, cy, r + 10, 0, Math.PI * 2); ctx.stroke();
+        ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+        ctx.fillStyle = '#ffffff'; ctx.font = '900 italic 14px Orbitron'; ctx.textAlign = 'center';
+        ctx.fillText('LOADED — RELEASE', cx, cy + r + 26);
+    }
     ctx.restore();
 }

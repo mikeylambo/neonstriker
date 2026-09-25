@@ -12,11 +12,11 @@ import { gateBossDamage } from '../systems/finisher.js';
 export function resetPlayerObj() {
     return { lane: 1, x: 180, y: 0, w: 50, h: 110, state: 'idle', punchTimer: 0, punchType: null, hitFrame: 0, didHit: false, slipCooldown: 0, slipBuff: 0, color: '#00ffff', trails: [], trailTimer: 0, recoveryTimer: 0, moveCancelReady: false, jabStep: 0, comboWindow: 0, inputBuffer: null, inputBufferTimer: 0, movementBuffer: null, movementBufferTimer: 0, ghostStepTimer: 0, ghostStepCooldown: 0, ghostStepCharges: 1, dangerLevel: 0, hitStun: 0, lastPunchLanded: null, dempseyActive: false, guardReadTimer: 0, flowStreak: 0,
         // v17
-        invuln: 0, pivotTimer: 0, charging: false, crossCharge: 0, crossLoaded: false, bufferedCharge: 0, cornered: false, cornerTimer: 0, dempseyAlternations: 0 };
+        invuln: 0, pivotTimer: 0, charging: false, crossCharge: 0, crossLoaded: false, bufferedCharge: 0, dempseyAlternations: 0 };
 }
 
-const R = CONSTANTS.ROPES;
-const FOOTWORK_MIN_X = R.playerMinX, FOOTWORK_MAX_X = R.playerMaxX, FOOTWORK_ADVANCE_SPD = 4.2, FOOTWORK_RETREAT_SPD = 3.4, FOOTWORK_HOME_PULL = 0.02;
+const FW = CONSTANTS.FOOTWORK;
+const FOOTWORK_MIN_X = FW.minX, FOOTWORK_MAX_X = FW.maxX, FOOTWORK_ADVANCE_SPD = FW.advanceSpd, FOOTWORK_RETREAT_SPD = FW.retreatSpd, FOOTWORK_HOME_PULL = FW.homePull;
 
 export function resetJabString() {
     if (st.player) { st.player.jabStep = 0; st.player.comboWindow = 0; st.player.lastPunchLanded = null; st.player.dempseyActive = false; }
@@ -104,11 +104,10 @@ export function registerPerfectGhostStep(attacker) {
 
 export function checkPerfectSlip(oldLane) {
     let slipQuality = 'none', bossSlipped = null;
-    const cornered = CONSTANTS.isCornered(st.player);
     st.enemies.forEach(en => {
-        if (en.lane === oldLane && en.stun <= 0) {
+        if (en.lane === oldLane && en.stun <= 0 && en.currentMove !== 'sweep') { // a sweep can't be slipped
             let isThreat = false;
-            const { perfect: perfectThresh, good: goodThresh } = CONSTANTS.getSlipThresholds(en.type, st.progressionMods.perfectSlipWindowBonus, cornered);
+            const { perfect: perfectThresh, good: goodThresh } = CONSTANTS.getSlipThresholds(en.type, st.progressionMods.perfectSlipWindowBonus);
 
             if (en.type === 'zoner') {
                 if (en.attackCooldown <= 40 && en.x > st.player.x - 20) isThreat = true;
@@ -187,7 +186,7 @@ export function activateInstinct(zone = false) {
     if (HUD.barCont) HUD.barCont.classList.add('beast-active'); doFlash(0.5); st.shake = 20; st.hitstop = 10; triggerShockwave(st.player.x, st.player.y - 50, '#ffffff'); playSound('perfect_slip');
     if (zone) {
         // v17 INSTINCT ZONE: slow-mo world + colour-inverted screen (render only).
-        st.zoneTimer = CONSTANTS.ZONE.frames;
+        st.zoneTimer = CONSTANTS.ZONE.frames; st.zoneHold = 0;
         playSound('zone');
         spawnFloatingText(st.player.x, st.player.y - 140, 'THE ZONE', '#ffffff');
     }
@@ -271,6 +270,15 @@ export function startPunch(t, charge = 0) {
         st.player.punchTimer = Math.max(8, Math.floor(16 * sF));
         st.player.hitFrame = Math.max(3, Math.floor(6 * sF));
     }
+    // v18 ZONE LUNGE: inside the Zone every punch closes the distance to the nearest
+    // enemy in your lane (playtest: knocked-back targets made the slow-mo feel wasted).
+    if ((st.zoneTimer || 0) > 0 && t !== 'guard_jab' && t !== 'check_hook') {
+        const tgt = st.enemies.filter(e => e.lane === st.player.lane && e.x > st.player.x && e.x - st.player.x < 320).sort((a, b) => a.x - b.x)[0];
+        if (tgt && tgt.x - st.player.x > 95) {
+            st.player.x = Math.min(tgt.x - 90, FOOTWORK_MAX_X + 120);
+            for (let i = 0; i < 6; i++) st.particles.push({ x: st.player.x - 20 - Math.random() * 40, y: st.player.y - 30 - Math.random() * 60, vx: -9, vy: 0, life: 0.5, color: '#ffffff', type: 'dash_line' });
+        }
+    }
     // PIVOT SLIP: the first punch out of a pivot is instant.
     if (st.player.pivotTimer > 0 && t !== 'guard_jab' && t !== 'check_hook') { st.player.hitFrame = 1; st.player.pivotTimer = 0; }
 
@@ -303,7 +311,6 @@ export function takeDamage(amt, isHeavy, en) {
     st.health -= actualDmg;
     st.player.hitStun = isHeavy ? 10 : 5;
     st.shake = isHeavy ? 30 : 15;
-    // v17 ROPES: getting hit pushes you back — but never through your ropes.
     st.player.x = Math.max(FOOTWORK_MIN_X, st.player.x - ((isHeavy ? 40 : 10) * st.progressionMods.incomingRecoilMult));
     st.player.state = 'hurt'; resetJabString();
 
@@ -316,6 +323,14 @@ export function takeDamage(amt, isHeavy, en) {
     if (sf && flashScale() > 0.01) { sf.style.background = 'red'; sf.style.opacity = 0.4 * flashScale(); setTimeout(() => { if (sf) { sf.style.background = 'white'; sf.style.opacity = 0; } }, 150); }
     if (HUD.health) { HUD.health.classList.add('text-red-500', 'scale-125'); setTimeout(() => HUD.health.classList.remove('text-red-500', 'scale-125'), 200); }
     if (st.enemies.some(e => e.isBoss && e.desperation)) st.statDespDamage++;
+}
+
+// Mid-combo, or a target in punching range in YOUR lane? Then the Striker holds
+// his ground (no drifting backwards under your own punches). Anything looser
+// — e.g. "someone anywhere nearby" — kept him parked too far forward.
+function isEngaged(p) {
+    if (p.comboWindow > 0 || p.state === 'punching' || p.state === 'recovery') return true;
+    return st.enemies.some(e => e.hp > 0 && e.lane === p.lane && e.x > p.x - 30 && e.x - p.x < 160);
 }
 
 // Reads the remappable binds + pad into one input snapshot for this frame.
@@ -362,17 +377,11 @@ export function updatePlayer() {
     if (p.state !== 'hurt' && p.state !== 'punching') {
         if (input.holdRight) p.x = Math.min(FOOTWORK_MAX_X, p.x + FOOTWORK_ADVANCE_SPD);
         else if (input.holdLeft) p.x = Math.max(FOOTWORK_MIN_X, p.x - FOOTWORK_RETREAT_SPD);
-        else p.x += (180 - p.x) * FOOTWORK_HOME_PULL;
+        // v18: the drift back to neutral only happens when you're NOT engaged —
+        // mid-combo (or with anyone in reach) you stay planted where you stepped.
+        // (Playtest: the pull home turned combos into retreating punches.)
+        else if (!FW.holdGroundWhenEngaged || !isEngaged(p)) p.x += (180 - p.x) * FOOTWORK_HOME_PULL;
     }
-
-    // v17 ROPES & CORNERS: on your ropes = CORNERED — slip windows tighten (see
-    // getSlipThresholds) and the ropes buzz as a warning.
-    p.cornered = CONSTANTS.isCornered(p);
-    if (p.cornered) {
-        if (p.cornerTimer === 0) spawnFloatingText(p.x + 10, p.y - 150, 'CORNERED', '#ff5a3c');
-        if (p.cornerTimer % 30 === 0) playSound('rope_buzz');
-        p.cornerTimer++;
-    } else p.cornerTimer = 0;
 
     if (input.instinct && st.instinctMeter >= 100 && !st.isInstinct) activateInstinct(false);
 
@@ -383,23 +392,29 @@ export function updatePlayer() {
     if (p.state === 'recovery') { if (--p.recoveryTimer <= 0) p.state = 'idle'; }
     else if (p.state === 'ghost_step') { if (--p.ghostStepTimer <= 0) p.state = 'idle'; }
 
-    // v17 POWER R3 — LOADED CROSS: with it, Cross fires on RELEASE. A tap is a
-    // normal Cross; hold it to load a guard-breaking, rope-driving blow.
+    // POWER R3 — LOADED CROSS: with it, Cross fires on RELEASE. A tap is a normal
+    // Cross; hold it to load a guard-breaking blow. v18: the charge counts from the
+    // moment Cross goes down in ANY state (it used to only start from idle, so a
+    // press during a punch or recovery silently became a tap), and slipping while
+    // holding keeps the charge.
     let crossAttempt = input.cross, crossCharge = 0;
     if (st.progressionMods.loadedCross) {
+        const LC = CONSTANTS.VERBS.loadedCross;
         crossAttempt = false;
+        if (input.cross) { p.charging = true; p.crossCharge = 0; }
         if (p.charging) {
             if (input.crossHeld) {
-                p.crossCharge = Math.min(CONSTANTS.VERBS.loadedCross.maxFrames, p.crossCharge + 1);
-                if (p.crossCharge === CONSTANTS.VERBS.loadedCross.chargeFrames) { playSound('charge_ready'); createImpact(p.x + 60, p.y - 70, buildColor()); }
-                if (st.particles.length < 90 && p.crossCharge % 3 === 0) {
-                    const a = Math.random() * Math.PI * 2, d = 40 + Math.random() * 20;
-                    st.particles.push({ x: p.x + 55 + Math.cos(a) * d, y: p.y - 70 + Math.sin(a) * d, vx: -Math.cos(a) * 4, vy: -Math.sin(a) * 4, life: 0.4, color: buildColor(), type: 'spark' });
+                p.crossCharge = Math.min(LC.maxFrames, p.crossCharge + 1);
+                if (p.crossCharge === LC.chargeFrames) {
+                    playSound('charge_ready'); doFlash(0.15); st.shake = Math.max(st.shake, 6);
+                    triggerShockwave(p.x + 25, p.y - 60, buildColor());
+                    spawnFloatingText(p.x + 25, p.y - 150, 'LOADED', buildColor());
+                }
+                if (st.particles.length < 110 && p.crossCharge % 2 === 0) {
+                    const a = Math.random() * Math.PI * 2, d = 50 + Math.random() * 25;
+                    st.particles.push({ x: p.x + 45 + Math.cos(a) * d, y: p.y - 65 + Math.sin(a) * d, vx: -Math.cos(a) * 5, vy: -Math.sin(a) * 5, life: 0.45, color: buildColor(), type: 'spark' });
                 }
             } else { crossAttempt = true; crossCharge = p.crossCharge; p.charging = false; }
-        } else if (input.cross) {
-            if (p.state === 'idle') { p.charging = true; p.crossCharge = 0; }
-            else crossAttempt = true; // buffered from a punch/recovery: fires as a tap
         }
     }
 
@@ -438,7 +453,7 @@ export function updatePlayer() {
             else { p.inputBuffer = attackAction; p.bufferedCharge = crossCharge; p.inputBufferTimer = 12; }
         } else if (moveAction) {
             if (p.state === 'guarding') p.state = 'idle';
-            p.charging = false;
+            if (moveAction === 'ghost') p.charging = false; // a slip keeps a Loaded Cross charging
             executeMovementInput(moveAction);
         } else if (input.guard && !p.charging) {
             executeMovementInput('guard');

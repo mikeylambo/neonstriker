@@ -7,7 +7,8 @@ import { SequenceManager } from './systems/sequences.js';
 import { applyUpgrade, advanceStage, refreshStageHud, openingSubtitle, roundCard } from './systems/progression/apply.js';
 
 // FIXED: Corrected path and filename to match the architectural rename (draft.js)
-import { buildDraft, buildDraftTease } from './systems/progression/draft.js';
+import { buildDraft } from './systems/progression/draft.js';
+import { setInputDevice, inputDevice, padFamily, glyph, glyphHTML, glyphText } from './systems/input_device.js';
 
 import { UPGRADE_POOL } from './data/upgrades.js';
 import { dismissTutorial, triggerTutorial, spawnTutorialEnemy } from './systems/tutorial.js';
@@ -26,7 +27,7 @@ import { rankForRun, pbDeltaText, comboMultiplier } from './systems/score.js';
 import { acceptWager, declineWager } from './systems/wagers.js';
 import { updateFinisher } from './systems/finisher.js';
 import { startKnockdown, updateKnockdown, canBeKnockedDown } from './systems/knockdown.js';
-import { playUpgradeVignette, updateVignette, skipVignette, upgradeRarity, upgradeColor } from './systems/vignette.js';
+import { playUpgradeVignette, updateVignette, skipVignette, upgradeRarity, upgradeColor, evolutionLabel } from './systems/vignette.js';
 
 export const $ = function(id) { return document.getElementById(id); };
 export const canvas = document.getElementById('gameCanvas');
@@ -35,68 +36,77 @@ export const ctx = canvas ? canvas.getContext('2d', { alpha: false }) : null;
 // ==========================================
 // DRAFT SCREEN (v16 rarity visuals + Arc 1 fusion tease)
 // ==========================================
-const RARITY_BADGE = { orb: 'STAT', verb: '⟡ NEW VERB', mastery: '◆ MASTERY', apex: '★ APEX', fusion: '✦ FUSION ✦', evolved: '✦ EVOLVED FUSION ✦', overclock: 'OVERCLOCK' };
-function cardBadge(option, rarity) {
-    const tree = CONSTANTS.TREES[option.tree];
-    if (option.kind === 'rank') return `${tree ? tree.name : ''} · RANK ${option.rank}${rarity === 'orb' ? '' : ' · ' + RARITY_BADGE[rarity]}`;
-    return RARITY_BADGE[rarity] + (tree ? ` · ${tree.name}` : '');
-}
+const evolutionBadge = (option, rarity) => evolutionLabel(option, rarity);
 
 function escapeAttr(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
+// v18 DRAFT FOCUS: pads pick with D-pad/stick + confirm (× / A), which works the
+// same on every controller; keyboard keeps 1/2/3 and gets ←/→ + Enter too. A
+// short grace stops a mid-combat button mash from instantly taking a card.
+const DRAFT_GRACE_FRAMES = 20;
+function renderDraftFocus() {
+    const cards = document.querySelectorAll ? document.querySelectorAll('#draft-container .draft-card') : [];
+    cards.forEach((c, i) => c.classList.toggle('focused', i === st.draftFocus));
+    const hint = document.getElementById('upgrade-hint');
+    if (hint) {
+        const dev = inputDevice();
+        hint.innerHTML = dev === 'keyboard'
+            ? `${glyphHTML('left')}${glyphHTML('right')} CHOOSE &nbsp;·&nbsp; <span class="glyph">1</span><span class="glyph">2</span><span class="glyph">3</span> OR ${glyphHTML('confirm')} TAKE IT`
+            : `${glyphHTML('left')}${glyphHTML('right')} CHOOSE &nbsp;·&nbsp; ${glyphHTML('confirm')} TAKE IT`;
+    }
+}
+function moveDraftFocus(dir) {
+    const n = st.currentDraftOptions.length;
+    if (!n) return;
+    st.draftFocus = ((st.draftFocus || 0) + dir + n) % n;
+    playSound('slip');
+    renderDraftFocus();
+}
+function confirmDraftFocus() {
+    if (st.uiFrame - (st.draftOpenedAt || 0) < DRAFT_GRACE_FRAMES) return;
+    const opt = st.currentDraftOptions[st.draftFocus || 0];
+    if (opt) applyUpgrade(st, opt);
+}
+window.engineFocusDraft = function (i) { st.draftFocus = i; renderDraftFocus(); };
 
 export function triggerUpgradeDraft() {
     st.screen = 'upgrading';
     st.draftHold = 0;
+    st.draftOpenedAt = st.uiFrame || 0;
+    st.draftFocus = 0;
+    // A run of back-to-back evolutions is one "chain": numbered, then celebrated together.
+    if (!st.evoChain || !st.evoChain.active) st.evoChain = { active: true, total: st.pendingUpgrades, picks: [] };
     const title = document.getElementById('upgrade-title');
-
     if (title) {
-        if (st.pendingUpgrades > 1) {
-            title.innerText = `EVOLUTIONS REMAINING: ${st.pendingUpgrades}`;
-            title.style.color = '#ff00ff';
-        } else {
-            title.innerText = "EVOLUTION READY";
-            title.style.color = '#ffffff';
-        }
+        const idx = st.evoChain.picks.length + 1, total = Math.max(st.evoChain.total, idx);
+        title.innerText = total > 1 ? `EVOLUTION ${idx} OF ${total}` : 'EVOLUTION';
+        title.style.color = total > 1 ? '#ff4fd8' : '#ffffff';
     }
+    const sub = document.getElementById('upgrade-sub');
+    if (sub) sub.innerText = 'CHOOSE ONE';
 
     let draftOptions = buildDraft(st, UPGRADE_POOL);
-    const tease = buildDraftTease(st, UPGRADE_POOL, CONSTANTS.getArcIndex(st.currentStage));
     const container = document.getElementById('draft-container');
 
     if (container) {
         container.innerHTML = '';
-        const PAD_LABEL = ['X', 'Y', 'B'];
         draftOptions.forEach((option, index) => {
             const rarity = upgradeRarity(option);
             const color = upgradeColor(option);
-            const iconText = `[${index + 1}] / [${PAD_LABEL[index] || '?'}]`;
-
             const btnHTML = `
-                <div class="draft-card card-${rarity}" style="--card-color:${color}; animation-delay:${index * 90 + (rarity === 'fusion' || rarity === 'evolved' || rarity === 'apex' ? 220 : 0)}ms" onclick="window.engineApplyUpgradeState('${escapeAttr(option.id)}')">
+                <div class="draft-card card-${rarity}" style="--card-color:${color}; animation-delay:${index * 90 + (rarity === 'fusion' || rarity === 'evolved' || rarity === 'apex' ? 220 : 0)}ms" onmouseenter="window.engineFocusDraft(${index})" onclick="window.engineApplyUpgradeState('${escapeAttr(option.id)}')">
                     <div class="card-inner">
-                        <div class="card-badge">${cardBadge(option, rarity)}</div>
+                        <div class="card-badge">${evolutionBadge(option, rarity)}</div>
                         <div class="card-name">${option.name}</div>
                         <div class="card-desc">${option.desc}</div>
-                        <div class="card-key">${iconText}</div>
+                        <div class="card-key">${inputDevice() === 'keyboard' ? `<span class="glyph">${index + 1}</span>` : ''}</div>
                     </div>
                 </div>
             `;
             container.insertAdjacentHTML('beforeend', btnHTML);
         });
-        if (tease) {
-            const tr = upgradeRarity(tease), tc = upgradeColor(tease);
-            const tBadge = tease.kind === 'rank' ? `🔒 ${cardBadge(tease, tr)}` : '🔒 FUSION · LOCKED';
-            container.insertAdjacentHTML('beforeend', `
-                <div class="draft-card card-${tr} card-locked" style="--card-color:${tc}; animation-delay:${draftOptions.length * 90 + 260}ms" title="Locked — build toward it">
-                    <div class="card-inner">
-                        <div class="card-badge">${tBadge}</div>
-                        <div class="card-name">${tease.name}</div>
-                        <div class="card-desc">${tease.desc}</div>
-                        <div class="card-key card-req">${tease.kind === 'rank' ? '' : 'REQUIRES '}${tease.reqText}</div>
-                    </div>
-                </div>`);
-        }
     }
+    renderDraftFocus();
 
     // Rare-card reveal stings, timed to the card's reveal animation.
     const rs = draftOptions.map(upgradeRarity);
@@ -106,7 +116,7 @@ export function triggerUpgradeDraft() {
     if (HUD.screens.upgrade) HUD.screens.upgrade.style.display = 'flex';
 }
 
-window.engineTriggerUpgradeDraft = triggerUpgradeDraft;
+window.engineTriggerUpgradeDraft = triggerUpgradeDraft;window.engineTriggerUpgradeDraft = triggerUpgradeDraft;
 window.enginePlayUpgradeVignette = playUpgradeVignette;
 
 export { HUD, playSound, spawnFloatingText, showToast, triggerShockwave, doFlash, createImpact, createVacuum, createShatter, triggerTutorial, spawnTutorialEnemy, SequenceManager };
@@ -277,32 +287,56 @@ function findUpgrade(id) {
     return [...UPGRADE_POOL.orbs, ...UPGRADE_POOL.masteries, ...UPGRADE_POOL.fusions, ...UPGRADE_POOL.overclocks].find(u => u.id === id);
 }
 
+// v18 LOADOUT: every tree rank (and every other evolution you own) is a
+// selectable chip; the panel on top explains the selected one. Mouse, arrows
+// or D-pad. No arc gating shown here — just what you have and what's next.
+let loadoutSel = { row: 0, col: 0 };
+function loadoutRows() {
+    const rows = CONSTANTS.TREE_ORDER.map(tree => UPGRADE_POOL.orbs.filter(o => o.tree === tree).sort((a, b) => a.rank - b.rank));
+    const owned = st.acquiredUpgradeIds.map(findUpgrade).filter(u => u && u.kind !== 'rank');
+    const ocs = Object.entries(st.overclockCounts).filter(([, n]) => n > 0).map(([k, n]) => { const u = findUpgrade(OC_NAMES[k]); return u ? { ...u, stack: n } : null; }).filter(Boolean);
+    const extra = [...owned, ...ocs];
+    if (extra.length) rows.push(extra);
+    return rows;
+}
+function loadoutStatus(u) {
+    if (u.kind !== 'rank') return { text: u.stack ? `OWNED ×${u.stack}` : 'OWNED', cls: 'on' };
+    const have = st.orbCounts[u.tree] || 0;
+    if (u.rank <= have) return { text: 'OWNED', cls: 'on' };
+    if (u.rank === have + 1) return { text: 'NEXT', cls: 'next' };
+    return { text: 'NOT YET', cls: '' };
+}
 export function renderLoadout() {
     const el = document.getElementById('loadout-body');
     if (!el) return;
-    const cap = CONSTANTS.rankCap(CONSTANTS.getArcIndex(st.currentStage));
-    const orbRows = CONSTANTS.TREE_ORDER.map(tree => {
+    const rows = loadoutRows();
+    loadoutSel.row = Math.min(loadoutSel.row, rows.length - 1);
+    loadoutSel.col = Math.min(loadoutSel.col, rows[loadoutSel.row].length - 1);
+    const sel = rows[loadoutSel.row][loadoutSel.col];
+    const sStat = loadoutStatus(sel);
+    const detail = `<div class="lo-detail" style="--card-color:${upgradeColor(sel)}">
+        <div class="lo-badge">${evolutionBadge(sel, upgradeRarity(sel))} · <span class="lo-state ${sStat.cls}">${sStat.text}</span></div>
+        <div class="lo-name">${sel.name}</div><div class="lo-desc">${sel.desc}</div></div>`;
+    const chip = (u, r, c) => {
+        const s = loadoutStatus(u), selected = r === loadoutSel.row && c === loadoutSel.col;
+        const label = u.kind === 'rank' ? `${u.rank}. ${u.name}` : u.name + (u.stack ? ` ×${u.stack}` : '');
+        return `<span class="lo-rank ${s.cls} ${selected ? 'sel' : ''}" style="--tree-color:${upgradeColor(u)}" onmouseenter="window.engineLoadoutSelect(${r},${c})" onclick="window.engineLoadoutSelect(${r},${c})">${label}</span>`;
+    };
+    const treeRows = CONSTANTS.TREE_ORDER.map((tree, r) => {
         const lvl = st.orbCounts[tree] || 0;
-        const ranks = UPGRADE_POOL.orbs.filter(o => o.tree === tree).sort((a, b) => a.rank - b.rank);
-        const perks = ranks.map(r => `<span class="lo-rank ${r.rank <= lvl ? 'on' : ''} ${r.rank > cap ? 'capped' : ''}" title="${escapeAttr(r.desc)}">${r.rank}. ${r.name}${r.rank > cap ? ` · ARC ${CONSTANTS.arcForRank(r.rank)}` : ''}</span>`).join('');
-        return `<div class="lo-orb" style="--tree-color:${TREE_COLOR[tree]}"><span class="lo-orb-name" style="color:${TREE_COLOR[tree]}">${CONSTANTS.TREES[tree].name} ${lvl}/5</span>${perks}</div>`;
+        return `<div class="lo-orb" style="--tree-color:${TREE_COLOR[tree]}"><span class="lo-orb-name" style="color:${TREE_COLOR[tree]}">${CONSTANTS.TREES[tree].name} ${lvl}/5</span>${rows[r].map((u, c) => chip(u, r, c)).join('')}</div>`;
     }).join('');
-    const owned = st.acquiredUpgradeIds.map(findUpgrade).filter(u => u && u.kind !== 'rank');
-    const cards = owned.map(u => {
-        const r = upgradeRarity(u);
-        return `<div class="lo-card lo-${r}" style="--card-color:${upgradeColor(u)}"><div class="lo-badge">${RARITY_BADGE[r]}</div><div class="lo-name">${u.name}</div><div class="lo-desc">${u.desc}</div></div>`;
-    }).join('');
-    const ocs = Object.entries(st.overclockCounts).filter(([, n]) => n > 0).map(([k, n]) => {
-        const u = findUpgrade(OC_NAMES[k]);
-        return u ? `<div class="lo-oc"><b>${u.name}</b> ×${n} <span>${u.desc}</span></div>` : '';
-    }).join('');
+    const extraRow = rows.length > 3 ? `<h4 class="lo-h">Masteries, Fusions &amp; Overclocks</h4><div class="lo-orb">${rows[3].map((u, c) => chip(u, 3, c)).join('')}</div>` : '<div class="lo-empty">Masteries and Fusions you pick will appear here.</div>';
     const wager = st.wagerMult > 1 && st.currentAffix ? `<div class="lo-wager">ACTIVE WAGER: <b>${st.currentAffix.name}</b> ×${st.wagerMult} score — ${st.currentAffix.desc}</div>` : '';
-    el.innerHTML = `
-        ${wager}
-        <h4 class="lo-h">Evolution Trees</h4>${orbRows}
-        <h4 class="lo-h">Masteries &amp; Fusions</h4>
-        ${cards || '<div class="lo-empty">None yet — Masteries unlock at tree level 2; Fusions combine two trees at level 2.</div>'}
-        ${ocs ? `<h4 class="lo-h">Overclocks</h4>${ocs}` : ''}`;
+    el.innerHTML = `${wager}${detail}<h4 class="lo-h">Evolution Trees</h4>${treeRows}${extraRow}
+        <div class="set-hint">${glyphHTML('up')}${glyphHTML('down')}${glyphHTML('left')}${glyphHTML('right')} browse · every evolution explained above</div>`;
+}
+window.engineLoadoutSelect = function (r, c) { loadoutSel = { row: r, col: c }; renderLoadout(); };
+function moveLoadoutSel(dr, dc) {
+    const rows = loadoutRows();
+    let r = Math.max(0, Math.min(rows.length - 1, loadoutSel.row + dr));
+    let c = dr ? Math.min(loadoutSel.col, rows[r].length - 1) : (loadoutSel.col + dc + rows[r].length) % rows[r].length;
+    loadoutSel = { row: r, col: c }; renderLoadout();
 }
 
 export function renderSettings() {
@@ -367,13 +401,28 @@ function pauseKey(code) {
         else if (code === 'Enter' || code === 'Space') { if (!onRange) adjustFocusedSetting(1); }
         return;
     }
+    if (pauseTab === 'loadout') {
+        if (code === 'ArrowUp') moveLoadoutSel(-1, 0);
+        else if (code === 'ArrowDown') moveLoadoutSel(1, 0);
+        else if (code === 'ArrowLeft') moveLoadoutSel(0, -1);
+        else if (code === 'ArrowRight') moveLoadoutSel(0, 1);
+        return;
+    }
     if (pauseTab === 'resume' && (code === 'Enter' || code === 'Space')) closePause();
 }
 
 // ==========================================
 // STAGE WAGER UI (v16)
 // ==========================================
+function renderWagerPrompts() {
+    const a = document.getElementById('wager-accept-key'), d = document.getElementById('wager-decline-key');
+    const kb = inputDevice() === 'keyboard';
+    if (a) a.innerHTML = kb ? '<span class="glyph">1</span> / <span class="glyph">ENTER</span>' : glyphHTML('confirm');
+    if (d) d.innerHTML = kb ? '<span class="glyph">2</span> / <span class="glyph">ESC</span>' : glyphHTML('back');
+}
+
 function showWager() {
+    renderWagerPrompts();
     const offer = st.wagerOffer;
     if (!offer) { SequenceManager.resumeFromWait(); return; }
     st.screen = 'wager';
@@ -408,6 +457,8 @@ function pollGamepad() {
     if (gp) {
         let p = (btn) => gp.buttons[btn] && gp.buttons[btn].pressed; let jp = (btn) => p(btn) && !st.lastGamepadState.buttons[btn];
         let aU = gp.axes[1] < -0.5 || gp.axes[3] < -0.5, aD = gp.axes[1] > 0.5 || gp.axes[3] > 0.5;
+        const aL = gp.axes[0] < -0.5, aR = gp.axes[0] > 0.5;
+        const stickLeft = aL && !st.lastGamepadState.axes[2], stickRight = aR && !st.lastGamepadState.axes[3];
         st.pad.up = jp(12) || (aU && !st.lastGamepadState.axes[0]); st.pad.down = jp(13) || (aD && !st.lastGamepadState.axes[1]);
         // v17: Ghost Step = LB / L2 (its own button); Guard = RB / R2; D-pad or
         // left stick LEFT/RIGHT held = footwork only.
@@ -415,9 +466,17 @@ function pollGamepad() {
         st.pad.leftHeld = p(14) || gp.axes[0] < -0.5; st.pad.rightHeld = p(15) || gp.axes[0] > 0.5;
         st.pad.jab = jp(2); st.pad.cross = jp(3); st.pad.crossHeld = p(3); st.pad.hook = jp(1); st.pad.instinct = jp(0); st.pad.pause = jp(9) || jp(16);
         const anyPress = gp.buttons.some((b, i) => jp(i));
+        // v18: whatever you touch last decides which glyphs the prompts show.
+        if (anyPress || aU || aD || aL || aR) {
+            const fam = padFamily(gp.id);
+            if (st.inputDevice !== fam) { setInputDevice(fam); onDeviceChanged(); }
+        }
 
         if (st.screen === 'start') { if (st.pad.instinct || st.pad.pause || st.pad.jab) startGame(); }
-        else if (st.screen === 'playing') { if (st.pad.pause && !SequenceManager.active && !st.finisher) openPause(); }
+        else if (st.screen === 'playing') {
+            if (posterWaiting()) { if (anyPress) confirmPoster(); }
+            else if (st.pad.pause && !SequenceManager.active && !st.finisher) openPause();
+        }
         else if (st.screen === 'paused') {
             if (st.pad.pause) closePause();
             else if (jp(4)) cyclePauseTab(-1);
@@ -432,13 +491,14 @@ function pollGamepad() {
         else if (st.screen === 'tutorial') { if (st.pad.instinct || st.pad.jab || st.pad.cross) dismissTutorial(); }
         else if (st.screen === 'vignette') { if (anyPress) skipVignette(); }
         else if (st.screen === 'wager') {
-            if (st.pad.jab || st.pad.instinct) resolveWager(true);
-            else if (st.pad.hook) resolveWager(false);
+            if (jp(0)) resolveWager(true);        // × / A
+            else if (jp(1)) resolveWager(false);  // ○ / B
         }
         else if (st.screen === 'upgrading') {
-            if (st.pad.jab && st.currentDraftOptions[0]) applyUpgrade(st, st.currentDraftOptions[0]);
-            else if (st.pad.cross && st.currentDraftOptions[1]) applyUpgrade(st, st.currentDraftOptions[1]);
-            else if (st.pad.hook && st.currentDraftOptions[2]) applyUpgrade(st, st.currentDraftOptions[2]);
+            // v18: D-pad / stick to choose, × / A to take it — identical on every pad.
+            if (jp(14) || stickLeft) moveDraftFocus(-1);
+            else if (jp(15) || stickRight) moveDraftFocus(1);
+            else if (jp(0)) confirmDraftFocus();
         }
         else if (st.screen === 'gameover') {
             if (st.pad.instinct || st.pad.jab) startGame();
@@ -447,6 +507,7 @@ function pollGamepad() {
 
         for(let i=0; i<gp.buttons.length; i++) st.lastGamepadState.buttons[i] = p(i);
         st.lastGamepadState.axes[0] = aU; st.lastGamepadState.axes[1] = aD;
+        st.lastGamepadState.axes[2] = aL; st.lastGamepadState.axes[3] = aR;
     }
 }
 
@@ -462,12 +523,14 @@ window.addEventListener('keydown', e => {
         return;
     }
     st.keys[e.code] = true;
+    if (st.inputDevice !== 'keyboard') { setInputDevice('keyboard'); onDeviceChanged(); }
     // Records/leaderboard is a modal opened from the menu — close it (and swallow
     // other keys) rather than letting a stray keypress start a run underneath it.
     if (st.screen === 'records') { if (e.code === 'Escape' || e.code === 'KeyH' || e.code === 'Enter') toggleRecords(); return; }
     // FIXED: Keyboard 'A' now starts the game as indicated by menu text
     if (st.screen === 'start' && (e.code === 'Space' || e.code === 'Enter' || e.code === 'KeyA')) { startGame(); return; }
     if (st.screen === 'vignette') { if (!e.repeat) skipVignette(); return; }
+    if (posterWaiting()) { if (!e.repeat) confirmPoster(); return; }
     if (st.screen === 'wager') {
         if (e.code === 'Digit1' || e.code === 'KeyA' || e.code === 'Enter') resolveWager(true);
         else if (e.code === 'Digit2' || e.code === 'KeyD' || e.code === 'Escape') resolveWager(false);
@@ -488,12 +551,15 @@ window.addEventListener('keydown', e => {
         if (e.code === 'Digit1' && st.currentDraftOptions[0]) applyUpgrade(st, st.currentDraftOptions[0]);
         else if (e.code === 'Digit2' && st.currentDraftOptions[1]) applyUpgrade(st, st.currentDraftOptions[1]);
         else if (e.code === 'Digit3' && st.currentDraftOptions[2]) applyUpgrade(st, st.currentDraftOptions[2]);
+        else if (e.code === 'ArrowLeft') moveDraftFocus(-1);
+        else if (e.code === 'ArrowRight') moveDraftFocus(1);
+        else if (e.code === 'Enter' || e.code === 'Space') confirmDraftFocus();
         return;
     }
     if (st.screen === 'gameover' && e.code === 'KeyR') { startGame(); return; }
 });
 window.addEventListener('keyup', e => { st.keys[e.code] = false; });
-window.addEventListener('pointerdown', () => { if (st.screen === 'vignette') skipVignette(); });
+window.addEventListener('pointerdown', () => { if (st.screen === 'vignette') skipVignette(); else confirmPoster(); });
 
 // v16 PACING: the first Evolution is guaranteed early — at the end of the Stage 1
 // tutorial, or after the first three kills with the tutorial off (~20-30s in).
@@ -550,11 +616,12 @@ export function update() {
 
     if (st.tutorialGrace > 0) st.tutorialGrace--;
     if (st.tutorialDelay > 0) st.tutorialDelay--;
-    if (st.bossIntroTimer > 0) st.bossIntroTimer--;
+    if (st.bossIntroTimer > 0 && !posterWaiting()) st.bossIntroTimer--;
+    if (st.sweepHint > 0) st.sweepHint--;
     if (st.instinctPauseTimer > 0) {
         st.instinctPauseTimer--;
     } else if (st.isInstinct) {
-        st.instinctMeter -= 0.25;
+        if (!(st.zoneTimer > 0)) st.instinctMeter -= 0.25; // the Zone is paid for up front
         if (st.instinctMeter <= 0) {
             st.isInstinct = false;
             let barCont = document.getElementById('bar-cont');
@@ -574,8 +641,12 @@ export function update() {
     // fraction of it (enemies, bosses, hazards) while the screen is inverted.
     let worldTick = true;
     if (st.zoneTimer > 0) {
-        st.zoneTimer--;
-        worldTick = (st.zoneTimer % CONSTANTS.ZONE.enemyTick) === 0;
+        // v18: the Zone only burns while something is in reach — knocked-back or
+        // not-yet-arrived enemies no longer waste it (the hold is capped).
+        const inReach = st.enemies.some(e => e.hp > 0 && Math.abs(e.x - st.player.x) < 280);
+        const anyOnScreen = st.enemies.some(e => e.hp > 0 && e.x < st.width);
+        if (inReach || !anyOnScreen || (st.zoneHold = (st.zoneHold || 0) + 1) > CONSTANTS.ZONE.maxHold) st.zoneTimer--;
+        worldTick = (st.frameCount = (st.frameCount || 0) + 1) % CONSTANTS.ZONE.enemyTick === 0;
         if (st.zoneTimer === 0) spawnFloatingText(st.player.x, st.player.y - 140, 'ZONE OUT', '#9ca3af');
     }
     updatePlayer();
@@ -618,7 +689,7 @@ export function update() {
     // lesson, guarantees it's actually seen rather than optimistically glimpsed.
     if (!st.seenTutorials.footwork_tip && st.currentStage === 1 && st.enemies.length === 0 &&
         (!st.tutorialEnabled || st.spawnTotal >= 5)) {
-        triggerTutorial('footwork_tip', 'FOOTWORK', `You are not locked to one spot.<br><br>Hold <span class="text-cyan-400 font-bold">[${keyName('right')}]</span> to press forward &mdash; reach enemies sooner and drive them into <b>their</b> ropes.<br><br>Hold <span class="text-cyan-400 font-bold">[${keyName('left')}]</span> to give ground &mdash; but your own ropes are right behind you. Pinned on them you are <span class="text-pink-500 font-bold">CORNERED</span>: slip windows tighten.<br><br>Ghost Step has its own button: <span class="text-cyan-400 font-bold">[${keyName('ghost')}]</span>.`);
+        triggerTutorial('footwork_tip', 'FOOTWORK', `You are not locked to one spot.<br><br>Hold <span class="text-cyan-400 font-bold">[${keyName('right')}]</span> to press forward and meet them early; hold <span class="text-cyan-400 font-bold">[${keyName('left')}]</span> to give ground and buy a beat. While you're fighting you hold your position.<br><br>Ghost Step has its own button: <span class="text-cyan-400 font-bold">[${keyName('ghost')}]</span> &mdash; a short invincible dash straight through an attack.`);
         return;
     }
 
@@ -891,7 +962,29 @@ function syncCinematicClass() {
     } catch (e) {}
 }
 
+// v18 TITLE-FIGHT POSTER waits for a button press before the bell.
+export function posterWaiting() {
+    return st.screen === 'playing' && !!st.bossPoster && !st.posterConfirmed && st.bossIntroTimer === CONSTANTS.POSTER_HOLD_FRAME;
+}
+function confirmPoster() {
+    if (!posterWaiting()) return false;
+    st.posterConfirmed = true; playSound('bell');
+    return true;
+}
+window.engineConfirmPoster = confirmPoster;
+
+// Re-label on-screen DOM prompts when the player switches keyboard <-> pad.
+function onDeviceChanged() {
+    if (st.screen === 'upgrading') {
+        renderDraftFocus();
+        document.querySelectorAll('#draft-container .draft-card .card-key').forEach((el, i) => { el.innerHTML = inputDevice() === 'keyboard' ? `<span class="glyph">${i + 1}</span>` : ''; });
+    }
+    if (st.screen === 'wager') renderWagerPrompts();
+    renderInstructions();
+}
+
 function loop() {
+    st.uiFrame = (st.uiFrame || 0) + 1;
     pollGamepad();
     syncCinematicClass();
     if (st.screen === 'vignette') updateVignette();
@@ -903,7 +996,7 @@ function init() { st.width = 1000; st.height = 600; if(canvas) { canvas.width = 
 init();
 
 // Test hooks for the headless harness / bot sim (tests/*.mjs). Not used in play.
-export const __test = { startGame, resetGame, update, triggerUpgradeDraft, resolveWager, openPause, closePause, setPauseTab, renderLoadout, renderSettings, endRun };
+export const __test = { posterWaiting, confirmPoster, startGame, resetGame, update, triggerUpgradeDraft, resolveWager, openPause, closePause, setPauseTab, renderLoadout, renderSettings, endRun };
 
 // Dev/playtest hook: open the game with ?debug in the URL to get window.__ns —
 // state access plus a stage jump (e.g. __ns.jump(5) = Arc 1 boss). Off otherwise.

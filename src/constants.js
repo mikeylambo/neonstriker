@@ -1,6 +1,6 @@
 export const CONSTANTS = {
     LANE_Y: [0.35, 0.55, 0.75], // Top, Mid, Bottom visual spacing
-    
+
     // --- ARC STRUCTURE (single source of truth for stage flow) ---
     // Each arc is an ordered list of LEVEL KEYS (1-6 = authored levels, 7 = boss
     // chamber). The level key — not the raw stage number — is what every per-level
@@ -49,22 +49,12 @@ export const CONSTANTS = {
     // here now. Also where Bruiser/Assassin get their own read-rhythm: a Bruiser's
     // haymaker is slow and wide (forgiving to time, hits like a truck once you do);
     // an Assassin's is fast and narrow (matches its "don't you dare turtle" identity).
-    // v17: `cornered` (Striker pinned on his ropes) tightens BOTH windows — and
-    // because gameplay, lane flashes and "!" text all read this one function, the
-    // telegraph tightens with it. The read never lies, it just gets harder.
-    getSlipThresholds: (enemyType, progressionBonus = 0, cornered = false) => {
-        let w;
-        if (enemyType === 'zoner') w = { perfect: 10 + progressionBonus, good: 24 };
-        else if (enemyType === 'bruiser') w = { perfect: 14 + progressionBonus, good: 26 };
-        else if (enemyType === 'assassin') w = { perfect: 5 + progressionBonus, good: 10 };
-        else w = { perfect: 8 + progressionBonus, good: 16 };
-        if (cornered) {
-            const m = CONSTANTS.ROPES.cornerSlipMult;
-            w = { perfect: Math.max(2, Math.round(w.perfect * m)), good: Math.max(4, Math.round(w.good * m)) };
-        }
-        return w;
+    getSlipThresholds: (enemyType, progressionBonus = 0) => {
+        if (enemyType === 'zoner') return { perfect: 10 + progressionBonus, good: 24 };
+        if (enemyType === 'bruiser') return { perfect: 14 + progressionBonus, good: 26 };
+        if (enemyType === 'assassin') return { perfect: 5 + progressionBonus, good: 10 };
+        return { perfect: 8 + progressionBonus, good: 16 };
     },
-    isCornered: (p) => !!p && p.x <= CONSTANTS.ROPES.cornerX,
 
     getBossArcMods: (bossId, arcIndex) => {
         const mods = CONSTANTS.BOSS_ARC_MODS[bossId];
@@ -320,20 +310,23 @@ export const CONSTANTS = {
         afterimage: { delay: 16, damage: 26, stun: 22, reach: 150 } // Technique R3
     },
 
-    // --- v17 ROPES & CORNERS -----------------------------------------------------
-    ROPES: {
-        playerPostX: 58,        // the post behind the Striker
-        playerMinX: 90,         // can't be pushed / retreat past this
-        cornerX: 100,           // at or behind this = CORNERED
-        cornerSlipMult: 0.6,    // slip windows tighten to 60% when cornered
-        enemyRopeX: 560,        // knockback can't carry an enemy past its ropes
-        enemyPostX: 606,
-        playerMaxX: 420,        // pressing forward can take you to reach of those ropes
-        pinFrames: 75,          // an enemy driven into its ropes stays pinned
-        bounceDmgMult: 1.35,    // counter-charged hit on a pinned enemy
-        bounceHitstop: 10,
-        liveWireShock: { damage: 6, every: 45 }
+    // --- FOOTWORK (v18: the v17 ropes are gone — playtest: they cost the game its
+    // lane-boxing identity and its sense of forward motion). Just the stage edges.
+    FOOTWORK: {
+        minX: 90, maxX: 320, advanceSpd: 3.0, retreatSpd: 3.4, homePull: 0.02,
+        holdGroundWhenEngaged: true
     },
+
+    // --- v18 LIVE WIRE: "live lanes" replace his electrified corner. After a punch
+    // string the lane he struck charges up (warning), then runs live for a beat:
+    // standing in it shocks you. It forces a lane change — lane boxing, not corners.
+    LIVE_LANE: { warnFrames: 26, liveFrames: 80, tickEvery: 24, damage: 6 },
+
+    // --- v18 BRUISER SWEEP: every other Bruiser attack is a wide haymaker that
+    // covers its lane AND both neighbours — it can't be slipped. The answers are
+    // Ghost Step (straight through it: a perfect Ghost Step) or Guard. Amber tell,
+    // never the red/white slip colours, so it never baits a slip.
+    SWEEP: { tellFrames: 34, damage: 24, reach: 130, hintsPerSave: 4 },
 
     // --- v17 PUNCH STRINGS -------------------------------------------------------
     // Selected enemies throw 2-3 hit strings. Every hit re-targets your lane and
@@ -352,7 +345,9 @@ export const CONSTANTS = {
         promptsByArc: { 1: 3, 2: 4, 3: 5, 4: 5, 5: 5 },
         beatFrames: 34,
         windowEarly: 14, windowLate: 12,
-        getUpHpFrac: 0.5,
+        // v18: HP on the way up depends on how cleanly you hit the prompts.
+        perfectWindow: 5,
+        hpBase: 0.25, hpSpan: 0.5, hpMin: 0.2, hpMax: 0.75,
         invulnFrames: 90
     },
 
@@ -360,7 +355,11 @@ export const CONSTANTS = {
     // A Perfect Slip with a FULL Instinct meter drops the world into slow-mo with a
     // colour-inverted screen (screen effect only). Enemies tick every `enemyTick`
     // frames while the Striker moves at full speed.
-    ZONE: { frames: 180, enemyTick: 2 },
+    ZONE: { frames: 180, enemyTick: 2, maxHold: 120, knockbackMult: 0.45 },
+
+    // v18: the poster plays in, then HOLDS on this frame until the player presses
+    // something (then "FIGHT!" plays out).
+    POSTER_HOLD_FRAME: 50,
 
     // --- v17 BOSS BILLING (title-fight posters) ----------------------------------
     BOSS_BILLING: {

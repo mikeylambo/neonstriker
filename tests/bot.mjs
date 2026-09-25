@@ -24,6 +24,16 @@ export function makeBot({ st, T, SequenceManager, fin, knock, rules, vig, settin
         const dummy = st.enemies.find(e => e.tutorialType);
         if (dummy && dummy.tutorialType === 'guard' && dummy.x - p.x < 160) { keys.KeyW = true; return keys; }
         if (dummy && dummy.tutorialType === 'ghost_step' && p.dangerLevel >= 1 && tick % 2 === 0) { keys.ShiftLeft = true; return keys; }
+        // v18: a Bruiser SWEEP can't be slipped — Ghost Step through it
+        // Zoners telegraph with their own beam (not the lane flash) — a human reads
+        // the green countdown; the bot reads the same timer. (It used to be blind to them.)
+        const zap = st.enemies.find(e => e.type === 'zoner' && e.lane === p.lane && e.x > p.x - 20 && Math.abs(e.x - p.x) < 500 && e.attackCooldown > 0 && e.attackCooldown <= 12 && e.stun <= 0);
+        if (zap && p.slipCooldown <= 0) {
+            const safe = [p.lane - 1, p.lane + 1].filter(l => l >= 0 && l <= 2 && !st.enemies.some(e => e.type === 'zoner' && e.lane === l && e.attackCooldown <= 14));
+            if (safe.length && tick % 2 === 0) { keys[safe[0] < p.lane ? 'ArrowUp' : 'ArrowDown'] = true; return keys; }
+        }
+        const sweep = st.enemies.find(e => e.currentMove === 'sweep' && e.type === 'bruiser' && Math.abs(p.lane - e.lane) <= 1 && Math.abs(e.x - p.x) < 130 && e.attackCooldown > 0 && e.attackCooldown <= 8);
+        if (sweep) { if (tick % 2 === 0) keys.ShiftLeft = true; return keys; }
         if (p.dangerLevel >= 2 || (st.laneFlash[p.lane] > 0 && !st.enemies.some(e => e.lane === p.lane && e.x - p.x < 120 && e.isBoss && rules.isBossOpen(e)))) {
             if (p.slipCooldown <= 0 && tick % 2 === 0) {
                 const opts2 = [p.lane - 1, p.lane + 1].filter(l => l >= 0 && l <= 2).sort((a, b) => laneThreat(a) - laneThreat(b));
@@ -31,8 +41,6 @@ export function makeBot({ st, T, SequenceManager, fin, knock, rules, vig, settin
             }
             return keys;
         }
-        // don't sit on the ropes
-        if (p.cornered) keys.ArrowRight = true;
         const inLane = st.enemies.filter(e => e.lane === p.lane && e.x > p.x - 20 && e.x - p.x < 125).sort((a, b) => a.x - b.x)[0];
         if (inLane) {
             if (tick % 3 === 0) {
@@ -57,6 +65,7 @@ export function makeBot({ st, T, SequenceManager, fin, knock, rules, vig, settin
             log.frames = tick;
             if (opts.god) st.health = 100;
             if (st.screen === 'tutorial') window.dismissTutorial();
+            if (T.posterWaiting()) T.confirmPoster();
             else if (st.screen === 'upgrading') {
                 if (log.firstDraftFrame === null) log.firstDraftFrame = tick;
                 window.engineApplyUpgradeState(st.currentDraftOptions[0].id);
@@ -78,7 +87,7 @@ export function makeBot({ st, T, SequenceManager, fin, knock, rules, vig, settin
 
             st.lastKeys = { ...st.keys };
             st.keys = st.screen === 'playing' ? botKeys(tick, opts) : {};
-            if (st.screen === 'vignette') vig.updateVignette();
+            if (st.screen === 'vignette') { vig.updateVignette(); if (st.vignette && st.vignette.holding) vig.skipVignette(); }
             T.update();
             if (st.currentStage !== stage) { log.stageFrames[stage] = tick - log.stageStart; log.stageStart = tick; stage = st.currentStage; }
             if (opts.stopAtArc && st.currentStage >= opts.stopAtArc && !SequenceManager.active) { log.reachedArc2 = true; break; }

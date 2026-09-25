@@ -36,7 +36,7 @@ export function startKnockdown() {
     st.knockdown = {
         frame: 0, count: 0, seq: knockdownSequence(n), idx: 0,
         nextBeat: K.framesPerCount + K.beatFrames, phase: 'down', fall: 0,
-        judge: null, judgeTimer: 0, upTimer: 0
+        judge: null, judgeTimer: 0, upTimer: 0, perfects: 0, goods: 0, stumbles: 0, hpFrac: 0
     };
     st.knockdownsThisArc = (st.knockdownsThisArc || 0) + 1;
     st.statKnockdowns = (st.statKnockdowns || 0) + 1;
@@ -61,10 +61,18 @@ function readLaneInput() {
 
 function judge(text, color) { const k = st.knockdown; k.judge = { text, color }; k.judgeTimer = 26; }
 
+// PURE: recovery HP fraction from how the prompts were hit. All PERFECT -> 75%,
+// all merely on time -> 55%, stumbles drag it down toward the 20% floor.
+export function recoveryHpFrac({ perfects = 0, goods = 0, stumbles = 0, prompts = 3 }) {
+    const quality = (perfects + goods * 0.6) / Math.max(1, prompts) - stumbles * 0.1;
+    return Math.min(K.hpMax, Math.max(K.hpMin, K.hpBase + K.hpSpan * quality));
+}
+
 function getUp() {
     const k = st.knockdown, p = st.player;
-    k.phase = 'up'; k.upTimer = 36;
-    st.health = Math.round(st.maxHealth * K.getUpHpFrac);
+    k.phase = 'up'; k.upTimer = 50;
+    k.hpFrac = recoveryHpFrac({ perfects: k.perfects, goods: k.goods, stumbles: k.stumbles, prompts: k.seq.length });
+    st.health = Math.round(st.maxHealth * k.hpFrac);
     st.combo = 0;
     p.invuln = K.invulnFrames;
     // Breathing room: whatever was standing over you steps back and re-winds.
@@ -73,7 +81,7 @@ function getUp() {
     }
     st.hazards = [];
     playSound('stagger'); doFlash(0.4); triggerShockwave(p.x + 25, p.y - 60, '#ffffff');
-    spawnFloatingText(p.x + 20, p.y - 160, 'BACK ON YOUR FEET!', '#22d3ee');
+    spawnFloatingText(p.x + 20, p.y - 160, `BACK UP · ${Math.round(k.hpFrac * 100)}% HP`, k.hpFrac >= 0.7 ? '#facc15' : '#22d3ee');
 }
 
 // Returns 'down' while counting, 'up' once risen, 'out' if the count reached ten.
@@ -104,14 +112,16 @@ export function updateKnockdown() {
         const want = k.seq[k.idx];
         const advance = () => { k.nextBeat += K.beatFrames; };
         if (input) {
-            if (t < -K.windowEarly || input !== want) { judge('STUMBLE', '#ff8800'); playSound('finisher_miss'); advance(); }
+            if (t < -K.windowEarly || input !== want) { k.stumbles++; judge('STUMBLE', '#ff8800'); playSound('finisher_miss'); advance(); }
             else {
-                judge('UP!', '#22d3ee'); playSound('perfect_slip');
+                const perfect = Math.abs(t) <= K.perfectWindow;
+                if (perfect) k.perfects++; else k.goods++;
+                judge(perfect ? 'PERFECT' : 'UP!', perfect ? '#ffffff' : '#22d3ee'); playSound('perfect_slip');
                 k.idx++;
                 if (k.idx >= k.seq.length) { getUp(); return 'down'; }
                 advance();
             }
-        } else if (t > K.windowLate) { judge('TOO SLOW', '#ff8800'); advance(); }
+        } else if (t > K.windowLate) { k.stumbles++; judge('TOO SLOW', '#ff8800'); advance(); }
     }
     return 'down';
 }

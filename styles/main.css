@@ -634,3 +634,18 @@ body.cine-vignette .hud-row, body.cine-finisher .hud-row, body.cine-knockdown .h
 .pause-panel { max-height: 380px; }
 body.cine-poster .hud-row, body.cine-poster #instructions, body.cine-poster #audio-state { opacity: 0.05; }
 body.cine-zone.cine-zone-soft #gameCanvas { filter: grayscale(.7) contrast(1.2); }
+
+/* =====================================================================
+   v18 — button glyphs, draft focus, prompt hints
+   ===================================================================== */
+.glyph { --g: #e5e7eb; display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 6px; margin: 0 2px; border: 1.5px solid var(--g); border-radius: 5px; color: var(--g); font-weight: 900; font-size: .72rem; line-height: 1; background: rgba(0,0,0,.5); vertical-align: middle; }
+.prompt-hint { margin-top: 18px; font-size: .7rem; font-weight: 900; letter-spacing: 2px; color: #9ca3af; pointer-events: none; }
+.draft-card.focused { transform: translateY(-8px) scale(1.04); box-shadow: 0 0 0 2px #ffffff, 0 0 34px color-mix(in srgb, var(--card-color) 70%, transparent); }
+.draft-card.focused .card-name::before { content: '▶ '; color: var(--card-color); }
+.lo-detail { border-left: 4px solid var(--card-color); background: rgba(255,255,255,.04); padding: 10px 14px; margin-bottom: 8px; min-height: 78px; }
+.lo-state { color: #6b7280; }
+.lo-state.on { color: #34d399; }
+.lo-state.next { color: #facc15; }
+.lo-rank { cursor: pointer; }
+.lo-rank.next { border-color: var(--tree-color); color: #e5e7eb; border-style: dashed; }
+.lo-rank.sel { outline: 2px solid #ffffff; outline-offset: 1px; }

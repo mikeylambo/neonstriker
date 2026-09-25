@@ -40,7 +40,7 @@ const BOSS_ROSTER = [
         type: 'zoner',
         weight: 1.2,
         speed: 1.0,
-        cooldown: 120, 
+        cooldown: 120,
         baseHpMult: 0.85,
         startMove: 'laser'
     },
@@ -87,22 +87,23 @@ function spawnMonkAdd() {
 }
 
 export function spawnBoss() {
-    st.bossActive = true; 
+    st.bossActive = true;
     st.bossIntroTimer = 180; // v17: title-fight poster
-    st.shake = 15; 
+    st.posterConfirmed = false;
+    st.shake = 15;
     playSound('bash_tell');
     setMusicIntensity(1);
-    
+
     // HP scales off the stage's DIFFICULTY position (the old uniform 7-per-arc
     // layout), so moving Arc 1's boss earlier doesn't shift every later boss.
-    let baseHp = 300 + (CONSTANTS.difficultyStage(st.currentStage) * 100); 
+    let baseHp = 300 + (CONSTANTS.difficultyStage(st.currentStage) * 100);
 
     const rawArcIndex = CONSTANTS.getArcIndex(st.currentStage);
     const bossIndex = (rawArcIndex - 1) % BOSS_ROSTER.length;
     const template = { ...BOSS_ROSTER[bossIndex] };
     if (template.controller === 'negative') template.color = invertHex(st.strikerColor || '#00ffff');
-    
-    st.bossThemeColor = template.color; 
+
+    st.bossThemeColor = template.color;
     st.bossIntroText = template.name;
     // v17 ROUND FRAMING: the boss stage opens on a title-fight poster.
     const arcData = CONSTANTS.ARC_STAGE_TABLES[Math.min(rawArcIndex, 5)] || {};
@@ -116,42 +117,42 @@ export function spawnBoss() {
     // --- MACRO PLUMBING: Inject scaling behavioral traits based on current Arc ---
     const arcMods = CONSTANTS.getBossArcMods(template.controller, rawArcIndex);
 
-    st.enemies.push({ 
-        name: template.name, 
+    st.enemies.push({
+        name: template.name,
         controller: template.controller,
-        x: st.width - 150, 
-        lane: 1, 
-        y: st.height * CONSTANTS.LANE_Y[1], 
-        w: template.type === 'shield' ? 60 : 50, 
-        h: template.type === 'shield' ? 140 : 130, 
-        hp: baseHp * template.baseHpMult, 
-        maxHp: baseHp * template.baseHpMult, 
-        speed: template.speed, 
-        color: template.color, 
-        type: template.type, 
-        weight: template.weight, 
-        phase: 1, 
-        currentMove: template.startMove, 
-        lastMove: null, 
-        stun: 0, 
-        stunResist: 0, 
-        attackCooldown: template.cooldown, 
-        maxCooldown: template.cooldown, 
-        isBoss: true, 
-        pressure: 0, 
-        pressureDecay: 0, 
-        justAttacked: 0, 
-        trails: [], 
-        trailTimer: 0, 
-        bossMashCount: 0, 
-        mashDecay: 0, 
-        hitstunScaling: 0, 
-        stunDecay: 0, 
-        shiftWarning: 0, 
-        shiftCooldown: 0, 
-        vx: 0, 
-        exposedTimer: 0, 
-        desperation: false, 
+        x: st.width - 150,
+        lane: 1,
+        y: st.height * CONSTANTS.LANE_Y[1],
+        w: template.type === 'shield' ? 60 : 50,
+        h: template.type === 'shield' ? 140 : 130,
+        hp: baseHp * template.baseHpMult,
+        maxHp: baseHp * template.baseHpMult,
+        speed: template.speed,
+        color: template.color,
+        type: template.type,
+        weight: template.weight,
+        phase: 1,
+        currentMove: template.startMove,
+        lastMove: null,
+        stun: 0,
+        stunResist: 0,
+        attackCooldown: template.cooldown,
+        maxCooldown: template.cooldown,
+        isBoss: true,
+        pressure: 0,
+        pressureDecay: 0,
+        justAttacked: 0,
+        trails: [],
+        trailTimer: 0,
+        bossMashCount: 0,
+        mashDecay: 0,
+        hitstunScaling: 0,
+        stunDecay: 0,
+        shiftWarning: 0,
+        shiftCooldown: 0,
+        vx: 0,
+        exposedTimer: 0,
+        desperation: false,
         enraged: false,
         targetLanes: [],
         decoyTimer: 0, decoyLane: -1, decoyRolledThisCycle: false,
@@ -221,7 +222,7 @@ function handleNeonEnforcer(en) {
     });
 
     if (inRange && en.attackCooldown <= 0) {
-        en.justAttacked = 5; 
+        en.justAttacked = 5;
         const struck = en.currentMove;
         resolveBossStrike(en, struck === 'bash' ? 30 : 12, struck === 'bash');
         if (en.enraged) {
@@ -231,7 +232,7 @@ function handleNeonEnforcer(en) {
         } else {
             let roll = random();
             if (en.phase === 1) {
-                en.currentMove = roll > 0.6 ? 'bash' : 'jab'; 
+                en.currentMove = roll > 0.6 ? 'bash' : 'jab';
                 en.maxCooldown = nextCycle(en, en.currentMove === 'bash' ? 70 : 45);
             } else {
                 en.currentMove = roll > 0.5 ? 'bash' : 'jab';
@@ -290,26 +291,26 @@ function handlePhantomBoxer(en) {
         // frames — 9 at Arc 5 — which left almost nothing to react to).
         if (en.currentMove === 'feint' && !en.feintSwitched && en.attackCooldown <= Math.max(14, Math.floor(16 * en.arcMods.punishWindowMult))) {
             en.feintSwitched = true;
-            en.lane = st.player.lane; 
+            en.lane = st.player.lane;
             en.y = st.height * CONSTANTS.LANE_Y[en.lane];
             createImpact(en.x, en.y - 60, '#aa00ff');
         }
 
         if (en.attackCooldown <= 0) {
-            en.justAttacked = 5; 
+            en.justAttacked = 5;
             const struck = en.currentMove;
             resolveBossStrike(en, 15, false);
             en.decoyRolledThisCycle = false; en.decoyTimer = 0; en.feintSwitched = false;
             let roll = random();
             if (en.phase === 1) {
-                en.currentMove = roll > 0.5 ? 'feint' : 'jab'; 
+                en.currentMove = roll > 0.5 ? 'feint' : 'jab';
                 en.maxCooldown = nextCycle(en, en.currentMove === 'feint' ? 45 : 30);
             } else {
-                if (en.lastMove === 'feint') en.currentMove = 'jab'; 
+                if (en.lastMove === 'feint') en.currentMove = 'jab';
                 else en.currentMove = roll > 0.2 ? 'feint' : 'jab';
                 en.maxCooldown = nextCycle(en, en.currentMove === 'feint' ? 35 : 26);
             }
-            en.lastMove = en.currentMove; 
+            en.lastMove = en.currentMove;
             en.attackCooldown = en.maxCooldown;
             beginPunishWindow(en, struck === 'feint' ? 'feint' : 'jab');
         }
@@ -338,7 +339,7 @@ function handleStaticMonk(en) {
             en.telegraphAt = en.attackCooldown;
             playSound('zoner_tell');
             en.targetLanes = [st.player.lane];
-            let adjacentLane = st.player.lane === 1 ? (random() > 0.5 ? 0 : 2) : 1; 
+            let adjacentLane = st.player.lane === 1 ? (random() > 0.5 ? 0 : 2) : 1;
             en.targetLanes.push(adjacentLane);
         }
 
@@ -363,7 +364,7 @@ function handleStaticMonk(en) {
             playSound('laser');
             en.justAttacked = 10;
             st.shake = 15;
-            
+
             if (en.targetLanes.length > 0) {
                 en.targetLanes.forEach(laneIndex => {
                     for (let i = 0; i < 6; i++) {
@@ -375,7 +376,7 @@ function handleStaticMonk(en) {
                     }
                 });
             }
-            
+
             en.targetLanes = [];
             en.telegraphed = false;
             en.bossMashCount++;
@@ -415,20 +416,35 @@ function handleStaticMonk(en) {
 }
 
 // ==========================================
-// v17 LIVE WIRE (Arc 4): a pressure fighter. Throws 2-3 hit punch strings (every
-// hit re-targets your lane with its own telegraph), crowds you backwards, and
-// every few strings throws a SHOVE that walks you back hard. His ropes — the ones
-// behind YOU — are electrified: being cornered is the real threat.
+// LIVE WIRE (Arc 4): a pressure fighter. Throws 2-3 hit punch strings (every hit
+// re-targets your lane with its own telegraph), crowds you backwards, and every
+// few strings throws a SHOVE. v18: the ropes are gone — instead each finished
+// string leaves the lane he struck LIVE: it crackles (warning) then shocks
+// anyone standing in it for a beat. Stay in one lane and you fry.
 // ==========================================
-function liveWireShocks(en) {
-    const p = st.player;
-    if (!p.cornered) { en.shockTimer = 0; return; }
-    const S = CONSTANTS.ROPES.liveWireShock;
-    if (++en.shockTimer % S.every === 0 && !(p.invuln > 0) && p.state !== 'ghost_step') {
-        takeDamage(S.damage, false, null);
-        playSound('shock'); createImpact(p.x - 10, p.y - 70, '#fff36b'); createImpact(p.x - 10, p.y - 30, '#ffffff');
-        spawnFloatingText(p.x + 10, p.y - 130, 'SHOCKED!', '#fff36b');
+export function updateLiveLanes() {
+    if (!st.liveLanes || !st.liveLanes.length) return;
+    const L = CONSTANTS.LIVE_LANE, p = st.player;
+    for (const z of st.liveLanes) {
+        z.timer--;
+        if (z.phase === 'warn') {
+            if (z.timer <= 0) { z.phase = 'live'; z.timer = L.liveFrames; z.tick = 0; playSound('shock'); }
+        } else {
+            if (p.lane === z.lane && !(p.invuln > 0) && p.state !== 'ghost_step' && (z.tick++ % L.tickEvery) === 0) {
+                takeDamage(L.damage, false, null);
+                playSound('shock'); createImpact(p.x + 20, p.y - 70, '#fff36b');
+                spawnFloatingText(p.x + 10, p.y - 130, 'SHOCKED!', '#fff36b');
+            }
+        }
     }
+    st.liveLanes = st.liveLanes.filter(z => z.phase === 'warn' || z.timer > 0);
+}
+
+function electrifyLane(lane) {
+    if (!st.liveLanes) st.liveLanes = [];
+    if (st.liveLanes.some(z => z.lane === lane)) return;
+    st.liveLanes.push({ lane, phase: 'warn', timer: CONSTANTS.LIVE_LANE.warnFrames, tick: 0 });
+    spawnFloatingText(st.width * 0.5, st.height * CONSTANTS.LANE_Y[lane] - 50, 'LIVE LANE', '#fff36b');
 }
 
 function handleLiveWire(en) {
@@ -439,7 +455,7 @@ function handleLiveWire(en) {
     // Crowding: toe to toe, he walks you back unless you hold your ground (press forward).
     const K = getBinds();
     const holding = st.keys[K.right] || st.pad.rightHeld;
-    if (Math.abs(en.x - p.x) < 112 && !holding && p.state !== 'punching') p.x = Math.max(CONSTANTS.ROPES.playerMinX, p.x - 0.7);
+    if (Math.abs(en.x - p.x) < 112 && !holding && p.state !== 'punching') p.x = Math.max(CONSTANTS.FOOTWORK.minX, p.x - 0.7);
 
     const inRange = Math.abs(en.x - p.x) < 140 && en.stun <= 0;
     meleeTelegraph(en, inRange, () => {
@@ -460,6 +476,7 @@ function handleLiveWire(en) {
             return;
         }
         en.stringIdx = 0; en.stringsThrown = (en.stringsThrown || 0) + 1;
+        electrifyLane(en.lane); // the lane he just worked goes live
         const shoveNext = en.stringsThrown % (en.arcMods.shoveEvery || 3) === 0;
         en.currentMove = shoveNext ? 'shove' : 'string';
         en.maxCooldown = nextCycle(en, shoveNext ? 60 : 44);
@@ -468,7 +485,7 @@ function handleLiveWire(en) {
     } else { // SHOVE: walks you back hard (guarding only softens it)
         const connected = en.lane === p.lane && Math.abs(en.x - p.x) <= 100 && p.state !== 'ghost_step';
         resolveBossStrike(en, 14, true);
-        if (connected) { p.x = Math.max(CONSTANTS.ROPES.playerMinX, p.x - 60); spawnFloatingText(p.x, p.y - 120, 'WALKED BACK', '#ffe14d'); }
+        if (connected) { p.x = Math.max(CONSTANTS.FOOTWORK.minX, p.x - 60); spawnFloatingText(p.x, p.y - 120, 'WALKED BACK', '#ffe14d'); }
         en.currentMove = 'string';
         en.maxCooldown = nextCycle(en, 44);
         en.attackCooldown = en.maxCooldown;
@@ -525,9 +542,9 @@ function handleNegative(en) {
 
 export function updateBosses() {
     updateEnemyEchoes(); // Negative's echoes resolve even while it's stunned
+    if (!st.finisher) updateLiveLanes(); // Live Wire's charged lanes run out even while he's stunned
     for (const en of st.enemies) {
         if (!en.isBoss) continue;
-        if (en.controller === 'live_wire' && st.bossIntroTimer <= 0 && !st.finisher) liveWireShocks(en); // the wires are always live
         checkBossThresholds(en); // safety net for non-punch damage
         if (en.pendingFinisher && !st.finisher) {
             const kind = en.pendingFinisher; en.pendingFinisher = null;

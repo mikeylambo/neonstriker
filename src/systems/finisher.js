@@ -93,16 +93,14 @@ export function startFinisher(en, kind) {
     p.state = 'idle'; p.punchTimer = 0; p.hitFrame = 0; p.inputBuffer = null; p.movementBuffer = null;
     p.lane = 1; p.x = Math.min(Math.max(p.x, 160), 300);
     en.lane = 1; en.x = p.x + 118; en.vx = 0; en.stun = 0;
-    // v17 LIVE WIRE — CORNER REVERSAL: you spin him into his own wires. The two
-    // swap sides: he ends up against the electrified ropes, you facing him.
-    if (en.controller === 'live_wire') {
-        en.x = CONSTANTS.ROPES.playerPostX + 34; en.facing = 1;
-        p.x = en.x + 118; p.facing = -1;
-        spawnFloatingText(en.x + 20, en.y - 150, 'CORNER REVERSAL!', '#fff36b');
-    }
+    // v18 FIX: snap BOTH fighters onto the mid lane's line. The boss's drawn y used
+    // to stay wherever it was (enemy movement is frozen during a Finisher), so the
+    // QTE could show the Striker and the boss in different lanes.
+    const midY = st.height * CONSTANTS.LANE_Y[1];
+    en.y = midY; p.y = midY;
     en.recoverTimer = 0; en.telegraphed = false; en.shiftWarning = 0; en.exposedTimer = 0;
     en.decoyTimer = 0; en.targetLanes = []; en.justAttacked = 0;
-    st.hazards = [];
+    st.hazards = []; st.liveLanes = [];
     st.hitstop = 0;
 
     const label = kind === 'ko' ? 'FINAL BLOW' : 'STAGGERED!';
@@ -142,7 +140,7 @@ function landPrompt(isPerfect) {
         // Slip into the new lane; the staggered boss is dragged along with you.
         const old = { x: en.x, y: en.y };
         p.lane += LANE_STEP[move]; p.slipCooldown = 20;
-        en.lane = p.lane; en.y = st.height * CONSTANTS.LANE_Y[en.lane];
+        en.lane = p.lane; // both glide to the new lane together (see updateFinisher)
         createShatter(old.x, old.y - 60, st.bossThemeColor || '#ffffff');
         p.state = 'punching'; p.punchType = 'cross'; p.hitFrame = 0; p.didHit = true;
     } else {
@@ -166,8 +164,8 @@ function landPrompt(isPerfect) {
     triggerShockwave(en.x, en.y - 60, isPerfect ? '#ffffff' : (st.bossThemeColor || '#ff0055'));
     createShatter(en.x, en.y - 70, isPerfect ? '#ffffff' : (st.bossThemeColor || '#ff0055'));
     for (let i = 0; i < 3; i++) createImpact(en.x, en.y - 60 - i * 20, '#ffffff');
-    if (en.controller === 'live_wire') { // every blow slams him into the live wires
-        createImpact(CONSTANTS.ROPES.playerPostX, en.y - 80, '#fff36b'); createImpact(CONSTANTS.ROPES.playerPostX, en.y - 40, '#fff36b');
+    if (en.controller === 'live_wire') { // his own current arcs off every blow
+        createImpact(en.x + 30, en.y - 80, '#fff36b'); createImpact(en.x + 10, en.y - 40, '#fff36b');
         playSound('shock');
     }
     // Hit-stop inside a finisher freezes the PICTURE, never the beat clock — the
@@ -208,7 +206,6 @@ function endPrompts(result) {
 function finishFinisher() {
     const f = st.finisher, en = f.boss, p = st.player;
     p.state = 'idle'; p.punchType = null;
-    if (en.controller === 'live_wire') { delete en.facing; delete p.facing; p.x = 180; en.x = p.x + 260; }
     if (f.kind === 'ko') {
         en.koDone = true; en.hp = 0; // enemies.js resolves the defeat next frame
     } else {
@@ -232,6 +229,7 @@ export function updateFinisher() {
     if (f.freeze > 0) f.freeze--;
     if (f.poseTimer > 0 && --f.poseTimer === 0) st.player.state = 'idle';
     st.player.y += ((st.height * CONSTANTS.LANE_Y[st.player.lane]) - st.player.y) * 0.35;
+    f.boss.y += ((st.height * CONSTANTS.LANE_Y[f.boss.lane]) - f.boss.y) * 0.35; // same glide as the Striker
     if (st.player.slipCooldown > 0) st.player.slipCooldown--;
 
     if (f.phase === 'intro') {
