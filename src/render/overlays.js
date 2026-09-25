@@ -173,12 +173,26 @@ export function drawFinisherUI(ctx) {
     }
     ctx.globalAlpha = 1;
 
-    // the live prompt: key box + closing beat ring
+    // v19: the prompt sits right OVER the two fighters (screen position of the
+    // camera's push-in focus), so your eyes never leave the exchange.
+    const z = st.finisherZoom || 1, bp = f.boss;
+    const fx = (st.player.x + bp.x) / 2 + 20, fy = st.player.y - 70;
+    const cx = fx, cy = Math.max(150, fy - 118 * z); // clears the boss bar (y≈100 in a Finisher)
     const pp = promptProgress();
     if (pp) {
         const g = promptGlyph(pp.move);
-        const cx = PROMPT_X * W, cy = PROMPT_Y * H;
         const box = 46;
+        // the NEXT prompt waits, small and dim, to the right
+        const nextMove = f.seq[f.idx + 1];
+        if (nextMove) {
+            const ng = promptGlyph(nextMove);
+            ctx.globalAlpha = 0.45; ctx.fillStyle = 'rgba(0,0,0,0.7)';
+            ctx.beginPath(); ctx.arc(cx + 104, cy, 24, 0, Math.PI * 2); ctx.fill();
+            ctx.strokeStyle = ng.color; ctx.lineWidth = 2; ctx.stroke();
+            ctx.fillStyle = ng.color; ctx.font = `900 ${ng.key.length > 2 ? 12 : 20}px Orbitron`;
+            ctx.textBaseline = 'middle'; ctx.fillText(ng.key, cx + 104, cy + 1); ctx.textBaseline = 'alphabetic';
+            ctx.globalAlpha = 1;
+        }
         const ringR = box + 70 * (1 - Math.min(1, pp.progress));
         const inWindow = pp.t >= -CONSTANTS.FINISHER.windowEarly;
         ctx.lineWidth = 4;
@@ -195,7 +209,12 @@ export function drawFinisherUI(ctx) {
         ctx.fillText(g.hint, cx, cy + box + 30);
     } else if (f.phase === 'intro') {
         ctx.fillStyle = `rgba(255,255,255,${f.bars})`; ctx.font = 'bold 13px Orbitron';
-        ctx.fillText('HIT EACH PROMPT ON THE BEAT', PROMPT_X * W, PROMPT_Y * H);
+        ctx.fillText('HIT EACH PROMPT ON THE BEAT', cx, cy);
+    }
+    // a locked-in input flashes where the prompt was
+    if (f.phase === 'prompts' && f.lockFlash > 0) {
+        ctx.globalAlpha = f.lockFlash / 10; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.arc(cx, cy, 46 + (10 - f.lockFlash) * 3, 0, Math.PI * 2); ctx.stroke(); ctx.globalAlpha = 1;
     }
 
     // judgement
@@ -203,7 +222,7 @@ export function drawFinisherUI(ctx) {
         const a = Math.min(1, f.judgeTimer / 12);
         const s = reducedMotion() ? 1 : 1 + Math.max(0, f.judgeTimer - 26) * 0.06;
         ctx.save();
-        ctx.translate(PROMPT_X * W, PROMPT_Y * H - 128); ctx.scale(s, s);
+        ctx.translate(cx, f.phase === 'playback' ? Math.max(90, cy - 10) : Math.max(70, cy - 76)); ctx.scale(s, s);
         ctx.globalAlpha = a; ctx.fillStyle = f.judge.color;
         ctx.font = '900 italic 30px Orbitron'; ctx.shadowColor = f.judge.color; ctx.shadowBlur = 14;
         ctx.fillText(f.judge.text, 0, 0);
@@ -477,7 +496,7 @@ export function drawBossPoster(ctx) {
     // the two fighters, facing off
     const fy = py + 352;
     ctx.save(); ctx.translate(px + 150, fy); ctx.scale(1.7, 1.7);
-    drawBoxer(ctx, { x: -25, y: 0, lane: 1, w: 50, h: 110, state: 'guarding', punchType: null, hitFrame: 0, slipBuff: 0, trails: [] }, true, a);
+    drawBoxer(ctx, { x: -25, y: 0, lane: 1, w: 50, h: 110, state: 'idle', punchType: null, hitFrame: 0, slipBuff: 0, trails: [] }, true, a); // v19: his idle stance
     ctx.restore();
     ctx.save(); ctx.translate(px + pw - 150, fy); ctx.scale(1.7, 1.7);
     drawBoxer(ctx, { x: -25, y: 0, lane: 1, w: 50, h: 110, isBoss: false, controller: P.controller, type: 'grunt', color: P.color, stun: 0, attackCooldown: 99, trails: [] }, false, a);
@@ -528,63 +547,5 @@ export function drawBillingCard(ctx, card, age, alpha) {
     ctx.fillStyle = card.color || '#22d3ee'; ctx.font = '900 18px Orbitron';
     ctx.fillText(String(card.venue).toUpperCase(), W / 2, by + 108);
     if (card.tagline) { ctx.fillStyle = 'rgba(255,255,255,0.7)'; ctx.font = 'bold 12px Orbitron'; ctx.fillText(card.tagline, W / 2, by + 132); }
-    ctx.restore();
-}
-
-// ---------- v18 BRUISER SWEEP tell + first-time hint (world space) ----------
-export function drawSweep(ctx) {
-    const lanes = st.sweepLanes || [];
-    if (lanes.some(Boolean)) {
-        const pulse = 0.5 + 0.5 * Math.sin(Date.now() * 0.03);
-        ctx.save();
-        lanes.forEach((on, l) => {
-            if (!on) return;
-            const y = st.height * CONSTANTS.LANE_Y[l];
-            ctx.strokeStyle = `rgba(255, 176, 32, ${(0.25 + 0.25 * pulse).toFixed(3)})`; ctx.lineWidth = 18;
-            ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(st.width, y); ctx.stroke();
-            ctx.strokeStyle = '#ffb020'; ctx.lineWidth = 3; ctx.setLineDash([16, 10]); ctx.lineDashOffset = Date.now() * 0.08 % 26;
-            ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(st.width, y); ctx.stroke(); ctx.setLineDash([]);
-        });
-        ctx.restore();
-    }
-    if ((st.sweepHint || 0) > 0 && st.player) {
-        const p = st.player, a = Math.min(1, st.sweepHint / 12);
-        const g1 = glyph('ghost'), g2 = glyph('guard');
-        // above the Striker — or below him on the top lane, clear of the HUD
-        const top = p.y - 214 < 100 ? p.y + 26 : p.y - 214;
-        ctx.save(); ctx.globalAlpha = a; ctx.textAlign = 'center';
-        ctx.fillStyle = 'rgba(6,8,14,0.88)'; ctx.fillRect(p.x - 70, top, 190, 50);
-        ctx.fillStyle = '#ffb020'; ctx.fillRect(p.x - 70, top, 190, 3);
-        ctx.font = '900 11px Orbitron'; ctx.fillStyle = '#ffb020';
-        ctx.fillText("CAN'T SLIP A SWEEP", p.x + 25, top + 16);
-        ctx.font = '900 12px Orbitron'; ctx.fillStyle = '#ffffff';
-        ctx.fillText(`${g1.label} GHOST  ·  ${g2.label} GUARD`, p.x + 25, top + 38);
-        ctx.restore();
-    }
-}
-
-// ---------- v18 LOADED CROSS charge ring (world space) ----------
-// Playtest: "make the visual more prominent". A ring AROUND the Striker (never
-// on his body/gloves) fills while Cross is held, then locks bright when loaded.
-export function drawChargeRing(ctx) {
-    const p = st.player;
-    if (!p || !p.charging || !st.progressionMods.loadedCross) return;
-    const LC = CONSTANTS.VERBS.loadedCross;
-    const k = Math.min(1, p.crossCharge / LC.chargeFrames), loaded = k >= 1;
-    const cx = p.x + 25, cy = p.y - 62, col = buildColor();
-    const r = loaded ? 70 + Math.sin(Date.now() * 0.03) * 4 : 70;
-    ctx.save();
-    ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(255,255,255,0.12)';
-    ctx.beginPath(); ctx.arc(cx, cy, 70, 0, Math.PI * 2); ctx.stroke();
-    ctx.shadowColor = col; ctx.shadowBlur = loaded ? 28 : 12;
-    ctx.strokeStyle = loaded ? '#ffffff' : col; ctx.lineWidth = loaded ? 7 : 5;
-    ctx.beginPath(); ctx.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * k); ctx.stroke();
-    if (loaded) {
-        ctx.strokeStyle = col; ctx.lineWidth = 3; ctx.globalAlpha = 0.6;
-        ctx.beginPath(); ctx.arc(cx, cy, r + 10, 0, Math.PI * 2); ctx.stroke();
-        ctx.globalAlpha = 1; ctx.shadowBlur = 0;
-        ctx.fillStyle = '#ffffff'; ctx.font = '900 italic 14px Orbitron'; ctx.textAlign = 'center';
-        ctx.fillText('LOADED — RELEASE', cx, cy + r + 26);
-    }
     ctx.restore();
 }

@@ -180,7 +180,11 @@ function resolveBossStrike(en, rawDmg, isHeavy) {
         return;
     }
     let dmg = st.isInstinct ? Math.floor(rawDmg * 0.5) : rawDmg;
-    takeDamage(dmg, isHeavy, en);
+    // v19 COUNTER HIT: swinging into a boss that isn't OPEN gets you caught — the
+    // mash-fest answer. Heavy boss blows floor you even when they're not counters.
+    const counter = st.player.state === 'punching' || st.player.state === 'recovery';
+    if (counter) dmg = Math.round(dmg * CONSTANTS.PLAYER_HIT.counterHitMult);
+    takeDamage(dmg, isHeavy || counter, en, { floor: isHeavy || counter, counter });
 }
 
 // Desperation used to double-decrement the cooldown on even-numbered runs only,
@@ -431,7 +435,7 @@ export function updateLiveLanes() {
             if (z.timer <= 0) { z.phase = 'live'; z.timer = L.liveFrames; z.tick = 0; playSound('shock'); }
         } else {
             if (p.lane === z.lane && !(p.invuln > 0) && p.state !== 'ghost_step' && (z.tick++ % L.tickEvery) === 0) {
-                takeDamage(L.damage, false, null);
+                takeDamage(L.damage, false, null, { src: 'live_lane' });
                 playSound('shock'); createImpact(p.x + 20, p.y - 70, '#fff36b');
                 spawnFloatingText(p.x + 10, p.y - 130, 'SHOCKED!', '#fff36b');
             }
@@ -508,7 +512,7 @@ function updateEnemyEchoes() {
                 e.fired = true;
                 if (p.lane === e.lane && Math.abs(e.x - p.x) < 150) {
                     if (p.state === 'ghost_step') { spawnFloatingText(p.x, p.y - 50, 'GHOST STEP', '#888888'); registerPerfectGhostStep(); }
-                    else takeDamage(st.isInstinct ? 6 : 12, false, null);
+                    else takeDamage(st.isInstinct ? 6 : 12, false, null, { src: 'negative_echo' });
                 }
                 createImpact(e.x - 40, e.y - 60, e.color);
             }

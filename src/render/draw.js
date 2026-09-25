@@ -7,7 +7,7 @@ import { SequenceManager } from '../systems/sequences.js';
 import { shakeScale } from '../systems/settings.js';
 import { buildColor } from '../systems/colors.js';
 import { drawOnboardingMock } from './onboarding_mock.js';
-import { drawChargeRing, drawSweep, drawBossPoster, drawLiveLanes, drawAfterimages, drawKnockdownUI, drawKoFx, drawScorePops, drawBossTells, drawBossHud, drawFinisherDim, drawFinisherUI, drawVignette } from './overlays.js';
+import { drawBossPoster, drawLiveLanes, drawAfterimages, drawKnockdownUI, drawKoFx, drawScorePops, drawBossTells, drawBossHud, drawFinisherDim, drawFinisherUI, drawVignette } from './overlays.js';
 
 const dl = (x1, y1, x2, y2) => { ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); };
 
@@ -141,7 +141,6 @@ export function draw() {
     ctx.globalAlpha = 1.0;
 
     drawLiveLanes(ctx);
-    drawSweep(ctx);
     drawFinisherDim(ctx);
     drawAfterimages(ctx);
 
@@ -178,8 +177,7 @@ export function draw() {
                 if (en.isBoss) {
                     if (en.currentMove === 'bash') { telColor = '#ffaa00'; telText = 'BREAK'; }
                     if (en.currentMove === 'feint') { telColor = '#aa00ff'; telText = '?'; }
-                } else if (en.currentMove === 'sweep' && en.type === 'bruiser') { telColor = '#ffb020'; telText = 'SWEEP'; }
-                else if (en.type === 'shield' || en.type === 'bruiser') { telColor = '#ffaa00'; telText = 'BREAK'; }
+                } else if (en.type === 'shield' || en.type === 'bruiser') { telColor = '#ffaa00'; telText = 'BREAK'; }
 
                 ctx.fillStyle = telColor; ctx.font = 'bold 20px Orbitron'; ctx.textAlign = 'center'; ctx.fillText(telText, en.x + en.w/2 + xOff, en.y - en.h - 10); ctx.textAlign = 'left';
             }
@@ -242,10 +240,16 @@ export function draw() {
         ctx.save(); ctx.translate(p.x + 25, p.y); ctx.rotate(-Math.PI / 2 * k); ctx.translate(-(p.x + 25), -p.y);
         drawBoxer(ctx, { ...p, state: 'hurt' }, true);
         ctx.restore();
+    } else if (st.player.state === 'floored') {
+        // v19: a short knockdown — flat, then back up (no ten-count)
+        const p = st.player, T = CONSTANTS.PLAYER_HIT.floorFrames, t = p.floorTimer || 0;
+        const k = Math.min(1, (T - t) / 7, t / 10);
+        ctx.save(); ctx.translate(p.x + 25, p.y); ctx.rotate(-Math.PI / 2 * k); ctx.translate(-(p.x + 25), -p.y);
+        drawBoxer(ctx, { ...p, state: 'hurt' }, true);
+        ctx.restore();
     } else {
         const inv = (st.player.invuln || 0) > 0 && Math.floor(Date.now() / 80) % 2 === 0;
         drawBoxer(ctx, st.player, true, inv ? 0.45 : 1);
-        drawChargeRing(ctx);
     }
 
     st.floatingTexts.forEach(ft => {

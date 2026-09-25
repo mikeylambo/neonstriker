@@ -7,8 +7,9 @@ import { triggerTutorial } from '../systems/tutorial.js';
 import { takeDamage, registerPerfectGhostStep } from './player.js';
 import { addScore, killScore } from '../systems/score.js';
 import { setMusicIntensity } from '../vfx_audio/audio.js';
-import { keyName, profileCount, bumpProfileCount } from '../systems/settings.js';
+import { keyName } from '../systems/settings.js';
 import { createKoShatter } from '../vfx_audio/effects.js';
+import { tmKill } from '../systems/telemetry.js';
 
 // v17 PUNCH STRINGS: after each hit of a string resolves (landed, slipped,
 // guarded or ghosted), the next hit re-targets the Striker's lane and winds up
@@ -18,15 +19,14 @@ export function applyKnockback(en) {
     en.x += en.vx; en.vx *= 0.85;
 }
 
-function isSweep(en) { return en.type === 'bruiser' && !en.isBoss && !en.tutorialType && en.currentMove === 'sweep'; }
-
-// The first few sweeps (per save) put the two answers right over your head.
-function maybeSweepHint() {
-    if ((st.sweepHint || 0) > 0) return;
-    const shown = Number(profileCount('sweepHints')) || 0;
-    if (shown >= CONSTANTS.SWEEP.hintsPerSave) return;
-    bumpProfileCount('sweepHints');
-    st.sweepHint = 70;
+// v19 HOLD THE LINE (see CONSTANTS.HOLD_LINE): nobody walks past the Striker.
+function atHoldLine(en) {
+    if (en.isBoss || en.tutorialType) return false;
+    let line = st.player.x + (en.type === 'zoner' ? CONSTANTS.HOLD_LINE.zoner : CONSTANTS.HOLD_LINE.melee);
+    // Never park out of reach: the line always sits within a jab of the
+    // furthest point footwork can carry the Striker (else the stage soft-locks).
+    line = Math.min(line, CONSTANTS.FOOTWORK.maxX + CONSTANTS.HOLD_LINE.reach);
+    return en.x <= line;
 }
 
 function endAttack(en) {
@@ -37,11 +37,7 @@ function endAttack(en) {
         return;
     }
     en.stringIdx = 0;
-    if (en.type === 'bruiser') {
-        // v18: Bruisers alternate a straight BASH with an unslippable SWEEP.
-        en.attackCount = (en.attackCount || 0) + 1;
-        en.currentMove = en.attackCount % 2 === 1 ? 'sweep' : 'bash';
-    }
+    if (en.type === 'bruiser') en.currentMove = 'bash';
     en.attackCooldown = en.maxCooldown;
 }
 
@@ -70,7 +66,6 @@ export function updateEnemies() {
     let blockedX = [-1000, -1000, -1000];
     let frontEnemy = [null, null, null];
     st.laneFlash[0] = st.laneFlash[1] = st.laneFlash[2] = 0;
-    st.sweepLanes = [false, false, false];
     st.player.dangerLevel = 0;
 
     st.enemies.forEach(en => {
@@ -163,15 +158,6 @@ export function updateEnemies() {
             continue;
         }
 
-        // v18 SWEEP tell: amber on every lane it covers, and a danger ring if you're in it.
-        if (isSweep(en) && Math.abs(en.x - st.player.x) < CONSTANTS.SWEEP.reach && en.attackCooldown <= CONSTANTS.SWEEP.tellFrames && en.stun <= 0 && st.tutorialGrace <= 0) {
-            for (let l = en.lane - 1; l <= en.lane + 1; l++) if (l >= 0 && l <= 2) st.sweepLanes[l] = true;
-            if (Math.abs(st.player.lane - en.lane) <= 1) {
-                st.player.dangerLevel = Math.max(st.player.dangerLevel, en.attackCooldown <= 10 ? 2 : 1);
-                maybeSweepHint();
-            }
-            continue;
-        }
         if (en.isActiveThreat && en.name !== 'STATIC MONK') {
             const { perfect: perfectThresh, good: goodThresh } = CONSTANTS.getSlipThresholds(en.type, st.progressionMods.perfectSlipWindowBonus);
             // Red telegraph now starts relative to each archetype's own good-window
@@ -226,7 +212,7 @@ export function updateEnemies() {
             } else {
                 en.vx = 0;
                 if (en.isBoss && en.x < st.player.x + 100 && en.name !== 'STATIC MONK') { en.x = st.player.x + 100; }
-                else if (!isBlockedByEnemy && !isAtPlayer && st.tutorialGrace <= 0 && en.name !== 'STATIC MONK') { en.x -= en.speed; }
+                else if (!isBlockedByEnemy && !isAtPlayer && !atHoldLine(en) && st.tutorialGrace <= 0 && en.name !== 'STATIC MONK') { en.x -= en.speed; }
             }
 
             en.y += ((st.height * CONSTANTS.LANE_Y[en.lane]) - en.y) * 0.3;
@@ -235,7 +221,14 @@ export function updateEnemies() {
             // decremented attackCooldown twice per frame (bosses attacked at 2x speed).
             if (en.isBoss) continue;
 
-            if (Math.abs(en.x - st.player.x) < 130 && !isBlockedByEnemy && st.tutorialGrace <= 0) {
+            // v19: an enemy waiting on the line in ANOTHER lane doesn't swing at air
+            // — it keeps a full wind-up in hand for the moment you slip into its lane.
+            // A punch string in progress steps into your new lane for its next hit.
+            if ((en.stringIdx || 0) > 0 && en.lane !== st.player.lane && Math.abs(en.lane - st.player.lane) === 1) en.lane = st.player.lane;
+            if (en.lane !== st.player.lane && !en.tutorialType && Math.abs(en.x - st.player.x) < 130) {
+                en.attackCooldown = Math.max(en.attackCooldown, CONSTANTS.getSlipThresholds(en.type).good + 12);
+            }
+            if (Math.abs(en.x - st.player.x) < 130 && !isBlockedByEnemy && st.tutorialGrace <= 0 && (en.lane === st.player.lane || en.tutorialType)) {
 
                 if (en.attackCooldown === 22 && en.isActiveThreat) {
                     if (en.type === 'bruiser') playSound('bash_tell'); else playSound('jab_tell');
@@ -253,25 +246,6 @@ export function updateEnemies() {
                     // — this one, covering every melee-type enemy, was effectively
                     // dead. Checking post-decrement, at the point the hit actually
                     // lands, is what makes Ghost Step's "emergency evade" real.
-                    // v18 SWEEP resolution: covers the bruiser's lane and both neighbours.
-                    if (isSweep(en)) {
-                        const inArc = Math.abs(st.player.lane - en.lane) <= 1 && Math.abs(en.x - st.player.x) < CONSTANTS.SWEEP.reach;
-                        createImpact(en.x - 30, en.y - 60, '#ffb020');
-                        if (inArc) {
-                            if (st.player.state === 'ghost_step' && st.player.ghostStepTimer > 2) {
-                                spawnFloatingText(st.player.x, st.player.y - 50, "THROUGH IT!", "#e5e7eb");
-                                registerPerfectGhostStep();
-                            } else {
-                                let dmg = Math.round(CONSTANTS.SWEEP.damage * CONSTANTS.affixMod(st.currentAffix, 'bruiserDamageMult', 1));
-                                if (st.isInstinct) dmg = Math.floor(dmg * 0.5);
-                                const guarded = st.player.state === 'guarding';
-                                takeDamage(dmg, true, en);
-                                if (guarded) spawnFloatingText(st.player.x, st.player.y - 80, "BLOCKED", "#9ca3af");
-                            }
-                        }
-                        endAttack(en);
-                        continue;
-                    }
                     if (st.player.state === 'ghost_step' && st.player.ghostStepTimer > 4 && isAtPlayer && en.isActiveThreat) {
                         spawnFloatingText(st.player.x, st.player.y - 50, "GHOST STEP", "#888888");
                         if (!en.tutorialType) registerPerfectGhostStep();
@@ -346,6 +320,7 @@ export function updateEnemies() {
         }
         if (en.hp <= 0) {
             st.statTotalKills++;
+            tmKill(en.isBoss ? en.controller : (en.tutorialType ? 'dummy' : en.type));
             let comboMult = 1.0 + Math.min(0.3, Math.floor(st.combo / 2) * 0.1);
             const flowMult = getFlowMultiplier(st); // APEX (Flow State): kills pay out the streak too
 

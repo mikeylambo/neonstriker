@@ -86,7 +86,7 @@
             <div class="manual-container">
                 <h2 class="text-4xl mb-6 text-pink-500 font-black italic tracking-tighter border-b border-gray-800 pb-4">COMBAT MANUAL</h2>
                 <h3 class="manual-h3">1. The Basics</h3><p class="manual-p"><span class="manual-highlight">[UP / DOWN]</span> slip between the 3 lanes. <span class="manual-highlight">[L-SHIFT]</span> Ghost Step (a short invincible dash &mdash; its own button). <span class="manual-highlight">[LEFT / RIGHT]</span> held = footwork: give ground / press forward.<br><span class="manual-highlight">[A] [A] [A]</span> Jab chain &nbsp;·&nbsp; <span class="manual-highlight">[S]</span> Cross (armor break) &nbsp;·&nbsp; <span class="manual-highlight">[D]</span> Hook (space-maker) &nbsp;·&nbsp; <span class="manual-highlight">[W]</span> hold to Guard &nbsp;·&nbsp; <span class="manual-highlight">[SPACE]</span> Instinct.<br>Every key can be remapped in <span class="manual-highlight">Pause &rarr; Settings &rarr; Controls</span>. Pad: X Jab · Y Cross · B Hook · LB Ghost Step · RB Guard · A Instinct.</p>
-                <h3 class="manual-h3">2. Footwork &amp; Spacing</h3><p class="manual-p">Hold <span class="manual-highlight">[RIGHT]</span> to press forward and meet them early; hold <span class="manual-highlight">[LEFT]</span> to give ground and buy a beat. You hold your position while you're fighting &mdash; with nobody in reach you drift back to neutral on your own.<br>Some blows can't be slipped: a Bruiser's <span class="manual-alert">SWEEP</span> covers its lane and both neighbours. <span class="manual-highlight">Ghost Step [L-SHIFT]</span> straight through it, or <span class="manual-highlight">Guard [W]</span> and eat a fraction of it.</p>
+                <h3 class="manual-h3">2. Footwork &amp; Spacing</h3><p class="manual-p">Hold <span class="manual-highlight">[RIGHT]</span> to press forward and meet them early; hold <span class="manual-highlight">[LEFT]</span> to give ground and buy a beat. You hold your position while you're fighting &mdash; with nobody in reach you drift back to neutral on your own.</p>
                 <h3 class="manual-h3">3. Reading The Lanes (Perfect Slips)</h3><p class="manual-p">When an enemy is preparing to attack, their lane will flash <span class="manual-alert">RED</span>. Slipping now grants a <span class="manual-highlight">Good Slip</span>.<br>When the lane flashes <span style="color: #fff; font-weight: bold;">BRIGHT WHITE</span>, you are in the <span class="manual-highlight">Perfect Slip Window</span>. <br>A Perfect Slip completely evades the attack, grants a massive Instinct Meter boost, and <span style="color: #ffff00; font-weight: bold;">CHARGES</span> a devastating Counter Hit for your next strike!</p>
                 <h3 class="manual-h3">4. Guard Offense &amp; Breaking Shields</h3><p class="manual-p">Enemies with <span class="manual-alert">GOLD ARMOR</span> will block Jabs. You MUST use a <span class="manual-highlight">CROSS [S]</span> to shatter their defense.<br>While holding <span class="manual-highlight">GUARD [W]</span>, you can press <span class="manual-highlight">[A]</span> for a fast Guard Jab, or <span class="manual-highlight">[D]</span> for a space-making Check Hook. These are safe, but won't build Combo.</p>
                 <h3 class="manual-h3">5. Know Your Opponent</h3><p class="manual-p"><span class="manual-highlight">Bruisers</span> shrug off Jabs entirely &mdash; only a Cross (or a Counter Hit) staggers them, though Jabs still chip their health. <span class="manual-highlight">Assassins</span> bite through Guard almost completely &mdash; turtling barely works on them, they have to be read and slipped. <span class="manual-alert">Zoners</span> fire from range on a visible countdown; slip out of their lane before it fires.</p>
@@ -130,6 +130,9 @@
                 </div>
                 <h3 class="records-h3 mt-4">Your Top Runs</h3>
                 <div id="records-list" class="records-list"></div>
+                <h3 class="records-h3 mt-4">Run Data <span class="rd-note">(local only · for tuning)</span></h3>
+                <div id="run-data" class="records-list"></div>
+                <div class="orb-btn mt-2 mx-auto w-full" style="border-color:#6b7280;" onclick="window.engineExportRunData()"><div class="font-bold text-sm">EXPORT RUN DATA (JSON)</div></div>
                 <h3 class="records-h3 mt-4">Striker Colours</h3>
                 <div id="striker-picker" class="striker-picker"></div>
                 <div class="orb-btn mt-6 mx-auto w-full" onclick="toggleRecords()"><div class="font-bold text-xl">CLOSE [H] / [ESC]</div></div>
@@ -181,6 +184,7 @@
             <h2 class="text-6xl mb-1 text-pink-500 font-black italic tracking-tighter">GAUNTLET ENDED</h2>
             <p class="text-cyan-400 mb-1 tracking-widest uppercase text-xl" id="final-stage-ui">STAGE REACHED: 1</p>
             <p class="text-[10px] uppercase tracking-widest text-gray-500 mb-1" id="run-mode-ui"></p>
+            <p class="text-[11px] uppercase tracking-widest text-gray-400 mb-1" id="run-time-ui"></p>
             <div class="results-hero">
                 <div id="stat-grade" class="rank-letter rank-C">C</div>
                 <div class="results-score">

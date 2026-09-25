@@ -9,6 +9,7 @@
 import { gameState as st } from '../state.js';
 import { CONSTANTS } from '../constants.js';
 import { random } from './rng.js';
+import { tmWager } from './telemetry.js';
 
 const NONE = CONSTANTS.AFFIXES[0];
 
@@ -33,6 +34,7 @@ export function acceptWager() {
     st.currentAffix = offer;
     st.wagerMult = offer.scoreMult || 1;
     st.wagerOffer = null;
+    tmWager(offer.name);
     return offer;
 }
 

@@ -18,8 +18,8 @@
     BOSS_LEVEL_KEY: 7,
     arcLevelKeys: (arc) => CONSTANTS.ARC_LEVEL_KEYS[arc] || CONSTANTS.DEFAULT_ARC_LEVEL_KEYS,
     arcLength: (arc) => CONSTANTS.arcLevelKeys(arc).length,
-    locateStage: (stage) => {
-      let s = Math.max(1, Math.floor(stage) || 1), arc = 1;
+    locateStage: (stage2) => {
+      let s = Math.max(1, Math.floor(stage2) || 1), arc = 1;
       while (s > CONSTANTS.arcLength(arc)) {
         s -= CONSTANTS.arcLength(arc);
         arc++;
@@ -27,21 +27,21 @@
       return { arc, ordinal: s, levelKey: CONSTANTS.arcLevelKeys(arc)[s - 1] };
     },
     firstStageOfArc: (arc) => {
-      let stage = 1;
-      for (let a = 1; a < arc; a++) stage += CONSTANTS.arcLength(a);
-      return stage;
+      let stage2 = 1;
+      for (let a = 1; a < arc; a++) stage2 += CONSTANTS.arcLength(a);
+      return stage2;
     },
     bossStageOfArc: (arc) => CONSTANTS.firstStageOfArc(arc) + CONSTANTS.arcLength(arc) - 1,
     // --- ARC MATH HELPERS ---
-    getArcIndex: (stage) => CONSTANTS.locateStage(stage).arc,
+    getArcIndex: (stage2) => CONSTANTS.locateStage(stage2).arc,
     // Returns the LEVEL KEY (1-7) for content lookups, not the ordinal position.
-    getLevelInArc: (stage) => CONSTANTS.locateStage(stage).levelKey,
-    isBossStage: (stage) => CONSTANTS.locateStage(stage).levelKey === CONSTANTS.BOSS_LEVEL_KEY,
+    getLevelInArc: (stage2) => CONSTANTS.locateStage(stage2).levelKey,
+    isBossStage: (stage2) => CONSTANTS.locateStage(stage2).levelKey === CONSTANTS.BOSS_LEVEL_KEY,
     // The stage number this fight WOULD have had under the original uniform
     // 7-per-arc layout. Enemy/boss HP scaling reads this so compressing Arc 1 does
     // not quietly make every later arc easier (Arc 2+ scale exactly as before).
-    difficultyStage: (stage) => {
-      const { arc, levelKey } = CONSTANTS.locateStage(stage);
+    difficultyStage: (stage2) => {
+      const { arc, levelKey } = CONSTANTS.locateStage(stage2);
       return (arc - 1) * 7 + levelKey;
     },
     // SINGLE SOURCE OF TRUTH for slip windows. This used to be duplicated with
@@ -272,7 +272,9 @@
       bossKo: 3e3,
       // x arc index
       stageClear: 500,
-      // flat, NOT combo-multiplied (wager still applies)
+      // ALL CLEAR: flat, NOT combo-multiplied (wager still applies)
+      flawless: 1e3,
+      // v19: cleared the stage without taking a hit
       // Letter rank thresholds (score). Calibrated against the headless bot sim
       // (tests/v16.mjs "SCORE CALIBRATION"): a stage-4 death lands ~8-12k (C), a
       // clean Arc 1 clear ~45k (B), deep Arc 2-3 runs 150k+ (S). S also needs reads.
@@ -341,11 +343,23 @@
     // string the lane he struck charges up (warning), then runs live for a beat:
     // standing in it shocks you. It forces a lane change — lane boxing, not corners.
     LIVE_LANE: { warnFrames: 26, liveFrames: 80, tickEvery: 24, damage: 6 },
-    // --- v18 BRUISER SWEEP: every other Bruiser attack is a wide haymaker that
-    // covers its lane AND both neighbours — it can't be slipped. The answers are
-    // Ghost Step (straight through it: a perfect Ghost Step) or Guard. Amber tell,
-    // never the red/white slip colours, so it never baits a slip.
-    SWEEP: { tellFrames: 34, damage: 24, reach: 130, hintsPerSave: 4 },
+    // --- v19 HOLD THE LINE: enemies stop at a line in front of the Striker in EVERY
+    // lane instead of walking past him and off-screen (playtest: "is it possible to
+    // end all enemies on each map? right now it doesn't"). Every enemy can now be
+    // KO'd — a stage only clears when they all are. Zoners hold back at range.
+    HOLD_LINE: { melee: 90, zoner: 200, reach: 105 },
+    // zoners keep range — press forward to reach them
+    // --- v19 PLAYER HIT FEEL: taking a hit now has weight — hit-stop on the
+    // Striker, a knockback slide, longer hitstun, and heavy boss blows (or a boss
+    // catching you mid-punch while it isn't OPEN: a COUNTER HIT) FLOOR you.
+    PLAYER_HIT: {
+      hitStun: { light: 9, heavy: 18 },
+      hitStop: { light: 3, heavy: 6 },
+      slide: { light: 4, heavy: 9 },
+      floorFrames: 46,
+      floorGrace: 22,
+      counterHitMult: 1.5
+    },
     // --- v17 PUNCH STRINGS -------------------------------------------------------
     // Selected enemies throw 2-3 hit strings. Every hit re-targets your lane and
     // gets its own full telegraph from getSlipThresholds (the single source of
@@ -397,8 +411,8 @@
     // so the lane path never leaves the ring (validated in tests/harness.mjs).
     FINISHER: {
       thresholds: [0.66, 0.33],
-      beatFrames: 36,
-      // ~100 BPM at 60fps
+      beatFrames: 42,
+      // v19: slower (~86 BPM at 60fps)
       leadBeats: 1,
       // a prompt appears one beat before it lands
       windowEarly: 12,
@@ -466,8 +480,8 @@
       5: { top: [0, 0, 0], mid: [2, 5, 2], bot: [5, 16, 5], accent: [0, 255, 0, 0.02], shard: [0, 255, 0, 0.04] },
       6: { top: [26, 26, 26], mid: [51, 51, 51], bot: [77, 77, 77], accent: [255, 255, 255, 0.05], shard: [255, 255, 255, 0.15] }
     },
-    paletteKeyForStage: (stage) => {
-      const k = CONSTANTS.getLevelInArc(stage);
+    paletteKeyForStage: (stage2) => {
+      const k = CONSTANTS.getLevelInArc(stage2);
       return k === CONSTANTS.BOSS_LEVEL_KEY ? 6 : k;
     },
     // --- MENACE (target-priority: consequence of ignoring) ---
@@ -873,16 +887,6 @@
     const p = loadProfile();
     p.flags[name] = true;
     safeSet(PROFILE_KEY, p);
-  }
-  function profileCount(name) {
-    const p = loadProfile();
-    return p.counts && p.counts[name] || 0;
-  }
-  function bumpProfileCount(name) {
-    const raw = safeGet(PROFILE_KEY) || {};
-    raw.counts = raw.counts || {};
-    raw.counts[name] = (raw.counts[name] || 0) + 1;
-    safeSet(PROFILE_KEY, raw);
   }
   function hasSeenUpgrade(id) {
     return loadProfile().seenUpgrades.includes(id);
@@ -1899,6 +1903,26 @@
       }
       ctx3.restore();
     }
+    if (isPlayer && !isTrail && entity.charging && gameState.progressionMods.loadedCross) {
+      const need = 18, k = Math.min(1, (entity.crossCharge || 0) / need), loaded = k >= 1;
+      const col = entity.trailColor || "#ffffff";
+      const flick = loaded ? Math.floor(t / 70) % 2 ? "#ffffff" : col : col;
+      ctx3.save();
+      ctx3.globalAlpha = opacity * (loaded ? 0.9 : 0.35 + 0.45 * k * (0.6 + 0.4 * Math.sin(t * 0.05)));
+      ctx3.fillStyle = flick;
+      ctx3.shadowColor = flick;
+      ctx3.shadowBlur = loaded ? 22 : 10;
+      dc(rrX, rrY, gS + 2 + (loaded ? 4 + Math.sin(t * 0.03) * 2 : k * 3), true, false);
+      ctx3.shadowBlur = 0;
+      const n = loaded ? 4 : 2;
+      for (let i = 0; i < n; i++) {
+        const a = t * (loaded ? 0.018 : 0.012) + i * Math.PI * 2 / n, r = gS + 9;
+        ctx3.globalAlpha = opacity;
+        ctx3.fillStyle = loaded ? "#ffffff" : col;
+        dc(rrX + Math.cos(a) * r, rrY + Math.sin(a) * r, loaded ? 2.5 : 1.8, true, false);
+      }
+      ctx3.restore();
+    }
     if (isPlayer && !isTrail && isCounterReady) {
       let cP = Math.sin(Date.now() * 0.02) * 2;
       ctx3.save();
@@ -1938,6 +1962,153 @@
     return Math.max(BO.minTelegraphLead + 2, Math.round(frames));
   }
 
+  // src/systems/telemetry.js
+  var KEY = "neon_strike_telemetry_v1";
+  var MAX_RUNS = 25;
+  var TELEMETRY_VERSION = "19.0.0";
+  var run = null;
+  var stage = null;
+  function safeGet2() {
+    try {
+      const r = localStorage.getItem(KEY);
+      const a = r ? JSON.parse(r) : [];
+      return Array.isArray(a) ? a : [];
+    } catch (e) {
+      return [];
+    }
+  }
+  function safeSet2(a) {
+    try {
+      localStorage.setItem(KEY, JSON.stringify(a));
+    } catch (e) {
+    }
+  }
+  var bump = (obj, k, n = 1) => {
+    obj[k] = (obj[k] || 0) + n;
+  };
+  function newStage(n) {
+    const arc = CONSTANTS.getArcIndex(n), lvl = CONSTANTS.getLevelInArc(n);
+    const t = CONSTANTS.ARC_STAGE_TABLES[Math.min(arc, 5)] || {};
+    return {
+      stage: n,
+      arc,
+      level: lvl,
+      name: t[lvl] && t[lvl].stageName || "",
+      boss: CONSTANTS.isBossStage(n),
+      frames: 0,
+      kills: {},
+      dmg: {},
+      hitsTaken: 0,
+      attacks: {},
+      landed: {},
+      slips: { perfect: 0, good: 0 },
+      ghosts: { used: 0, perfect: 0 },
+      guards: 0,
+      knockdowns: 0,
+      floored: 0,
+      counteredBy: 0,
+      finishers: [],
+      wager: null
+    };
+  }
+  function tmStartRun({ seed = null, daily = false } = {}) {
+    run = { v: TELEMETRY_VERSION, id: `${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`, date: (/* @__PURE__ */ new Date()).toISOString(), seed, daily, frames: 0, stages: [], evolutions: [], end: null };
+    stage = newStage(1);
+    run.stages.push(stage);
+  }
+  function tmStage(n) {
+    if (!run) return;
+    stage = newStage(n);
+    run.stages.push(stage);
+  }
+  function tmTick() {
+    if (!run || !stage) return;
+    run.frames++;
+    stage.frames++;
+  }
+  function tmKill(kind) {
+    if (stage) bump(stage.kills, kind);
+  }
+  function tmDamage(src, amt) {
+    if (!stage) return;
+    bump(stage.dmg, src || "unknown", Math.max(0, Math.round(amt)));
+    stage.hitsTaken++;
+    if (run) run.lastDamageSrc = src || "unknown";
+  }
+  function tmAttack(punch) {
+    if (stage) bump(stage.attacks, punch);
+  }
+  function tmLanded(punch) {
+    if (stage) bump(stage.landed, punch);
+  }
+  function tmSlip(quality) {
+    if (stage && stage.slips[quality] !== void 0) stage.slips[quality]++;
+  }
+  function tmGhost(perfect) {
+    if (!stage) return;
+    if (perfect) stage.ghosts.perfect++;
+    else stage.ghosts.used++;
+  }
+  function tmGuard() {
+    if (stage) stage.guards++;
+  }
+  function tmKnockdown() {
+    if (stage) stage.knockdowns++;
+  }
+  function tmFloored(counter) {
+    if (!stage) return;
+    stage.floored++;
+    if (counter) stage.counteredBy++;
+  }
+  function tmFinisher(kind, result, hits, prompts) {
+    if (stage) stage.finishers.push({ kind, result, hits, prompts });
+  }
+  function tmEvolution(id) {
+    if (run) run.evolutions.push({ stage: gameState.currentStage, frame: run.frames, id });
+  }
+  function tmWager(name) {
+    if (stage) stage.wager = name || null;
+  }
+  function tmEndRun({ stage: endStage, score, grade }) {
+    if (!run) return null;
+    run.end = { stage: endStage, score, grade, frames: run.frames, cause: run.lastDamageSrc || "unknown" };
+    const all = safeGet2();
+    all.push(run);
+    safeSet2(all.slice(-MAX_RUNS));
+    const done = run;
+    run = null;
+    stage = null;
+    return done;
+  }
+  function liveRun() {
+    return run;
+  }
+  function loadTelemetry() {
+    return safeGet2();
+  }
+  function exportTelemetryJSON() {
+    return JSON.stringify({ exported: (/* @__PURE__ */ new Date()).toISOString(), game: "neon-strike", version: TELEMETRY_VERSION, runs: safeGet2() }, null, 2);
+  }
+  function fmtTime(frames) {
+    const s = Math.floor((frames || 0) / 60);
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  }
+  function summarizeTelemetry(runs) {
+    const ends = {}, hurt = {}, stageTime = {}, reached = {};
+    for (const r of runs) {
+      if (r.end) bump(ends, r.end.stage);
+      for (const s of r.stages || []) {
+        bump(reached, s.stage);
+        (stageTime[s.stage] = stageTime[s.stage] || []).push(s.frames);
+        for (const [k, v] of Object.entries(s.dmg || {})) bump(hurt, k, v);
+      }
+    }
+    const avgTime = {};
+    for (const [k, arr] of Object.entries(stageTime)) avgTime[k] = Math.round(arr.reduce((a, b) => a + b, 0) / arr.length);
+    const topHurt = Object.entries(hurt).sort((a, b) => b[1] - a[1]);
+    return { runs: runs.length, ends, reached, avgTime, topHurt };
+  }
+
   // src/systems/finisher.js
   var F = CONSTANTS.FINISHER;
   var LANE_STEP = { up: -1, down: 1 };
@@ -1947,12 +2118,12 @@
   }
   function gateBossDamage(en, dmg) {
     if (!en || !en.isBoss || en.koDone || gameState.finisher || en.pendingFinisher) return dmg;
-    const stage = en.finisherStage || 0;
-    if (stage < F.thresholds.length) {
-      const line = en.maxHp * F.thresholds[stage];
+    const stage2 = en.finisherStage || 0;
+    if (stage2 < F.thresholds.length) {
+      const line = en.maxHp * F.thresholds[stage2];
       if (en.hp - dmg <= line) {
-        en.finisherStage = stage + 1;
-        en.pendingFinisher = "break" + (stage + 1);
+        en.finisherStage = stage2 + 1;
+        en.pendingFinisher = "break" + (stage2 + 1);
         return Math.max(0, en.hp - line);
       }
     }
@@ -1964,15 +2135,15 @@
   }
   function checkBossThresholds(en) {
     if (!en || !en.isBoss || en.koDone || gameState.finisher || en.pendingFinisher) return;
-    const stage = en.finisherStage || 0;
+    const stage2 = en.finisherStage || 0;
     if (en.hp <= 0) {
       en.hp = 1;
       en.pendingFinisher = "ko";
       return;
     }
-    if (stage < F.thresholds.length && en.hp <= en.maxHp * F.thresholds[stage]) {
-      en.finisherStage = stage + 1;
-      en.pendingFinisher = "break" + (stage + 1);
+    if (stage2 < F.thresholds.length && en.hp <= en.maxHp * F.thresholds[stage2]) {
+      en.finisherStage = stage2 + 1;
+      en.pendingFinisher = "break" + (stage2 + 1);
     }
   }
   function startFinisher(en, kind) {
@@ -2003,7 +2174,11 @@
       poseTimer: 0,
       judge: null,
       judgeTimer: 0,
-      jabAlt: false
+      jabAlt: false,
+      landed: [],
+      playIdx: 0,
+      playTimer: 0,
+      lockFlash: 0
     };
     const p = gameState.player;
     p.state = "idle";
@@ -2056,9 +2231,30 @@
     f.judge = { text, color };
     f.judgeTimer = 34;
   }
-  function landPrompt(isPerfect) {
+  var PLAY_GAP = 17;
+  function recordPrompt(isPerfect) {
+    const f = gameState.finisher;
+    f.landed.push({ move: f.seq[f.idx], perfect: isPerfect });
+    judge(isPerfect ? "PERFECT" : "GOOD", isPerfect ? "#ffffff" : "#22d3ee");
+    playSound(isPerfect ? "perfect_slip" : "slip");
+    f.lockFlash = 10;
+    f.idx++;
+    if (f.idx >= f.seq.length) endInput("clean");
+    else f.nextBeat += F.beatFrames;
+  }
+  function endInput(result) {
+    const f = gameState.finisher;
+    f.result = result;
+    if (f.landed.length) {
+      f.phase = "playback";
+      f.playIdx = 0;
+      f.playTimer = 14;
+      f.judge = null;
+    } else endPrompts(result);
+  }
+  function landPrompt(isPerfect, moveOverride) {
     const f = gameState.finisher, en = f.boss, p = gameState.player;
-    const move = f.seq[f.idx];
+    const move = moveOverride || f.seq[f.idx];
     if (move in LANE_STEP) {
       const old = { x: en.x, y: en.y };
       p.lane += LANE_STEP[move];
@@ -2096,17 +2292,15 @@
       playSound("shock");
     }
     f.freeze = hitStopEnabled() ? isPerfect ? 9 : 6 : 0;
-    f.idx++;
-    if (f.idx >= f.seq.length) endPrompts("clean");
-    else f.nextBeat += F.beatFrames;
   }
   function missPrompt(reason) {
     judge(reason, "#ff8800");
     playSound("finisher_miss");
-    endPrompts("broken");
+    endInput("broken");
   }
   function endPrompts(result) {
     const f = gameState.finisher;
+    tmFinisher(f.kind, result, f.landed ? f.landed.length : f.hits, f.seq.length);
     f.result = result;
     f.phase = "outro";
     f.timer = F.outroFrames;
@@ -2168,9 +2362,20 @@
         f.phase = "prompts";
         f.nextBeat = f.frame + F.beatFrames * F.leadBeats;
       }
+    } else if (f.phase === "playback") {
+      f.zoom = F.zoom;
+      f.bars = 1;
+      if (f.freeze <= 0 && --f.playTimer <= 0) {
+        const hit = f.landed[f.playIdx++];
+        if (hit) {
+          landPrompt(hit.perfect, hit.move);
+          f.playTimer = PLAY_GAP;
+        } else endPrompts(f.result);
+      }
     } else if (f.phase === "prompts") {
       f.zoom = F.zoom;
       f.bars = 1;
+      if (f.lockFlash > 0) f.lockFlash--;
       const t = f.frame - f.nextBeat;
       if (t === 0) playSound("beat_tick");
       const input = readFinisherInput();
@@ -2178,7 +2383,7 @@
       if (input) {
         if (t < -F.windowEarly) missPrompt("TOO EARLY");
         else if (input !== want) missPrompt("WRONG MOVE");
-        else landPrompt(Math.abs(t) <= F.perfectWindow);
+        else recordPrompt(Math.abs(t) <= F.perfectWindow);
       } else if (t > F.windowLate) {
         missPrompt("MISSED");
       }
@@ -2237,6 +2442,7 @@
     };
     gameState.knockdownsThisArc = (gameState.knockdownsThisArc || 0) + 1;
     gameState.statKnockdowns = (gameState.statKnockdowns || 0) + 1;
+    tmKnockdown();
     gameState.health = 0;
     gameState.combo = 0;
     gameState.isInstinct = false;
@@ -2278,6 +2484,7 @@
     gameState.health = Math.round(gameState.maxHealth * k.hpFrac);
     gameState.combo = 0;
     p.invuln = K.invulnFrames;
+    gameState.inputGrace = 8;
     for (const en of gameState.enemies) {
       if (Math.abs(en.x - p.x) < 220) {
         en.x = Math.max(en.x, p.x + 180);
@@ -2669,8 +2876,6 @@
     ctx3.fillStyle = `rgba(0, 0, 0, ${0.55 * f.bars})`;
     ctx3.fillRect(-200, -200, gameState.width + 400, gameState.height + 400);
   }
-  var PROMPT_X = 0.72;
-  var PROMPT_Y = 0.48;
   var MOVE_NAME = { up: "SLIP UP", down: "SLIP DOWN", jab: "JAB", cross: "CROSS", hook: "HOOK" };
   var KEY_COLOR = { up: "#22d3ee", down: "#22d3ee", jab: "#ffffff", cross: "#ec4899", hook: "#facc15" };
   function promptGlyph(move) {
@@ -2710,11 +2915,31 @@
       ctx3.fillText(g.key, px + pipW / 2, H - barH + 30);
     }
     ctx3.globalAlpha = 1;
+    const z = gameState.finisherZoom || 1, bp = f.boss;
+    const fx = (gameState.player.x + bp.x) / 2 + 20, fy = gameState.player.y - 70;
+    const cx = fx, cy = Math.max(150, fy - 118 * z);
     const pp = promptProgress();
     if (pp) {
       const g = promptGlyph(pp.move);
-      const cx = PROMPT_X * W, cy = PROMPT_Y * H;
       const box = 46;
+      const nextMove = f.seq[f.idx + 1];
+      if (nextMove) {
+        const ng = promptGlyph(nextMove);
+        ctx3.globalAlpha = 0.45;
+        ctx3.fillStyle = "rgba(0,0,0,0.7)";
+        ctx3.beginPath();
+        ctx3.arc(cx + 104, cy, 24, 0, Math.PI * 2);
+        ctx3.fill();
+        ctx3.strokeStyle = ng.color;
+        ctx3.lineWidth = 2;
+        ctx3.stroke();
+        ctx3.fillStyle = ng.color;
+        ctx3.font = `900 ${ng.key.length > 2 ? 12 : 20}px Orbitron`;
+        ctx3.textBaseline = "middle";
+        ctx3.fillText(ng.key, cx + 104, cy + 1);
+        ctx3.textBaseline = "alphabetic";
+        ctx3.globalAlpha = 1;
+      }
       const ringR = box + 70 * (1 - Math.min(1, pp.progress));
       const inWindow = pp.t >= -CONSTANTS.FINISHER.windowEarly;
       ctx3.lineWidth = 4;
@@ -2745,13 +2970,22 @@
     } else if (f.phase === "intro") {
       ctx3.fillStyle = `rgba(255,255,255,${f.bars})`;
       ctx3.font = "bold 13px Orbitron";
-      ctx3.fillText("HIT EACH PROMPT ON THE BEAT", PROMPT_X * W, PROMPT_Y * H);
+      ctx3.fillText("HIT EACH PROMPT ON THE BEAT", cx, cy);
+    }
+    if (f.phase === "prompts" && f.lockFlash > 0) {
+      ctx3.globalAlpha = f.lockFlash / 10;
+      ctx3.strokeStyle = "#ffffff";
+      ctx3.lineWidth = 3;
+      ctx3.beginPath();
+      ctx3.arc(cx, cy, 46 + (10 - f.lockFlash) * 3, 0, Math.PI * 2);
+      ctx3.stroke();
+      ctx3.globalAlpha = 1;
     }
     if (f.judge && f.judgeTimer > 0) {
       const a = Math.min(1, f.judgeTimer / 12);
       const s = reducedMotion() ? 1 : 1 + Math.max(0, f.judgeTimer - 26) * 0.06;
       ctx3.save();
-      ctx3.translate(PROMPT_X * W, PROMPT_Y * H - 128);
+      ctx3.translate(cx, f.phase === "playback" ? Math.max(90, cy - 10) : Math.max(70, cy - 76));
       ctx3.scale(s, s);
       ctx3.globalAlpha = a;
       ctx3.fillStyle = f.judge.color;
@@ -3140,7 +3374,7 @@
     ctx3.save();
     ctx3.translate(px + 150, fy);
     ctx3.scale(1.7, 1.7);
-    drawBoxer(ctx3, { x: -25, y: 0, lane: 1, w: 50, h: 110, state: "guarding", punchType: null, hitFrame: 0, slipBuff: 0, trails: [] }, true, a);
+    drawBoxer(ctx3, { x: -25, y: 0, lane: 1, w: 50, h: 110, state: "idle", punchType: null, hitFrame: 0, slipBuff: 0, trails: [] }, true, a);
     ctx3.restore();
     ctx3.save();
     ctx3.translate(px + pw - 150, fy);
@@ -3213,88 +3447,6 @@
       ctx3.fillStyle = "rgba(255,255,255,0.7)";
       ctx3.font = "bold 12px Orbitron";
       ctx3.fillText(card.tagline, W / 2, by + 132);
-    }
-    ctx3.restore();
-  }
-  function drawSweep(ctx3) {
-    const lanes = gameState.sweepLanes || [];
-    if (lanes.some(Boolean)) {
-      const pulse = 0.5 + 0.5 * Math.sin(Date.now() * 0.03);
-      ctx3.save();
-      lanes.forEach((on, l) => {
-        if (!on) return;
-        const y = gameState.height * CONSTANTS.LANE_Y[l];
-        ctx3.strokeStyle = `rgba(255, 176, 32, ${(0.25 + 0.25 * pulse).toFixed(3)})`;
-        ctx3.lineWidth = 18;
-        ctx3.beginPath();
-        ctx3.moveTo(0, y);
-        ctx3.lineTo(gameState.width, y);
-        ctx3.stroke();
-        ctx3.strokeStyle = "#ffb020";
-        ctx3.lineWidth = 3;
-        ctx3.setLineDash([16, 10]);
-        ctx3.lineDashOffset = Date.now() * 0.08 % 26;
-        ctx3.beginPath();
-        ctx3.moveTo(0, y);
-        ctx3.lineTo(gameState.width, y);
-        ctx3.stroke();
-        ctx3.setLineDash([]);
-      });
-      ctx3.restore();
-    }
-    if ((gameState.sweepHint || 0) > 0 && gameState.player) {
-      const p = gameState.player, a = Math.min(1, gameState.sweepHint / 12);
-      const g1 = glyph("ghost"), g2 = glyph("guard");
-      const top = p.y - 214 < 100 ? p.y + 26 : p.y - 214;
-      ctx3.save();
-      ctx3.globalAlpha = a;
-      ctx3.textAlign = "center";
-      ctx3.fillStyle = "rgba(6,8,14,0.88)";
-      ctx3.fillRect(p.x - 70, top, 190, 50);
-      ctx3.fillStyle = "#ffb020";
-      ctx3.fillRect(p.x - 70, top, 190, 3);
-      ctx3.font = "900 11px Orbitron";
-      ctx3.fillStyle = "#ffb020";
-      ctx3.fillText("CAN'T SLIP A SWEEP", p.x + 25, top + 16);
-      ctx3.font = "900 12px Orbitron";
-      ctx3.fillStyle = "#ffffff";
-      ctx3.fillText(`${g1.label} GHOST  \xB7  ${g2.label} GUARD`, p.x + 25, top + 38);
-      ctx3.restore();
-    }
-  }
-  function drawChargeRing(ctx3) {
-    const p = gameState.player;
-    if (!p || !p.charging || !gameState.progressionMods.loadedCross) return;
-    const LC = CONSTANTS.VERBS.loadedCross;
-    const k = Math.min(1, p.crossCharge / LC.chargeFrames), loaded = k >= 1;
-    const cx = p.x + 25, cy = p.y - 62, col = buildColor();
-    const r = loaded ? 70 + Math.sin(Date.now() * 0.03) * 4 : 70;
-    ctx3.save();
-    ctx3.lineWidth = 3;
-    ctx3.strokeStyle = "rgba(255,255,255,0.12)";
-    ctx3.beginPath();
-    ctx3.arc(cx, cy, 70, 0, Math.PI * 2);
-    ctx3.stroke();
-    ctx3.shadowColor = col;
-    ctx3.shadowBlur = loaded ? 28 : 12;
-    ctx3.strokeStyle = loaded ? "#ffffff" : col;
-    ctx3.lineWidth = loaded ? 7 : 5;
-    ctx3.beginPath();
-    ctx3.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * k);
-    ctx3.stroke();
-    if (loaded) {
-      ctx3.strokeStyle = col;
-      ctx3.lineWidth = 3;
-      ctx3.globalAlpha = 0.6;
-      ctx3.beginPath();
-      ctx3.arc(cx, cy, r + 10, 0, Math.PI * 2);
-      ctx3.stroke();
-      ctx3.globalAlpha = 1;
-      ctx3.shadowBlur = 0;
-      ctx3.fillStyle = "#ffffff";
-      ctx3.font = "900 italic 14px Orbitron";
-      ctx3.textAlign = "center";
-      ctx3.fillText("LOADED \u2014 RELEASE", cx, cy + r + 26);
     }
     ctx3.restore();
   }
@@ -3586,8 +3738,8 @@
 
   // src/systems/wagers.js
   var NONE = CONSTANTS.AFFIXES[0];
-  function rollWagerOffer(stage) {
-    if (stage < CONSTANTS.WAGERS.firstStage || CONSTANTS.isBossStage(stage)) return null;
+  function rollWagerOffer(stage2) {
+    if (stage2 < CONSTANTS.WAGERS.firstStage || CONSTANTS.isBossStage(stage2)) return null;
     const pool = CONSTANTS.wagerPool();
     if (!pool.length) return null;
     return pool[Math.floor(random() * pool.length)];
@@ -3602,6 +3754,7 @@
     gameState.currentAffix = offer;
     gameState.wagerMult = offer.scoreMult || 1;
     gameState.wagerOffer = null;
+    tmWager(offer.name);
     return offer;
   }
   function declineWager() {
@@ -3673,6 +3826,7 @@
     if (!upgrade || !upgrade.effects) return;
     if (!st.currentDraftOptions.some((o) => o.id === upgrade.id)) return;
     for (const effect of upgrade.effects) applyEffect(st, effect);
+    tmEvolution(upgrade.id);
     if (upgrade.kind === "overclock") {
       const screenEl = document.getElementById("upgrade-screen");
       if (screenEl) {
@@ -3709,11 +3863,11 @@
     4: "rgba(192, 132, 252, 0.18)",
     5: "rgba(250, 204, 21, 0.18)"
   };
-  function stageHudText(stage) {
+  function stageHudText(stage2) {
     var _a;
-    const arc = Math.min(CONSTANTS.getArcIndex(stage), 5);
+    const arc = Math.min(CONSTANTS.getArcIndex(stage2), 5);
     const law = CONSTANTS.ARC_LAWS[arc] || CONSTANTS.ARC_LAWS[5];
-    const data = ((_a = CONSTANTS.ARC_STAGE_TABLES[arc]) == null ? void 0 : _a[CONSTANTS.getLevelInArc(stage)]) || { stageName: "UNKNOWN DEPTHS" };
+    const data = ((_a = CONSTANTS.ARC_STAGE_TABLES[arc]) == null ? void 0 : _a[CONSTANTS.getLevelInArc(stage2)]) || { stageName: "UNKNOWN DEPTHS" };
     return { text: `${law.shortName}: ${data.stageName}`, color: ARC_COLORS[arc] || "#ec4899" };
   }
   function refreshStageHud() {
@@ -3736,19 +3890,26 @@
     }
     return CONSTANTS.STAGE_TAGLINES[1];
   }
-  function roundCard(stage, tagline) {
+  function roundCard(stage2, tagline) {
     var _a;
-    const arc = Math.min(CONSTANTS.getArcIndex(stage), 5);
+    const arc = Math.min(CONSTANTS.getArcIndex(stage2), 5);
     const law = CONSTANTS.ARC_LAWS[arc] || CONSTANTS.ARC_LAWS[5];
-    const data = ((_a = CONSTANTS.ARC_STAGE_TABLES[arc]) == null ? void 0 : _a[CONSTANTS.getLevelInArc(stage)]) || { stageName: "Unknown Depths" };
-    return { round: stage, venue: data.stageName, tagline: tagline || "", kicker: `${law.shortName} \xB7 ${law.name.toUpperCase()}`, color: ARC_COLORS[arc] || "#22d3ee" };
+    const data = ((_a = CONSTANTS.ARC_STAGE_TABLES[arc]) == null ? void 0 : _a[CONSTANTS.getLevelInArc(stage2)]) || { stageName: "Unknown Depths" };
+    return { round: stage2, venue: data.stageName, tagline: tagline || "", kicker: `${law.shortName} \xB7 ${law.name.toUpperCase()}`, color: ARC_COLORS[arc] || "#22d3ee" };
   }
   function advanceStage() {
     var _a;
     const prevStage = gameState.currentStage;
     const clearPts = addScore(CONSTANTS.SCORE.stageClear, void 0, void 0, { noCombo: true });
-    if (clearPts > 0) showToast(`STAGE CLEAR +${clearPts.toLocaleString()}`, "#facc15");
+    if (clearPts > 0) showToast(`ALL CLEAR +${clearPts.toLocaleString()}`, "#facc15");
+    if ((gameState.stageHitsTaken || 0) === 0 && prevStage > 1) {
+      const fl = addScore(CONSTANTS.SCORE.flawless, void 0, void 0, { noCombo: true });
+      showToast(`FLAWLESS +${fl.toLocaleString()}`, "#ffffff");
+      gameState.statFlawless = (gameState.statFlawless || 0) + 1;
+    }
+    gameState.stageHitsTaken = 0;
     gameState.currentStage++;
+    tmStage(gameState.currentStage);
     gameState.bossDefeatedThisStage = false;
     clearWager();
     gameState.wagerOffer = rollWagerOffer(gameState.currentStage);
@@ -4510,6 +4671,7 @@
     if (gameState.player.ghostStepCharges === void 0) gameState.player.ghostStepCharges = maxGhostCharges;
     if (gameState.player.ghostStepCharges <= 0) return;
     gameState.player.ghostStepCharges--;
+    tmGhost(false);
     gameState.player.state = "ghost_step";
     gameState.player.ghostStepTimer = 18;
     gameState.player.ghostPerfected = false;
@@ -4523,6 +4685,7 @@
   }
   function executeMovementInput(action) {
     if (action === "guard") {
+      tmGuard();
       gameState.player.state = "guarding";
       gameState.player.charging = false;
       gameState.combo = 0;
@@ -4538,6 +4701,7 @@
           gameState.player.slipCooldown = 12;
           resetJabString();
           if (gameState.progressionMods.pivotSlip) pivotForward();
+          resolveBodies(gameState.player);
         } else {
           gameState.player.lane = oldLane;
         }
@@ -4561,16 +4725,28 @@
     gameState.combo++;
     if (gameState.combo > gameState.statMaxCombo) gameState.statMaxCombo = gameState.combo;
     gameState.statGhostSteps = (gameState.statGhostSteps || 0) + 1;
+    tmGhost(true);
     p.flowStreak = (p.flowStreak || 0) + 1;
     addScore(CONSTANTS.SCORE.perfectGhostStep, p.x + 40, p.y - 120);
     spawnFloatingText(p.x, p.y - 95, "PERFECT GHOST +1", "#e5e7eb");
+    const zoneReady = gameState.instinctMeter >= 100 && !gameState.isInstinct;
+    const flowMult = getFlowMultiplier(gameState);
+    if (!gameState.isInstinct) {
+      let gain = 20 * gameState.stats.techMult * (1 + gameState.progressionMods.perfectSlipRewardBonusMult) * flowMult;
+      gain *= CONSTANTS.affixMod(gameState.currentAffix, "instinctGainMult", 1);
+      gameState.instinctMeter = Math.min(100, gameState.instinctMeter + gain);
+    }
+    const heal = gameState.progressionMods.perfectSlipHeal + CONSTANTS.affixMod(gameState.currentAffix, "perfectSlipHeal", 0);
+    if (heal > 0) gameState.health = Math.min(gameState.maxHealth, gameState.health + heal);
+    gameState.exp += Math.floor(2 * (1 + gameState.progressionMods.expGainBonusMult) * flowMult);
+    if (zoneReady) activateInstinct(true);
     if (gameState.progressionMods.phantomRiposte) spawnAfterimage(p.lane, p.x, 8);
     return true;
   }
   function checkPerfectSlip(oldLane) {
     let slipQuality = "none", bossSlipped = null;
     gameState.enemies.forEach((en) => {
-      if (en.lane === oldLane && en.stun <= 0 && en.currentMove !== "sweep") {
+      if (en.lane === oldLane && en.stun <= 0) {
         let isThreat = false;
         const { perfect: perfectThresh, good: goodThresh } = CONSTANTS.getSlipThresholds(en.type, gameState.progressionMods.perfectSlipWindowBonus);
         if (en.type === "zoner") {
@@ -4670,6 +4846,7 @@
     }
   }
   function triggerPerfectSlip(bossSlipped, slipQuality) {
+    tmSlip(slipQuality);
     if (slipQuality === "perfect") {
       const zoneReady = gameState.instinctMeter >= 100 && !gameState.isInstinct;
       if (HUD.slipPopup) {
@@ -4727,6 +4904,7 @@
   }
   function startPunch(t, charge = 0) {
     if (gameState.player.state === "guarding") gameState.player.state = "idle";
+    tmAttack(t);
     gameState.player.state = "punching";
     gameState.player.punchType = t;
     gameState.player.didHit = false;
@@ -4780,8 +4958,10 @@
       createVacuum(gameState.player.x + 80, gameState.player.y - 40);
     }
   }
-  function takeDamage(amt, isHeavy, en) {
+  function takeDamage(amt, isHeavy, en, opts = {}) {
     if ((gameState.player.invuln || 0) > 0) return;
+    const PH = CONSTANTS.PLAYER_HIT;
+    const guarding = gameState.player.state === "guarding";
     gameState.player.flowStreak = 0;
     gameState.player.charging = false;
     let guardMult = 0.25;
@@ -4792,11 +4972,24 @@
     if (piercing) spawnFloatingText(gameState.player.x, gameState.player.y - 60, "GUARD PIERCED!", "#aa00ff");
     if (gameState.player.state === "guarding" && gameState.progressionMods.guardRead) gameState.player.guardReadTimer = 16;
     gameState.health -= actualDmg;
-    gameState.player.hitStun = isHeavy ? 10 : 5;
+    tmDamage(opts.src || (en ? en.isBoss ? en.controller : en.type : "hazard"), actualDmg);
+    gameState.stageHitsTaken = (gameState.stageHitsTaken || 0) + 1;
+    gameState.player.hitStun = isHeavy ? PH.hitStun.heavy : PH.hitStun.light;
     gameState.shake = isHeavy ? 30 : 15;
-    gameState.player.x = Math.max(FOOTWORK_MIN_X, gameState.player.x - (isHeavy ? 40 : 10) * gameState.progressionMods.incomingRecoilMult);
+    gameState.hitstop = Math.max(gameState.hitstop || 0, isHeavy ? PH.hitStop.heavy : PH.hitStop.light);
+    gameState.player.slideVx = -(isHeavy ? PH.slide.heavy : PH.slide.light) * gameState.progressionMods.incomingRecoilMult;
     gameState.player.state = "hurt";
     resetJabString();
+    gameState.player.charging = false;
+    if (opts.floor && !guarding) {
+      tmFloored(!!opts.counter);
+      gameState.player.state = "floored";
+      gameState.player.floorTimer = PH.floorFrames;
+      gameState.player.invuln = PH.floorFrames + PH.floorGrace;
+      gameState.player.slideVx *= 1.6;
+      spawnFloatingText(gameState.player.x + 10, gameState.player.y - 140, opts.counter ? "COUNTERED!" : "DOWN!", "#ff3355");
+      playSound("knockdown");
+    }
     if (gameState.combo >= 2 && !gameState.isInstinct) spawnFloatingText(gameState.player.x, gameState.player.y - 50, "COMBO BROKEN", "#ff0055");
     gameState.combo = 0;
     if (!gameState.isInstinct) doFlash(isHeavy ? 0.4 : 0.2);
@@ -4818,11 +5011,24 @@
     }
     if (gameState.enemies.some((e) => e.isBoss && e.desperation)) gameState.statDespDamage++;
   }
+  var BODY_GAP = 62;
+  var FRONT_GAP = 70;
+  function resolveBodies(p) {
+    for (const e of gameState.enemies) {
+      if (e.hp <= 0 || e.controller === "static_monk" || e.x > gameState.width) continue;
+      const gap = e.lane === p.lane ? BODY_GAP : FRONT_GAP;
+      if (e.x - p.x < gap && e.x > p.x - 200) p.x = Math.max(FOOTWORK_MIN_X, e.x - gap);
+    }
+  }
   function isEngaged(p) {
     if (p.comboWindow > 0 || p.state === "punching" || p.state === "recovery") return true;
     return gameState.enemies.some((e) => e.hp > 0 && e.lane === p.lane && e.x > p.x - 30 && e.x - p.x < 160);
   }
   function readInput() {
+    if ((gameState.inputGrace || 0) > 0) {
+      gameState.inputGrace--;
+      return { up: false, down: false, ghost: false, jab: false, cross: false, hook: false, instinct: false, guard: false, holdLeft: false, holdRight: false, crossHeld: false };
+    }
     const K2 = getBinds();
     const jp = (code) => !!gameState.keys[code] && !gameState.lastKeys[code];
     const pad = gameState.pad;
@@ -4864,6 +5070,7 @@
       else if (input.holdLeft) p.x = Math.max(FOOTWORK_MIN_X, p.x - FOOTWORK_RETREAT_SPD);
       else if (!FW.holdGroundWhenEngaged || !isEngaged(p)) p.x += (180 - p.x) * FOOTWORK_HOME_PULL;
     }
+    resolveBodies(p);
     if (input.instinct && gameState.instinctMeter >= 100 && !gameState.isInstinct) activateInstinct(false);
     if (p.inputBufferTimer > 0) {
       if (--p.inputBufferTimer <= 0) {
@@ -4873,6 +5080,17 @@
     }
     if (p.movementBufferTimer > 0) {
       if (--p.movementBufferTimer <= 0) p.movementBuffer = null;
+    }
+    if (p.slideVx && Math.abs(p.slideVx) > 0.2) {
+      p.x = Math.max(FOOTWORK_MIN_X, p.x + p.slideVx);
+      p.slideVx *= 0.8;
+    } else p.slideVx = 0;
+    if (p.state === "floored") {
+      if (--p.floorTimer <= 0) {
+        p.state = "idle";
+        gameState.inputGrace = 6;
+      }
+      return;
     }
     if (p.state === "hurt") {
       if (--p.hitStun <= 0) p.state = "idle";
@@ -4894,17 +5112,7 @@
       if (p.charging) {
         if (input.crossHeld) {
           p.crossCharge = Math.min(LC.maxFrames, p.crossCharge + 1);
-          if (p.crossCharge === LC.chargeFrames) {
-            playSound("charge_ready");
-            doFlash(0.15);
-            gameState.shake = Math.max(gameState.shake, 6);
-            triggerShockwave(p.x + 25, p.y - 60, buildColor());
-            spawnFloatingText(p.x + 25, p.y - 150, "LOADED", buildColor());
-          }
-          if (gameState.particles.length < 110 && p.crossCharge % 2 === 0) {
-            const a = Math.random() * Math.PI * 2, d = 50 + Math.random() * 25;
-            gameState.particles.push({ x: p.x + 45 + Math.cos(a) * d, y: p.y - 65 + Math.sin(a) * d, vx: -Math.cos(a) * 5, vy: -Math.sin(a) * 5, life: 0.45, color: buildColor(), type: "spark" });
-          }
+          if (p.crossCharge === LC.chargeFrames) playSound("charge_ready");
         } else {
           crossAttempt = true;
           crossCharge = p.crossCharge;
@@ -4995,6 +5203,7 @@
         p.hitFrame--;
         if (p.hitFrame === 0) {
           p.didHit = checkHit(p.punchType);
+          if (p.didHit) tmLanded(p.punchType);
         }
       }
       if (p.punchTimer <= 0) {
@@ -5045,15 +5254,11 @@
     en.x += en.vx;
     en.vx *= 0.85;
   }
-  function isSweep(en) {
-    return en.type === "bruiser" && !en.isBoss && !en.tutorialType && en.currentMove === "sweep";
-  }
-  function maybeSweepHint() {
-    if ((gameState.sweepHint || 0) > 0) return;
-    const shown = Number(profileCount("sweepHints")) || 0;
-    if (shown >= CONSTANTS.SWEEP.hintsPerSave) return;
-    bumpProfileCount("sweepHints");
-    gameState.sweepHint = 70;
+  function atHoldLine(en) {
+    if (en.isBoss || en.tutorialType) return false;
+    let line = gameState.player.x + (en.type === "zoner" ? CONSTANTS.HOLD_LINE.zoner : CONSTANTS.HOLD_LINE.melee);
+    line = Math.min(line, CONSTANTS.FOOTWORK.maxX + CONSTANTS.HOLD_LINE.reach);
+    return en.x <= line;
   }
   function endAttack(en) {
     if ((en.stringLen || 1) > 1 && (en.stringIdx || 0) < en.stringLen - 1) {
@@ -5063,10 +5268,7 @@
       return;
     }
     en.stringIdx = 0;
-    if (en.type === "bruiser") {
-      en.attackCount = (en.attackCount || 0) + 1;
-      en.currentMove = en.attackCount % 2 === 1 ? "sweep" : "bash";
-    }
+    if (en.type === "bruiser") en.currentMove = "bash";
     en.attackCooldown = en.maxCooldown;
   }
   function applyMenace(en) {
@@ -5087,7 +5289,6 @@
     let blockedX = [-1e3, -1e3, -1e3];
     let frontEnemy = [null, null, null];
     gameState.laneFlash[0] = gameState.laneFlash[1] = gameState.laneFlash[2] = 0;
-    gameState.sweepLanes = [false, false, false];
     gameState.player.dangerLevel = 0;
     gameState.enemies.forEach((en) => {
       if (en.x >= gameState.player.x - 60) {
@@ -5186,14 +5387,6 @@
         }
         continue;
       }
-      if (isSweep(en) && Math.abs(en.x - gameState.player.x) < CONSTANTS.SWEEP.reach && en.attackCooldown <= CONSTANTS.SWEEP.tellFrames && en.stun <= 0 && gameState.tutorialGrace <= 0) {
-        for (let l = en.lane - 1; l <= en.lane + 1; l++) if (l >= 0 && l <= 2) gameState.sweepLanes[l] = true;
-        if (Math.abs(gameState.player.lane - en.lane) <= 1) {
-          gameState.player.dangerLevel = Math.max(gameState.player.dangerLevel, en.attackCooldown <= 10 ? 2 : 1);
-          maybeSweepHint();
-        }
-        continue;
-      }
       if (en.isActiveThreat && en.name !== "STATIC MONK") {
         const { perfect: perfectThresh, good: goodThresh } = CONSTANTS.getSlipThresholds(en.type, gameState.progressionMods.perfectSlipWindowBonus);
         if (Math.abs(en.x - gameState.player.x) < 130) {
@@ -5257,13 +5450,17 @@
           en.vx = 0;
           if (en.isBoss && en.x < gameState.player.x + 100 && en.name !== "STATIC MONK") {
             en.x = gameState.player.x + 100;
-          } else if (!isBlockedByEnemy && !isAtPlayer && gameState.tutorialGrace <= 0 && en.name !== "STATIC MONK") {
+          } else if (!isBlockedByEnemy && !isAtPlayer && !atHoldLine(en) && gameState.tutorialGrace <= 0 && en.name !== "STATIC MONK") {
             en.x -= en.speed;
           }
         }
         en.y += (gameState.height * CONSTANTS.LANE_Y[en.lane] - en.y) * 0.3;
         if (en.isBoss) continue;
-        if (Math.abs(en.x - gameState.player.x) < 130 && !isBlockedByEnemy && gameState.tutorialGrace <= 0) {
+        if ((en.stringIdx || 0) > 0 && en.lane !== gameState.player.lane && Math.abs(en.lane - gameState.player.lane) === 1) en.lane = gameState.player.lane;
+        if (en.lane !== gameState.player.lane && !en.tutorialType && Math.abs(en.x - gameState.player.x) < 130) {
+          en.attackCooldown = Math.max(en.attackCooldown, CONSTANTS.getSlipThresholds(en.type).good + 12);
+        }
+        if (Math.abs(en.x - gameState.player.x) < 130 && !isBlockedByEnemy && gameState.tutorialGrace <= 0 && (en.lane === gameState.player.lane || en.tutorialType)) {
           if (en.attackCooldown === 22 && en.isActiveThreat) {
             if (en.type === "bruiser") playSound("bash_tell");
             else playSound("jab_tell");
@@ -5271,24 +5468,6 @@
           en.attackCooldown--;
           if (en.attackCooldown <= 0) {
             en.justAttacked = 5;
-            if (isSweep(en)) {
-              const inArc = Math.abs(gameState.player.lane - en.lane) <= 1 && Math.abs(en.x - gameState.player.x) < CONSTANTS.SWEEP.reach;
-              createImpact(en.x - 30, en.y - 60, "#ffb020");
-              if (inArc) {
-                if (gameState.player.state === "ghost_step" && gameState.player.ghostStepTimer > 2) {
-                  spawnFloatingText(gameState.player.x, gameState.player.y - 50, "THROUGH IT!", "#e5e7eb");
-                  registerPerfectGhostStep();
-                } else {
-                  let dmg = Math.round(CONSTANTS.SWEEP.damage * CONSTANTS.affixMod(gameState.currentAffix, "bruiserDamageMult", 1));
-                  if (gameState.isInstinct) dmg = Math.floor(dmg * 0.5);
-                  const guarded = gameState.player.state === "guarding";
-                  takeDamage(dmg, true, en);
-                  if (guarded) spawnFloatingText(gameState.player.x, gameState.player.y - 80, "BLOCKED", "#9ca3af");
-                }
-              }
-              endAttack(en);
-              continue;
-            }
             if (gameState.player.state === "ghost_step" && gameState.player.ghostStepTimer > 4 && isAtPlayer && en.isActiveThreat) {
               spawnFloatingText(gameState.player.x, gameState.player.y - 50, "GHOST STEP", "#888888");
               if (!en.tutorialType) registerPerfectGhostStep();
@@ -5376,6 +5555,7 @@
       }
       if (en.hp <= 0) {
         gameState.statTotalKills++;
+        tmKill(en.isBoss ? en.controller : en.tutorialType ? "dummy" : en.type);
         let comboMult = 1 + Math.min(0.3, Math.floor(gameState.combo / 2) * 0.1);
         const flowMult = getFlowMultiplier(gameState);
         if (en.isBoss) {
@@ -5920,7 +6100,9 @@
       return;
     }
     let dmg = gameState.isInstinct ? Math.floor(rawDmg * 0.5) : rawDmg;
-    takeDamage(dmg, isHeavy, en);
+    const counter = gameState.player.state === "punching" || gameState.player.state === "recovery";
+    if (counter) dmg = Math.round(dmg * CONSTANTS.PLAYER_HIT.counterHitMult);
+    takeDamage(dmg, isHeavy || counter, en, { floor: isHeavy || counter, counter });
   }
   function nextCycle(en, frames) {
     const mult = en.desperation ? CONSTANTS.BOSS_OFFENSE.desperationCooldownMult : 1;
@@ -6129,7 +6311,7 @@
         }
       } else {
         if (p.lane === z.lane && !(p.invuln > 0) && p.state !== "ghost_step" && z.tick++ % L.tickEvery === 0) {
-          takeDamage(L.damage, false, null);
+          takeDamage(L.damage, false, null, { src: "live_lane" });
           playSound("shock");
           createImpact(p.x + 20, p.y - 70, "#fff36b");
           spawnFloatingText(p.x + 10, p.y - 130, "SHOCKED!", "#fff36b");
@@ -6208,7 +6390,7 @@
             if (p.state === "ghost_step") {
               spawnFloatingText(p.x, p.y - 50, "GHOST STEP", "#888888");
               registerPerfectGhostStep();
-            } else takeDamage(gameState.isInstinct ? 6 : 12, false, null);
+            } else takeDamage(gameState.isInstinct ? 6 : 12, false, null, { src: "negative_echo" });
           }
           createImpact(e.x - 40, e.y - 60, e.color);
         }
@@ -6335,7 +6517,7 @@
     { id: "prism", name: "Prism", color: "#34d399", unlock: "daily", hint: "Beat a boss in a Daily Challenge" }
   ];
   var GRADE_RANK = { C: 0, B: 1, A: 2, S: 3 };
-  function safeGet2(key) {
+  function safeGet3(key) {
     try {
       const raw = localStorage.getItem(key);
       return raw ? JSON.parse(raw) : null;
@@ -6343,18 +6525,18 @@
       return null;
     }
   }
-  function safeSet2(key, val) {
+  function safeSet3(key, val) {
     try {
       localStorage.setItem(key, JSON.stringify(val));
     } catch (e) {
     }
   }
   function loadLeaderboard() {
-    const a = safeGet2(LB_KEY);
+    const a = safeGet3(LB_KEY);
     return Array.isArray(a) ? a : [];
   }
   function loadMeta() {
-    const m = safeGet2(META_KEY) || {};
+    const m = safeGet3(META_KEY) || {};
     return {
       totalRuns: m.totalRuns || 0,
       bestBossStreak: m.bestBossStreak || 0,
@@ -6368,7 +6550,7 @@
     };
   }
   function saveMeta(m) {
-    safeSet2(META_KEY, m);
+    safeSet3(META_KEY, m);
   }
   function getAlias() {
     return loadMeta().alias;
@@ -6389,16 +6571,16 @@
     saveMeta(m);
     return m.onlineOptIn;
   }
-  function isSubmittableRun(run) {
-    if (!run) return false;
-    return (run.score || 0) > 0 && (run.stage || 0) >= 2;
+  function isSubmittableRun(run2) {
+    if (!run2) return false;
+    return (run2.score || 0) > 0 && (run2.stage || 0) >= 2;
   }
   function rankInsert(list, entry, max = MAX_ENTRIES) {
     const next = [...list, entry].sort((a, b) => b.score - a.score).slice(0, max);
     const idx = next.indexOf(entry);
     return { list: next, rank: idx >= 0 ? idx + 1 : -1 };
   }
-  function unlocksForRun(run, unlocked) {
+  function unlocksForRun(run2, unlocked) {
     var _a, _b;
     const out = [];
     for (const s of STRIKER_SKINS) {
@@ -6408,24 +6590,24 @@
         continue;
       }
       if (s.unlock === "daily") {
-        if (run.daily && (run.bossKills || 0) >= 1) out.push(s.id);
+        if (run2.daily && (run2.bossKills || 0) >= 1) out.push(s.id);
         continue;
       }
       if (s.unlock.startsWith("grade:")) {
         const need = s.unlock.split(":")[1];
-        if (((_a = GRADE_RANK[run.grade]) != null ? _a : -1) >= ((_b = GRADE_RANK[need]) != null ? _b : 99)) out.push(s.id);
+        if (((_a = GRADE_RANK[run2.grade]) != null ? _a : -1) >= ((_b = GRADE_RANK[need]) != null ? _b : 99)) out.push(s.id);
       }
     }
     return out;
   }
-  function commitRunRecord(run) {
-    const entry = { score: run.score, grade: run.grade, stage: run.stage, daily: !!run.daily, at: Date.now() };
+  function commitRunRecord(run2) {
+    const entry = { score: run2.score, grade: run2.grade, stage: run2.stage, daily: !!run2.daily, at: Date.now() };
     const { list, rank } = rankInsert(loadLeaderboard(), entry);
-    safeSet2(LB_KEY, list);
+    safeSet3(LB_KEY, list);
     const meta = loadMeta();
     meta.totalRuns += 1;
-    meta.bestBossStreak = Math.max(meta.bestBossStreak, run.bossKills || 0);
-    const newly = unlocksForRun(run, meta.unlocked);
+    meta.bestBossStreak = Math.max(meta.bestBossStreak, run2.bossKills || 0);
+    const newly = unlocksForRun(run2, meta.unlocked);
     if (newly.length) meta.unlocked = [...meta.unlocked, ...newly];
     saveMeta(meta);
     return { rank, newUnlocks: newly, bestBossStreak: meta.bestBossStreak, totalRuns: meta.totalRuns, leaderboard: list };
@@ -6453,16 +6635,16 @@
   function onlineEnabled() {
     return typeof fetch === "function";
   }
-  async function submitScore(run) {
+  async function submitScore(run2) {
     if (!onlineEnabled()) return false;
     const body = {
       game: GAME,
-      name: String(run.name || "STRIKER").slice(0, 16),
-      score: Math.max(0, Math.min(5e7, Math.round(run.score || 0))),
-      grade: ["C", "B", "A", "S"].includes(run.grade) ? run.grade : "C",
-      stage: Math.max(1, Math.min(999, Math.round(run.stage || 1))),
-      daily: !!run.daily,
-      date_key: run.daily ? run.dateKey || null : null
+      name: String(run2.name || "STRIKER").slice(0, 16),
+      score: Math.max(0, Math.min(5e7, Math.round(run2.score || 0))),
+      grade: ["C", "B", "A", "S"].includes(run2.grade) ? run2.grade : "C",
+      stage: Math.max(1, Math.min(999, Math.round(run2.stage || 1))),
+      daily: !!run2.daily,
+      date_key: run2.daily ? run2.dateKey || null : null
     };
     try {
       const res = await fetch(REST, {
@@ -7002,7 +7184,6 @@
     });
     ctx.globalAlpha = 1;
     drawLiveLanes(ctx);
-    drawSweep(ctx);
     drawFinisherDim(ctx);
     drawAfterimages(ctx);
     gameState.player.trails.forEach((t) => {
@@ -7050,9 +7231,6 @@
               telColor = "#aa00ff";
               telText = "?";
             }
-          } else if (en.currentMove === "sweep" && en.type === "bruiser") {
-            telColor = "#ffb020";
-            telText = "SWEEP";
           } else if (en.type === "shield" || en.type === "bruiser") {
             telColor = "#ffaa00";
             telText = "BREAK";
@@ -7130,10 +7308,18 @@
       ctx.translate(-(p.x + 25), -p.y);
       drawBoxer(ctx, { ...p, state: "hurt" }, true);
       ctx.restore();
+    } else if (gameState.player.state === "floored") {
+      const p = gameState.player, T = CONSTANTS.PLAYER_HIT.floorFrames, t = p.floorTimer || 0;
+      const k = Math.min(1, (T - t) / 7, t / 10);
+      ctx.save();
+      ctx.translate(p.x + 25, p.y);
+      ctx.rotate(-Math.PI / 2 * k);
+      ctx.translate(-(p.x + 25), -p.y);
+      drawBoxer(ctx, { ...p, state: "hurt" }, true);
+      ctx.restore();
     } else {
       const inv = (gameState.player.invuln || 0) > 0 && Math.floor(Date.now() / 80) % 2 === 0;
       drawBoxer(ctx, gameState.player, true, inv ? 0.45 : 1);
-      drawChargeRing(ctx);
     }
     gameState.floatingTexts.forEach((ft) => {
       ctx.globalAlpha = Math.max(0, ft.life);
@@ -7320,6 +7506,8 @@
     gameState.finisher = null;
     gameState.finisherZoom = 1;
     gameState.vignette = null;
+    gameState.stageHitsTaken = 0;
+    gameState.statFlawless = 0;
     gameState.knockdown = null;
     gameState.knockdownsThisArc = 0;
     gameState.statKnockdowns = 0;
@@ -7375,9 +7563,11 @@
     gameState.tutorialEnabled = opts.tutorial !== void 0 ? !!opts.tutorial : toggle ? toggle.checked === true : true;
     gameState.dailyMode = !!daily;
     gameState.dailyDateKey = daily ? todayKey() : null;
-    seedRng(opts.seed !== void 0 ? opts.seed : daily ? dailySeedFromDate() : Math.random() * 4294967295 >>> 0);
+    const runSeed = opts.seed !== void 0 ? opts.seed : daily ? dailySeedFromDate() : Math.random() * 4294967295 >>> 0;
+    seedRng(runSeed);
     resetGame();
     gameState.screen = "playing";
+    tmStartRun({ seed: runSeed, daily: !!daily });
     ["start-screen", "gameover-screen", "pause-screen", "wager-screen", "upgrade-screen"].forEach(hideOverlay);
     duckMusic(false);
     startMusic();
@@ -7623,7 +7813,11 @@
       else if (code === "ArrowRight") moveLoadoutSel(0, 1);
       return;
     }
-    if (pauseTab === "resume" && (code === "Enter" || code === "Space")) closePause();
+    if (pauseTab === "resume") {
+      if (code === "ArrowUp") moveMenu(-1);
+      else if (code === "ArrowDown") moveMenu(1);
+      else if (code === "Enter" || code === "Space") activateMenu();
+    }
   }
   function renderWagerPrompts() {
     const a = document.getElementById("wager-accept-key"), d = document.getElementById("wager-decline-key");
@@ -7702,8 +7896,12 @@
           onDeviceChanged();
         }
       }
+      const navUp = gameState.pad.up || stickLeft, navDown = gameState.pad.down || stickRight;
       if (gameState.screen === "start") {
-        if (gameState.pad.instinct || gameState.pad.pause || gameState.pad.jab) startGame();
+        if (navUp) moveMenu(-1);
+        else if (navDown) moveMenu(1);
+        else if (jp(0)) activateMenu();
+        else if (gameState.pad.pause) startGame();
       } else if (gameState.screen === "playing") {
         if (posterWaiting()) {
           if (anyPress) confirmPoster();
@@ -7717,7 +7915,7 @@
         else if (jp(14)) pauseKey("ArrowLeft");
         else if (jp(15)) pauseKey("ArrowRight");
         else if (gameState.pad.instinct) pauseKey("Enter");
-        else if (gameState.pad.hook) returnToMenu();
+        else if (gameState.pad.hook) closePause();
       } else if (gameState.screen === "tutorial") {
         if (gameState.pad.instinct || gameState.pad.jab || gameState.pad.cross) dismissTutorial();
       } else if (gameState.screen === "vignette") {
@@ -7729,9 +7927,13 @@
         if (jp(14) || stickLeft) moveDraftFocus(-1);
         else if (jp(15) || stickRight) moveDraftFocus(1);
         else if (jp(0)) confirmDraftFocus();
+      } else if (gameState.screen === "records" || gameState.screen === "howto") {
+        if (jp(0) || jp(1)) activateMenu(true);
       } else if (gameState.screen === "gameover") {
-        if (gameState.pad.instinct || gameState.pad.jab) startGame();
-        if (gameState.pad.hook || gameState.pad.cross) returnToMenu();
+        if (navUp) moveMenu(-1);
+        else if (navDown) moveMenu(1);
+        else if (jp(0)) activateMenu();
+        else if (jp(1)) returnToMenu();
       }
       for (let i = 0; i < gp.buttons.length; i++) gameState.lastGamepadState.buttons[i] = p(i);
       gameState.lastGamepadState.axes[0] = aU;
@@ -7764,8 +7966,27 @@
       if (e.code === "Escape" || e.code === "KeyH" || e.code === "Enter") toggleRecords();
       return;
     }
-    if (gameState.screen === "start" && (e.code === "Space" || e.code === "Enter" || e.code === "KeyA")) {
-      startGame();
+    if (gameState.screen === "start") {
+      if (e.code === "ArrowUp") {
+        moveMenu(-1);
+        return;
+      }
+      if (e.code === "ArrowDown") {
+        moveMenu(1);
+        return;
+      }
+      if (e.code === "Enter") {
+        activateMenu();
+        return;
+      }
+      if (e.code === "Space" || e.code === "KeyA") {
+        startGame();
+        return;
+      }
+    }
+    if (gameState.screen === "gameover" && (e.code === "ArrowUp" || e.code === "ArrowDown" || e.code === "Enter")) {
+      if (e.code === "Enter") activateMenu();
+      else moveMenu(e.code === "ArrowUp" ? -1 : 1);
       return;
     }
     if (gameState.screen === "vignette") {
@@ -7844,6 +8065,7 @@
   var DRAFT_HOLD_FRAMES = 20;
   function update() {
     if (gameState.screen !== "playing") return;
+    tmTick();
     if (gameState.finisher) {
       if (gameState.shake > 0) gameState.shake *= 0.9;
       const f = gameState.finisher;
@@ -7881,7 +8103,6 @@
     if (gameState.tutorialGrace > 0) gameState.tutorialGrace--;
     if (gameState.tutorialDelay > 0) gameState.tutorialDelay--;
     if (gameState.bossIntroTimer > 0 && !posterWaiting()) gameState.bossIntroTimer--;
-    if (gameState.sweepHint > 0) gameState.sweepHint--;
     if (gameState.instinctPauseTimer > 0) {
       gameState.instinctPauseTimer--;
     } else if (gameState.isInstinct) {
@@ -7994,6 +8215,10 @@
     setText("stat-build", `FINAL BUILD: SPD ${gameState.orbCounts.speed} | PWR ${gameState.orbCounts.power} | TEC ${gameState.orbCounts.technique}`);
     setText("stat-score", score.toLocaleString());
     const runResult = commitRun(score, grade, gameState.currentStage);
+    const endedBy = liveRun() && liveRun().lastDamageSrc;
+    const rec17 = tmEndRun({ stage: gameState.currentStage, score, grade });
+    const rt = document.getElementById("run-time-ui");
+    if (rt && rec17) rt.innerText = `RUN TIME ${fmtTime(rec17.frames)} \xB7 ROUND ${gameState.currentStage}${endedBy ? " \xB7 ENDED BY " + prettySource(endedBy) : ""}`;
     const rec = commitRunRecord({ score, grade, stage: gameState.currentStage, daily: gameState.dailyMode, bossKills: gameState.statBossKills });
     const submittable = { name: getAlias(), score, grade, stage: gameState.currentStage, daily: gameState.dailyMode, dateKey: gameState.dailyDateKey };
     if (getOnlineOptIn() && isSubmittableRun(submittable)) submitScore(submittable);
@@ -8066,19 +8291,51 @@
       daily.innerText = d ? `Today's best: ${d.grade} \xB7 ${d.score.toLocaleString()} pts` : `Same seed for everyone, today only`;
     }
   }
-  function commitRun(score, grade, stage) {
+  function commitRun(score, grade, stage2) {
     const prev = loadBest();
     const isBest = !prev || score > prev.score;
-    if (isBest) saveBest({ score, grade, stage, at: Date.now() });
+    if (isBest) saveBest({ score, grade, stage: stage2, at: Date.now() });
     let isDailyBest = false;
     if (gameState.dailyMode) {
       const prevDaily = loadDailyBest();
       isDailyBest = !prevDaily || score > prevDaily.score;
-      if (isDailyBest) saveDailyBest({ score, grade, stage, dateKey: gameState.dailyDateKey, at: Date.now() });
+      if (isDailyBest) saveDailyBest({ score, grade, stage: stage2, dateKey: gameState.dailyDateKey, at: Date.now() });
     }
     renderBest();
     return { isBest, isDailyBest };
   }
+  var SOURCE_NAMES = { grunt: "GRUNT", shield: "SHIELD", bruiser: "BRUISER", assassin: "ASSASSIN", zoner: "ZONER", hazard: "RAIL HAZARD", live_lane: "LIVE LANE", negative_echo: "NEGATIVE ECHO", neon_enforcer: "NEON ENFORCER", phantom_boxer: "PHANTOM BOXER", static_monk: "STATIC MONK", live_wire: "LIVE WIRE", negative: "NEGATIVE" };
+  function prettySource(s) {
+    return SOURCE_NAMES[s] || String(s).toUpperCase();
+  }
+  function renderRunData() {
+    const el = document.getElementById("run-data");
+    if (!el) return;
+    const sum = summarizeTelemetry(loadTelemetry());
+    if (!sum.runs) {
+      el.innerHTML = '<div class="opacity-60 text-xs py-2">No recorded runs yet.</div>';
+      return;
+    }
+    const stages = Object.keys(sum.reached).map(Number).sort((a, b) => a - b);
+    const rows = stages.map((s) => `<div class="rd-row"><span>R${s}</span><span>${sum.reached[s]} reached</span><span class="${sum.ends[s] ? "rd-end" : ""}">${sum.ends[s] || 0} ended</span><span>${fmtTime(sum.avgTime[s])} avg</span></div>`).join("");
+    const hurt = sum.topHurt.slice(0, 5).map(([k, v]) => `<span class="rd-chip">${prettySource(k)} ${v}</span>`).join("");
+    el.innerHTML = `<div class="rd-sub">LAST ${sum.runs} RUNS \xB7 WHAT HITS YOU (total damage)</div><div class="rd-chips">${hurt}</div>
+        <div class="rd-sub">WHERE RUNS END</div><div class="rd-table">${rows}</div>`;
+  }
+  window.engineExportRunData = function() {
+    try {
+      const blob = new Blob([exportTelemetryJSON()], { type: "application/json" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `neon-strike-runs-${todayKey()}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1e3);
+    } catch (e) {
+      console.warn("export failed", e);
+    }
+  };
   function applyStrikerColor() {
     gameState.strikerColor = selectedStrikerColor();
   }
@@ -8125,6 +8382,7 @@
         }).join("");
       }
     }
+    renderRunData();
     const stats = document.getElementById("records-stats");
     if (stats) {
       const best = lb.length ? lb[0].score.toLocaleString() : "\u2014";
@@ -8216,6 +8474,7 @@
     if (!posterWaiting()) return false;
     gameState.posterConfirmed = true;
     playSound("bell");
+    gameState.inputGrace = INPUT_GRACE_FRAMES;
     return true;
   }
   window.engineConfirmPoster = confirmPoster;
@@ -8229,9 +8488,51 @@
     if (gameState.screen === "wager") renderWagerPrompts();
     renderInstructions();
   }
+  var MENU_ROOTS = { start: "start-screen", gameover: "gameover-screen", records: "records-screen", howto: "howto-screen" };
+  var menuFocus = 0;
+  var menuFor = null;
+  function menuButtons() {
+    let root = null;
+    if (gameState.screen === "paused") {
+      if (pauseTab !== "resume") return [];
+      root = document.getElementById("ppanel-resume");
+    } else if (MENU_ROOTS[gameState.screen]) root = document.getElementById(MENU_ROOTS[gameState.screen]);
+    if (!root || typeof root.querySelectorAll !== "function") return [];
+    return Array.from(root.querySelectorAll(".orb-btn"));
+  }
+  function syncMenuFocus() {
+    const key = gameState.screen + (gameState.screen === "paused" ? pauseTab : "");
+    if (key !== menuFor) {
+      menuFor = key;
+      menuFocus = 0;
+    }
+    const btns = menuButtons();
+    if (menuFocus >= btns.length) menuFocus = 0;
+    btns.forEach((b, i) => b.classList && b.classList.toggle("menu-focus", i === menuFocus));
+  }
+  function moveMenu(d) {
+    const b = menuButtons();
+    if (!b.length) return;
+    menuFocus = (menuFocus + d + b.length) % b.length;
+    syncMenuFocus();
+    playSound("slip");
+  }
+  function activateMenu(last = false) {
+    const b = menuButtons();
+    const el = last ? b[b.length - 1] : b[menuFocus];
+    if (el && typeof el.click === "function") el.click();
+  }
+  var INPUT_GRACE_FRAMES = 8;
+  var lastScreenSeen = "start";
+  function watchResume() {
+    if (gameState.screen === "playing" && lastScreenSeen !== "playing") gameState.inputGrace = INPUT_GRACE_FRAMES;
+    lastScreenSeen = gameState.screen;
+  }
   function loop() {
     gameState.uiFrame = (gameState.uiFrame || 0) + 1;
     pollGamepad();
+    watchResume();
+    if (gameState.screen !== "playing") syncMenuFocus();
     syncCinematicClass();
     if (gameState.screen === "vignette") updateVignette();
     update();
@@ -8256,16 +8557,16 @@
     loop();
   }
   init();
-  var __test = { posterWaiting, confirmPoster, startGame, resetGame, update, triggerUpgradeDraft, resolveWager, openPause, closePause, setPauseTab, renderLoadout, renderSettings, endRun };
+  var __test = { posterWaiting, confirmPoster, watchResume, startGame, resetGame, update, triggerUpgradeDraft, resolveWager, openPause, closePause, setPauseTab, renderLoadout, renderSettings, endRun };
   try {
     if (typeof location !== "undefined" && /[?&]debug\b/.test(location.search)) {
       window.__ns = {
         st: gameState,
         CONSTANTS,
         SequenceManager,
-        jump(stage) {
+        jump(stage2) {
           gameState.enemies = [];
-          gameState.currentStage = Math.max(1, stage - 1);
+          gameState.currentStage = Math.max(1, stage2 - 1);
           gameState.stageClearing = false;
           gameState.bossActive = false;
           advanceStage();
@@ -8276,6 +8577,9 @@
         },
         // Item-11 onboarding mockup: draws in-world teaching callouts over the
         // live scene. null clears it. Never set outside ?debug.
+        telemetry() {
+          return { live: liveRun(), runs: loadTelemetry(), summary: summarizeTelemetry(loadTelemetry()) };
+        },
         mockOnboarding(scene) {
           gameState.onboardingMock = scene || null;
           draw();
@@ -8331,6 +8635,7 @@
         step(n = 1) {
           for (let i = 0; i < n; i++) {
             pollGamepad();
+            watchResume();
             syncCinematicClass();
             if (gameState.screen === "vignette") updateVignette();
             update();

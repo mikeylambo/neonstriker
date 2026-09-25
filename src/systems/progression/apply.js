@@ -8,6 +8,7 @@ import { rollWagerOffer, clearWager } from '../wagers.js';
 import { addScore } from '../score.js';
 import { reducedMotion, profileFlag, setProfileFlag } from '../settings.js';
 import { playSound } from '../../vfx_audio/audio.js';
+import { tmEvolution, tmStage } from '../telemetry.js';
 
 function applyEffect(st, effect) {
     switch (effect.op) {
@@ -76,6 +77,7 @@ export function applyUpgrade(st, upgrade) {
     if (!st.currentDraftOptions.some(o => o.id === upgrade.id)) return;
 
     for (const effect of upgrade.effects) applyEffect(st, effect);
+    tmEvolution(upgrade.id);
 
     // Overclocks are pure invisible math (a flat stat nudge, no new mechanic to
     // feel) — without some acknowledgment, a late-game draft of nothing-but-
@@ -164,10 +166,19 @@ export function roundCard(stage, tagline) {
 export function advanceStage() {
     const prevStage = st.currentStage;
     // Stage-clear bonus for the fight just won (wager applies, combo doesn't).
+    // v19: every enemy is KO'd to clear a stage now, so the clear is an ALL CLEAR;
+    // doing it without taking a single hit is FLAWLESS (the target to chase).
     const clearPts = addScore(CONSTANTS.SCORE.stageClear, undefined, undefined, { noCombo: true });
-    if (clearPts > 0) showToast(`STAGE CLEAR +${clearPts.toLocaleString()}`, '#facc15');
+    if (clearPts > 0) showToast(`ALL CLEAR +${clearPts.toLocaleString()}`, '#facc15');
+    if ((st.stageHitsTaken || 0) === 0 && prevStage > 1) {
+        const fl = addScore(CONSTANTS.SCORE.flawless, undefined, undefined, { noCombo: true });
+        showToast(`FLAWLESS +${fl.toLocaleString()}`, '#ffffff');
+        st.statFlawless = (st.statFlawless || 0) + 1;
+    }
+    st.stageHitsTaken = 0;
 
     st.currentStage++;
+    tmStage(st.currentStage);
     st.bossDefeatedThisStage = false;
     // v16 WAGERS: no modifier is active until the player accepts one.
     clearWager();

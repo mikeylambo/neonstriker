@@ -16,6 +16,7 @@ import { playSound } from '../vfx_audio/audio.js';
 import { spawnFloatingText, createShatter, createImpact, triggerShockwave, doFlash } from '../vfx_audio/effects.js';
 import { addScore } from './score.js';
 import { hitStopEnabled, reducedMotion, getBinds } from './settings.js';
+import { tmFinisher } from './telemetry.js';
 
 const F = CONSTANTS.FINISHER;
 const LANE_STEP = { up: -1, down: 1 };
@@ -85,7 +86,8 @@ export function startFinisher(en, kind) {
     st.finisher = {
         boss: en, kind, seq, idx: 0, phase: 'intro', frame: 0, timer: F.introFrames,
         nextBeat: 0, hits: 0, perfects: 0, result: null, dmgPerHit,
-        zoom: 1, bars: 0, freeze: 0, poseTimer: 0, judge: null, judgeTimer: 0, jabAlt: false
+        zoom: 1, bars: 0, freeze: 0, poseTimer: 0, judge: null, judgeTimer: 0, jabAlt: false,
+        landed: [], playIdx: 0, playTimer: 0, lockFlash: 0
     };
 
     // Freeze the exchange into a clean tableau: striker mid lane, boss squared up.
@@ -132,9 +134,36 @@ function judge(text, color) {
     f.judge = { text, color }; f.judgeTimer = 34;
 }
 
-function landPrompt(isPerfect) {
+// v19 TWO-PHASE FINISHER (playtest: "slow down the QTE so it plays out AFTER
+// the button presses — the button off to the side pulls attention away"):
+//   1. INPUT   — the prompts sit right over the two fighters; you hit each on
+//                the beat. A landed input just locks in (a tick + a flash).
+//   2. PLAYBACK — then the Striker performs every locked-in blow as a cinematic,
+//                one heavy hit at a time, while you watch the payoff.
+// A miss ends the input phase early; whatever you'd locked in still plays out.
+const PLAY_GAP = 17;
+
+function recordPrompt(isPerfect) {
+    const f = st.finisher;
+    f.landed.push({ move: f.seq[f.idx], perfect: isPerfect });
+    judge(isPerfect ? 'PERFECT' : 'GOOD', isPerfect ? '#ffffff' : '#22d3ee');
+    playSound(isPerfect ? 'perfect_slip' : 'slip');
+    f.lockFlash = 10;
+    f.idx++;
+    if (f.idx >= f.seq.length) endInput('clean');
+    else f.nextBeat += F.beatFrames;
+}
+
+function endInput(result) {
+    const f = st.finisher;
+    f.result = result;
+    if (f.landed.length) { f.phase = 'playback'; f.playIdx = 0; f.playTimer = 14; f.judge = null; }
+    else endPrompts(result);
+}
+
+function landPrompt(isPerfect, moveOverride) {
     const f = st.finisher, en = f.boss, p = st.player;
-    const move = f.seq[f.idx];
+    const move = moveOverride || f.seq[f.idx];
 
     if (move in LANE_STEP) {
         // Slip into the new lane; the staggered boss is dragged along with you.
@@ -168,23 +197,19 @@ function landPrompt(isPerfect) {
         createImpact(en.x + 30, en.y - 80, '#fff36b'); createImpact(en.x + 10, en.y - 40, '#fff36b');
         playSound('shock');
     }
-    // Hit-stop inside a finisher freezes the PICTURE, never the beat clock — the
-    // rhythm grid has to stay honest or the next prompt would drift.
+    // Hit-stop inside a finisher freezes the PICTURE (playback runs on its own clock).
     f.freeze = hitStopEnabled() ? (isPerfect ? 9 : 6) : 0;
-
-    f.idx++;
-    if (f.idx >= f.seq.length) endPrompts('clean');
-    else f.nextBeat += F.beatFrames;
 }
 
 function missPrompt(reason) {
     judge(reason, '#ff8800');
     playSound('finisher_miss');
-    endPrompts('broken');
+    endInput('broken');
 }
 
 function endPrompts(result) {
     const f = st.finisher;
+    tmFinisher(f.kind, result, f.landed ? f.landed.length : f.hits, f.seq.length);
     f.result = result; f.phase = 'outro'; f.timer = F.outroFrames;
     const en = f.boss;
     if (result === 'clean') {
@@ -240,8 +265,16 @@ export function updateFinisher() {
             f.phase = 'prompts';
             f.nextBeat = f.frame + F.beatFrames * F.leadBeats;
         }
+    } else if (f.phase === 'playback') {
+        f.zoom = F.zoom; f.bars = 1;
+        if (f.freeze <= 0 && --f.playTimer <= 0) {
+            const hit = f.landed[f.playIdx++];
+            if (hit) { landPrompt(hit.perfect, hit.move); f.playTimer = PLAY_GAP; }
+            else endPrompts(f.result);
+        }
     } else if (f.phase === 'prompts') {
         f.zoom = F.zoom; f.bars = 1;
+        if (f.lockFlash > 0) f.lockFlash--;
         const t = f.frame - f.nextBeat;
         if (t === 0) playSound('beat_tick');
         const input = readFinisherInput();
@@ -249,7 +282,7 @@ export function updateFinisher() {
         if (input) {
             if (t < -F.windowEarly) missPrompt('TOO EARLY');
             else if (input !== want) missPrompt('WRONG MOVE');
-            else landPrompt(Math.abs(t) <= F.perfectWindow);
+            else recordPrompt(Math.abs(t) <= F.perfectWindow);
         } else if (t > F.windowLate) {
             missPrompt('MISSED');
         }

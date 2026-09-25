@@ -649,3 +649,15 @@ body.cine-zone.cine-zone-soft #gameCanvas { filter: grayscale(.7) contrast(1.2);
 .lo-rank { cursor: pointer; }
 .lo-rank.next { border-color: var(--tree-color); color: #e5e7eb; border-style: dashed; }
 .lo-rank.sel { outline: 2px solid #ffffff; outline-offset: 1px; }
+
+/* v19 — menu focus (D-pad / keyboard navigation) */
+.orb-btn.menu-focus { background: rgba(0,255,255,.12); box-shadow: 0 0 0 2px #ffffff, 0 0 24px rgba(0,255,255,.45); transform: scale(1.03); }
+.orb-btn.menu-focus::before { content: '▶'; position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: #fff; font-size: .8rem; }
+/* v19 — run data (telemetry) on the Records screen */
+.rd-note { font-size: .55rem; color: #6b7280; letter-spacing: 1px; }
+.rd-sub { font-size: .58rem; font-weight: 900; letter-spacing: 2px; color: #6b7280; margin: 6px 0 4px; }
+.rd-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.rd-chip { font-size: .6rem; padding: 2px 7px; border: 1px solid #374151; border-radius: 3px; color: #e5e7eb; }
+.rd-table { display: flex; flex-direction: column; gap: 2px; }
+.rd-row { display: grid; grid-template-columns: 50px 1fr 1fr 1fr; font-size: .62rem; color: #9ca3af; letter-spacing: 1px; }
+.rd-end { color: #f87171; font-weight: 900; }

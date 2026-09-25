@@ -389,19 +389,24 @@ function botKeys(tick, opts) {
     if (SequenceManager.active) return keys;
     const dummy = st.enemies.find(e => e.tutorialType);
     if (dummy && dummy.tutorialType === 'guard' && dummy.x - p.x < 160) { keys.KeyW = true; return keys; }
-    if (dummy && dummy.tutorialType === 'ghost_step' && p.dangerLevel >= 1 && tick % 2 === 0) { keys.ShiftLeft = true; return keys; }
+    if (dummy && dummy.tutorialType === 'ghost_step') { if (dummy.lane === p.lane && dummy.x - p.x < 100 && dummy.attackCooldown <= 10) keys.ShiftLeft = true; return keys; }
     const zap = st.enemies.find(e => e.type === 'zoner' && e.lane === p.lane && e.x > p.x - 20 && Math.abs(e.x - p.x) < 500 && e.attackCooldown > 0 && e.attackCooldown <= 12 && e.stun <= 0);
     if (zap && p.slipCooldown <= 0) {
         const safe = [p.lane - 1, p.lane + 1].filter(l => l >= 0 && l <= 2 && !st.enemies.some(e => e.type === 'zoner' && e.lane === l && e.attackCooldown <= 14));
         if (safe.length && tick % 2 === 0) { keys[safe[0] < p.lane ? 'ArrowUp' : 'ArrowDown'] = true; return keys; }
     }
-    const sweep = st.enemies.find(e => e.currentMove === 'sweep' && e.type === 'bruiser' && Math.abs(p.lane - e.lane) <= 1 && Math.abs(e.x - p.x) < 130 && e.attackCooldown > 0 && e.attackCooldown <= 8);
-    if (sweep) { if (tick % 2 === 0) keys.ShiftLeft = true; return keys; }
     if (p.dangerLevel >= 2 || (st.laneFlash[p.lane] > 0 && !st.enemies.some(e => e.lane === p.lane && e.x - p.x < 120 && e.isBoss && rules.isBossOpen(e)))) {
         if (p.slipCooldown <= 0 && tick % 2 === 0) {
             const opts2 = [p.lane - 1, p.lane + 1].filter(l => l >= 0 && l <= 2).sort((a, b) => laneThreat(a) - laneThreat(b));
             if (opts2.length) keys[opts2[0] < p.lane ? 'ArrowUp' : 'ArrowDown'] = true;
         }
+        return keys;
+    }
+    // teaching dummies that only want a slip — don't punch into them
+    if (dummy && dummy.tutorialType === 'slip') {
+        // wait for the WHITE flash (perfect window), like the modal says
+        const cd = dummy.attackCooldown, perfect = CONSTANTS.getSlipThresholds(dummy.type).perfect;
+        if (dummy.lane === p.lane && Math.abs(dummy.x - p.x) < 130 && cd > 0 && cd <= perfect && p.slipCooldown <= 0) keys[p.lane > 0 ? 'ArrowUp' : 'ArrowDown'] = true;
         return keys;
     }
     const inLane = st.enemies.filter(e => e.lane === p.lane && e.x > p.x - 20 && e.x - p.x < 125).sort((a, b) => a.x - b.x)[0];
@@ -412,6 +417,9 @@ function botKeys(tick, opts) {
         }
         return keys;
     }
+    // v19: enemies hold a line (zoners at range) — press forward to reach them
+    const ahead = st.enemies.filter(e => e.lane === p.lane && e.x > p.x && e.x - p.x >= 125 && e.x - p.x < 520 && e.hp > 0).sort((a, b) => a.x - b.x)[0];
+    if (ahead && !laneThreat(p.lane)) keys.ArrowRight = true;
     const target = st.enemies.filter(e => e.x > p.x - 20).sort((a, b) => a.x - b.x)[0];
     if (target && target.lane !== p.lane && p.slipCooldown <= 0 && tick % 6 === 0 && !laneThreat(target.lane < p.lane ? p.lane - 1 : p.lane + 1)) {
         keys[target.lane < p.lane ? 'ArrowUp' : 'ArrowDown'] = true;

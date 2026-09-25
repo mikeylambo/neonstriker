@@ -261,7 +261,8 @@ export const CONSTANTS = {
         finisherPerfect: 200,
         finisherClean: 1500,     // bonus for landing every prompt of a finisher
         bossKo: 3000,            // x arc index
-        stageClear: 500,         // flat, NOT combo-multiplied (wager still applies)
+        stageClear: 500,         // ALL CLEAR: flat, NOT combo-multiplied (wager still applies)
+        flawless: 1000,          // v19: cleared the stage without taking a hit
         // Letter rank thresholds (score). Calibrated against the headless bot sim
         // (tests/v16.mjs "SCORE CALIBRATION"): a stage-4 death lands ~8-12k (C), a
         // clean Arc 1 clear ~45k (B), deep Arc 2-3 runs 150k+ (S). S also needs reads.
@@ -322,11 +323,22 @@ export const CONSTANTS = {
     // standing in it shocks you. It forces a lane change — lane boxing, not corners.
     LIVE_LANE: { warnFrames: 26, liveFrames: 80, tickEvery: 24, damage: 6 },
 
-    // --- v18 BRUISER SWEEP: every other Bruiser attack is a wide haymaker that
-    // covers its lane AND both neighbours — it can't be slipped. The answers are
-    // Ghost Step (straight through it: a perfect Ghost Step) or Guard. Amber tell,
-    // never the red/white slip colours, so it never baits a slip.
-    SWEEP: { tellFrames: 34, damage: 24, reach: 130, hintsPerSave: 4 },
+    // --- v19 HOLD THE LINE: enemies stop at a line in front of the Striker in EVERY
+    // lane instead of walking past him and off-screen (playtest: "is it possible to
+    // end all enemies on each map? right now it doesn't"). Every enemy can now be
+    // KO'd — a stage only clears when they all are. Zoners hold back at range.
+    HOLD_LINE: { melee: 90, zoner: 200, reach: 105 }, // zoners keep range — press forward to reach them
+
+    // --- v19 PLAYER HIT FEEL: taking a hit now has weight — hit-stop on the
+    // Striker, a knockback slide, longer hitstun, and heavy boss blows (or a boss
+    // catching you mid-punch while it isn't OPEN: a COUNTER HIT) FLOOR you.
+    PLAYER_HIT: {
+        hitStun: { light: 9, heavy: 18 },
+        hitStop: { light: 3, heavy: 6 },
+        slide: { light: 4, heavy: 9 },
+        floorFrames: 46, floorGrace: 22,
+        counterHitMult: 1.5
+    },
 
     // --- v17 PUNCH STRINGS -------------------------------------------------------
     // Selected enemies throw 2-3 hit strings. Every hit re-targets your lane and
@@ -378,7 +390,7 @@ export const CONSTANTS = {
     // so the lane path never leaves the ring (validated in tests/harness.mjs).
     FINISHER: {
         thresholds: [0.66, 0.33],
-        beatFrames: 36,          // ~100 BPM at 60fps
+        beatFrames: 42,          // v19: slower (~86 BPM at 60fps)
         leadBeats: 1,            // a prompt appears one beat before it lands
         windowEarly: 12,         // frames before the beat a press still counts
         windowLate: 9,           // frames after the beat before it's a miss

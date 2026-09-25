@@ -12,6 +12,7 @@ import { CONSTANTS } from '../constants.js';
 import { playSound } from '../vfx_audio/audio.js';
 import { spawnFloatingText, doFlash, triggerShockwave } from '../vfx_audio/effects.js';
 import { getBinds } from './settings.js';
+import { tmKnockdown } from './telemetry.js';
 
 const K = CONSTANTS.KNOCKDOWN;
 
@@ -40,6 +41,7 @@ export function startKnockdown() {
     };
     st.knockdownsThisArc = (st.knockdownsThisArc || 0) + 1;
     st.statKnockdowns = (st.statKnockdowns || 0) + 1;
+    tmKnockdown();
     st.health = 0;
     st.combo = 0;
     st.isInstinct = false; st.zoneTimer = 0;
@@ -75,6 +77,7 @@ function getUp() {
     st.health = Math.round(st.maxHealth * k.hpFrac);
     st.combo = 0;
     p.invuln = K.invulnFrames;
+    st.inputGrace = 8; // the last get-up press doesn't also slip you
     // Breathing room: whatever was standing over you steps back and re-winds.
     for (const en of st.enemies) {
         if (Math.abs(en.x - p.x) < 220) { en.x = Math.max(en.x, p.x + 180); en.attackCooldown = Math.max(en.attackCooldown, en.maxCooldown || 60); en.telegraphed = false; en.stringIdx = 0; }

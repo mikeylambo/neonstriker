@@ -8,6 +8,7 @@ import { addScore } from '../systems/score.js';
 import { flashScale, getBinds } from '../systems/settings.js';
 import { buildColor } from '../systems/colors.js';
 import { gateBossDamage } from '../systems/finisher.js';
+import { tmKill, tmDamage, tmAttack, tmLanded, tmSlip, tmGhost, tmGuard, tmKnockdown, tmFloored, tmFinisher, tmEvolution, tmWager, tmStage, tmStartRun, tmTick, tmEndRun } from '../systems/telemetry.js';
 
 export function resetPlayerObj() {
     return { lane: 1, x: 180, y: 0, w: 50, h: 110, state: 'idle', punchTimer: 0, punchType: null, hitFrame: 0, didHit: false, slipCooldown: 0, slipBuff: 0, color: '#00ffff', trails: [], trailTimer: 0, recoveryTimer: 0, moveCancelReady: false, jabStep: 0, comboWindow: 0, inputBuffer: null, inputBufferTimer: 0, movementBuffer: null, movementBufferTimer: 0, ghostStepTimer: 0, ghostStepCooldown: 0, ghostStepCharges: 1, dangerLevel: 0, hitStun: 0, lastPunchLanded: null, dempseyActive: false, guardReadTimer: 0, flowStreak: 0,
@@ -43,6 +44,7 @@ function ghostStep() {
     if (st.player.ghostStepCharges === undefined) st.player.ghostStepCharges = maxGhostCharges;
     if (st.player.ghostStepCharges <= 0) return;
     st.player.ghostStepCharges--;
+    tmGhost(false);
     st.player.state = 'ghost_step';
     st.player.ghostStepTimer = 18;
     st.player.ghostPerfected = false;
@@ -54,7 +56,7 @@ function ghostStep() {
 }
 
 function executeMovementInput(action) {
-    if (action === 'guard') { st.player.state = 'guarding'; st.player.charging = false; st.combo = 0; resetJabString(); }
+    if (action === 'guard') { tmGuard(); st.player.state = 'guarding'; st.player.charging = false; st.combo = 0; resetJabString(); }
     else if (action === 'ghost') ghostStep();
     else if (action === 'up' || action === 'down') {
         const oldLane = st.player.lane;
@@ -64,6 +66,7 @@ function executeMovementInput(action) {
             if (st.player.slipCooldown <= 0) {
                 checkPerfectSlip(oldLane); st.player.slipCooldown = 12; resetJabString();
                 if (st.progressionMods.pivotSlip) pivotForward();
+                resolveBodies(st.player);
             }
             else { st.player.lane = oldLane; }
         }
@@ -94,9 +97,24 @@ export function registerPerfectGhostStep(attacker) {
     p.ghostPerfected = true;
     st.combo++; if (st.combo > st.statMaxCombo) st.statMaxCombo = st.combo;
     st.statGhostSteps = (st.statGhostSteps || 0) + 1;
+    tmGhost(true);
     p.flowStreak = (p.flowStreak || 0) + 1;
     addScore(CONSTANTS.SCORE.perfectGhostStep, p.x + 40, p.y - 120);
     spawnFloatingText(p.x, p.y - 95, "PERFECT GHOST +1", "#e5e7eb");
+    // v19 PARITY: a perfect Ghost Step pays like a Perfect Slip — Instinct, the
+    // slip-heal perks (Vantage Point, ADRENALINE), EXP, and it can open the Zone.
+    // (The Counter charge stays the Ghost Counter fusion's signature.)
+    const zoneReady = st.instinctMeter >= 100 && !st.isInstinct;
+    const flowMult = getFlowMultiplier(st);
+    if (!st.isInstinct) {
+        let gain = 20 * st.stats.techMult * (1 + st.progressionMods.perfectSlipRewardBonusMult) * flowMult;
+        gain *= CONSTANTS.affixMod(st.currentAffix, 'instinctGainMult', 1);
+        st.instinctMeter = Math.min(100, st.instinctMeter + gain);
+    }
+    const heal = st.progressionMods.perfectSlipHeal + CONSTANTS.affixMod(st.currentAffix, 'perfectSlipHeal', 0);
+    if (heal > 0) st.health = Math.min(st.maxHealth, st.health + heal);
+    st.exp += Math.floor(2 * (1 + st.progressionMods.expGainBonusMult) * flowMult);
+    if (zoneReady) activateInstinct(true);
     // EVOLVED FUSION (Phantom Riposte): the dash leaves an afterimage that echoes back.
     if (st.progressionMods.phantomRiposte) spawnAfterimage(p.lane, p.x, 8);
     return true;
@@ -105,7 +123,7 @@ export function registerPerfectGhostStep(attacker) {
 export function checkPerfectSlip(oldLane) {
     let slipQuality = 'none', bossSlipped = null;
     st.enemies.forEach(en => {
-        if (en.lane === oldLane && en.stun <= 0 && en.currentMove !== 'sweep') { // a sweep can't be slipped
+        if (en.lane === oldLane && en.stun <= 0) {
             let isThreat = false;
             const { perfect: perfectThresh, good: goodThresh } = CONSTANTS.getSlipThresholds(en.type, st.progressionMods.perfectSlipWindowBonus);
 
@@ -193,6 +211,7 @@ export function activateInstinct(zone = false) {
 }
 
 export function triggerPerfectSlip(bossSlipped, slipQuality) {
+    tmSlip(slipQuality);
     if (slipQuality === 'perfect') {
         // v17: a Perfect Slip on a FULL meter drops you into the Zone.
         const zoneReady = st.instinctMeter >= 100 && !st.isInstinct;
@@ -232,6 +251,7 @@ export function triggerPerfectSlip(bossSlipped, slipQuality) {
 
 export function startPunch(t, charge = 0) {
     if (st.player.state === 'guarding') st.player.state = 'idle';
+    tmAttack(t);
     st.player.state = 'punching'; st.player.punchType = t; st.player.didHit = false; st.player.moveCancelReady = false; st.player.comboWindow = 0;
     st.player.charging = false;
     st.player.crossLoaded = t === 'cross' && !!st.progressionMods.loadedCross && charge >= CONSTANTS.VERBS.loadedCross.chargeFrames;
@@ -285,9 +305,11 @@ export function startPunch(t, charge = 0) {
     if (st.player.slipBuff > 0) { playSound('vacuum'); createVacuum(st.player.x + 80, st.player.y - 40); }
 }
 
-export function takeDamage(amt, isHeavy, en) {
+export function takeDamage(amt, isHeavy, en, opts = {}) {
     // v17 TEN-COUNT: back on your feet you get a short grace period.
     if ((st.player.invuln || 0) > 0) return;
+    const PH = CONSTANTS.PLAYER_HIT;
+    const guarding = st.player.state === 'guarding';
     // APEX (Flow State): one hit, any hit, zeroes the streak — that's the entire
     // point of "sustained, not merely survived."
     st.player.flowStreak = 0;
@@ -309,10 +331,26 @@ export function takeDamage(amt, isHeavy, en) {
     if (piercing) spawnFloatingText(st.player.x, st.player.y - 60, "GUARD PIERCED!", "#aa00ff");
     if (st.player.state === 'guarding' && st.progressionMods.guardRead) st.player.guardReadTimer = 16;
     st.health -= actualDmg;
-    st.player.hitStun = isHeavy ? 10 : 5;
+    tmDamage(opts.src || (en ? (en.isBoss ? en.controller : en.type) : 'hazard'), actualDmg);
+    st.stageHitsTaken = (st.stageHitsTaken || 0) + 1;
+    st.player.hitStun = isHeavy ? PH.hitStun.heavy : PH.hitStun.light;
     st.shake = isHeavy ? 30 : 15;
-    st.player.x = Math.max(FOOTWORK_MIN_X, st.player.x - ((isHeavy ? 40 : 10) * st.progressionMods.incomingRecoilMult));
+    // v19: the hit freezes the frame for a beat, then shoves you back in a slide
+    // (was an instant teleport with no weight to it).
+    st.hitstop = Math.max(st.hitstop || 0, isHeavy ? PH.hitStop.heavy : PH.hitStop.light);
+    st.player.slideVx = -(isHeavy ? PH.slide.heavy : PH.slide.light) * st.progressionMods.incomingRecoilMult;
     st.player.state = 'hurt'; resetJabString();
+    st.player.charging = false;
+    // v19: heavy boss blows and COUNTER HITS put you on the floor for a moment.
+    if (opts.floor && !guarding) {
+        tmFloored(!!opts.counter);
+        st.player.state = 'floored';
+        st.player.floorTimer = PH.floorFrames;
+        st.player.invuln = PH.floorFrames + PH.floorGrace;
+        st.player.slideVx *= 1.6;
+        spawnFloatingText(st.player.x + 10, st.player.y - 140, opts.counter ? 'COUNTERED!' : 'DOWN!', '#ff3355');
+        playSound('knockdown');
+    }
 
     if (st.combo >= 2 && !st.isInstinct) spawnFloatingText(st.player.x, st.player.y - 50, "COMBO BROKEN", "#ff0055");
     st.combo = 0;
@@ -325,6 +363,19 @@ export function takeDamage(amt, isHeavy, en) {
     if (st.enemies.some(e => e.isBoss && e.desperation)) st.statDespDamage++;
 }
 
+// v19 BODY BLOCKING: fighters are solid. You can't walk through anyone in your
+// lane, and you can't press past the front line in ANY lane (so nobody ends up
+// behind you, where you could back into them or never reach them). A slip onto
+// an occupied spot sets you down just in front of that enemy.
+const BODY_GAP = 62, FRONT_GAP = 70;
+export function resolveBodies(p) {
+    for (const e of st.enemies) {
+        if (e.hp <= 0 || e.controller === 'static_monk' || e.x > st.width) continue;
+        const gap = e.lane === p.lane ? BODY_GAP : FRONT_GAP;
+        if (e.x - p.x < gap && e.x > p.x - 200) p.x = Math.max(FOOTWORK_MIN_X, e.x - gap);
+    }
+}
+
 // Mid-combo, or a target in punching range in YOUR lane? Then the Striker holds
 // his ground (no drifting backwards under your own punches). Anything looser
 // — e.g. "someone anywhere nearby" — kept him parked too far forward.
@@ -335,6 +386,11 @@ function isEngaged(p) {
 
 // Reads the remappable binds + pad into one input snapshot for this frame.
 function readInput() {
+    // v19: right after a menu hands control back, nothing registers (see main.js).
+    if ((st.inputGrace || 0) > 0) {
+        st.inputGrace--;
+        return { up: false, down: false, ghost: false, jab: false, cross: false, hook: false, instinct: false, guard: false, holdLeft: false, holdRight: false, crossHeld: false };
+    }
     const K = getBinds();
     const jp = code => !!st.keys[code] && !st.lastKeys[code];
     const pad = st.pad;
@@ -382,12 +438,16 @@ export function updatePlayer() {
         // (Playtest: the pull home turned combos into retreating punches.)
         else if (!FW.holdGroundWhenEngaged || !isEngaged(p)) p.x += (180 - p.x) * FOOTWORK_HOME_PULL;
     }
+    resolveBodies(p);
 
     if (input.instinct && st.instinctMeter >= 100 && !st.isInstinct) activateInstinct(false);
 
     if (p.inputBufferTimer > 0) if (--p.inputBufferTimer <= 0) { p.inputBuffer = null; p.bufferedCharge = 0; }
     if (p.movementBufferTimer > 0) if (--p.movementBufferTimer <= 0) p.movementBuffer = null;
 
+    // v19: knockback slides out instead of teleporting
+    if (p.slideVx && Math.abs(p.slideVx) > 0.2) { p.x = Math.max(FOOTWORK_MIN_X, p.x + p.slideVx); p.slideVx *= 0.8; } else p.slideVx = 0;
+    if (p.state === 'floored') { if (--p.floorTimer <= 0) { p.state = 'idle'; st.inputGrace = 6; } return; }
     if (p.state === 'hurt') { if (--p.hitStun <= 0) p.state = 'idle'; return; }
     if (p.state === 'recovery') { if (--p.recoveryTimer <= 0) p.state = 'idle'; }
     else if (p.state === 'ghost_step') { if (--p.ghostStepTimer <= 0) p.state = 'idle'; }
@@ -405,15 +465,9 @@ export function updatePlayer() {
         if (p.charging) {
             if (input.crossHeld) {
                 p.crossCharge = Math.min(LC.maxFrames, p.crossCharge + 1);
-                if (p.crossCharge === LC.chargeFrames) {
-                    playSound('charge_ready'); doFlash(0.15); st.shake = Math.max(st.shake, 6);
-                    triggerShockwave(p.x + 25, p.y - 60, buildColor());
-                    spawnFloatingText(p.x + 25, p.y - 150, 'LOADED', buildColor());
-                }
-                if (st.particles.length < 110 && p.crossCharge % 2 === 0) {
-                    const a = Math.random() * Math.PI * 2, d = 50 + Math.random() * 25;
-                    st.particles.push({ x: p.x + 45 + Math.cos(a) * d, y: p.y - 65 + Math.sin(a) * d, vx: -Math.cos(a) * 5, vy: -Math.sin(a) * 5, life: 0.45, color: buildColor(), type: 'spark' });
-                }
+                // v19: the charge lives ON THE GLOVE (Mega Buster style, see boxer.js);
+                // just a chime when it's loaded — no screen-wide effects.
+                if (p.crossCharge === LC.chargeFrames) playSound('charge_ready');
             } else { crossAttempt = true; crossCharge = p.crossCharge; p.charging = false; }
         }
     }
@@ -479,6 +533,7 @@ export function updatePlayer() {
             p.hitFrame--;
             if (p.hitFrame === 0) {
                 p.didHit = checkHit(p.punchType);
+                if (p.didHit) tmLanded(p.punchType);
             }
         }
         if (p.punchTimer <= 0) {

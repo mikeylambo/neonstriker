@@ -217,7 +217,8 @@ const frames = (n, fn) => { for (let i = 0; i < n; i++) fn(i); };
     ok('Zone: not on a partial meter', !st.zoneTimer);
     // world at half speed while in the zone (real loop)
     T.startGame({ tutorial: false, seed: 5 }); SequenceManager.active = false; st.screen = 'playing'; st.seenTutorials.footwork_tip = true; st.seenTutorials.instinct = true;
-    st.enemies = [grunt({ x: st.player.x + 300, attackCooldown: 200, lane: 2 })];
+    st.player.x = 180; // (startGame leaves the Striker mid walk-in, off-screen)
+    st.enemies = [grunt({ x: st.player.x + 400, attackCooldown: 200, lane: 2 })]; // clear of the v19 hold line
     st.zoneTimer = 100; st.isInstinct = true; st.instinctMeter = 100; st.pendingUpgrades = 0; st.waveTimer = 999; st.hitstop = 0;
     const x0 = st.enemies[0].x;
     frames(40, () => { st.lastKeys = { ...st.keys }; T.update(); });
@@ -291,36 +292,8 @@ const frames = (n, fn) => { for (let i = 0; i < n; i++) fn(i); };
     ok('footwork: a live combo window also holds your ground', st.player.x > 299.5);
 }
 
-// ======================= 7b. v18: BRUISER SWEEP (Guard / Ghost Step matter) =======================
-{
-    freshArena(20); localStorage.clear();
-    const br = grunt({ type: 'bruiser', lane: 1, x: st.player.x + 80, attackCooldown: 2, currentMove: 'sweep', hp: 999, maxHp: 999 });
-    st.enemies = [br]; st.player.lane = 0; st.player.y = st.height * CONSTANTS.LANE_Y[0]; st.health = 100;
-    frames(4, () => enemies.updateEnemies());
-    ok('sweep: hits the lanes next to the bruiser too (can\'t slip it)', st.health < 100, `hp ${st.health}`);
-    freshArena(20);
-    const br2 = grunt({ type: 'bruiser', lane: 1, x: st.player.x + 80, attackCooldown: 12, currentMove: 'sweep', hp: 999, maxHp: 999 });
-    st.enemies = [br2];
-    const hp0 = st.health, c0 = st.combo;
-    st.keys = { ArrowUp: true }; player.updatePlayer(); st.keys = {};
-    ok('sweep: slipping it earns no slip reward', st.statTotalSlips === undefined || st.player.slipBuff === 0);
-    freshArena(20);
-    const br3 = grunt({ type: 'bruiser', lane: 1, x: st.player.x + 80, attackCooldown: 3, currentMove: 'sweep', hp: 999, maxHp: 999 });
-    st.enemies = [br3]; st.keys = { ShiftLeft: true }; player.updatePlayer(); st.keys = {};
-    frames(4, () => enemies.updateEnemies());
-    ok('sweep: Ghost Stepping through it is a perfect Ghost Step (+1 combo, no damage)', st.health === 100 && st.combo === 1, `hp ${st.health} combo ${st.combo}`);
-    freshArena(20);
-    const br4 = grunt({ type: 'bruiser', lane: 1, x: st.player.x + 80, attackCooldown: 3, currentMove: 'sweep', hp: 999, maxHp: 999 });
-    st.enemies = [br4]; st.keys = { KeyW: true }; player.updatePlayer();
-    frames(4, () => { player.updatePlayer(); enemies.updateEnemies(); }); st.keys = {};
-    ok('sweep: Guard takes a fraction of it', st.health >= 100 - Math.ceil(CONSTANTS.SWEEP.damage * 0.25) && st.health < 100, `hp ${st.health}`);
-    // bruisers alternate bash / sweep
-    freshArena(20);
-    const br5 = grunt({ type: 'bruiser', lane: 2, x: st.player.x + 80, attackCooldown: 1, currentMove: 'bash', hp: 999, maxHp: 999 });
-    st.enemies = [br5]; st.player.lane = 0; const moves = [];
-    frames(400, () => { const m = br5.currentMove; enemies.updateEnemies(); if (br5.currentMove !== m) moves.push(br5.currentMove); });
-    ok('sweep: bruisers alternate bash and sweep', moves.includes('sweep') && moves.includes('bash'), moves.slice(0, 4).join(','));
-}
+// (v19: the Bruiser Sweep was removed — playtest: don't force Guard / Ghost Step.)
+{ const fs = await import('fs'); ok('sweep: removed', !/isSweep|SWEEP:/.test(fs.readFileSync(new URL('../src/entities/enemies.js', import.meta.url), 'utf8') + fs.readFileSync(new URL('../src/constants.js', import.meta.url), 'utf8'))); }
 
 // ======================= 8. GHOST STEP INPUT + REMAPPING =======================
 {

@@ -26,6 +26,7 @@ import { getSettings, setSetting, hitStopEnabled, applySettingsSideEffects, keyN
 import { rankForRun, pbDeltaText, comboMultiplier } from './systems/score.js';
 import { acceptWager, declineWager } from './systems/wagers.js';
 import { updateFinisher } from './systems/finisher.js';
+import { tmStartRun, tmTick, tmEndRun, liveRun, fmtTime, loadTelemetry, summarizeTelemetry, exportTelemetryJSON } from './systems/telemetry.js';
 import { startKnockdown, updateKnockdown, canBeKnockedDown } from './systems/knockdown.js';
 import { playUpgradeVignette, updateVignette, skipVignette, upgradeRarity, upgradeColor, evolutionLabel } from './systems/vignette.js';
 
@@ -154,6 +155,7 @@ export function resetGame() {
     st.score = 0; st.displayScore = 0; st.scorePops = [];
     st.wagerMult = 1; st.wagerOffer = null; st.currentAffix = CONSTANTS.AFFIXES[0];
     st.finisher = null; st.finisherZoom = 1; st.vignette = null;
+    st.stageHitsTaken = 0; st.statFlawless = 0;
     st.knockdown = null; st.knockdownsThisArc = 0; st.statKnockdowns = 0; st.zoneTimer = 0; st.bossPoster = null; st.enemyEchoes = [];
     st.afterimages = []; st.koFx = []; st.rankOrder = []; st.orbPulse = 0;
     st.paletteFrom = 1; st.paletteTo = 1; st.paletteT = 1; st.lightSweep = -1;
@@ -181,8 +183,10 @@ function startGame(daily = false, opts = {}) {
     st.tutorialEnabled = opts.tutorial !== undefined ? !!opts.tutorial : (toggle ? toggle.checked === true : true);
     st.dailyMode = !!daily;
     st.dailyDateKey = daily ? todayKey() : null;
-    seedRng(opts.seed !== undefined ? opts.seed : (daily ? dailySeedFromDate() : ((Math.random() * 0xffffffff) >>> 0)));
+    const runSeed = opts.seed !== undefined ? opts.seed : (daily ? dailySeedFromDate() : ((Math.random() * 0xffffffff) >>> 0));
+    seedRng(runSeed);
     resetGame(); st.screen = 'playing';
+    tmStartRun({ seed: runSeed, daily: !!daily });
     ['start-screen', 'gameover-screen', 'pause-screen', 'wager-screen', 'upgrade-screen'].forEach(hideOverlay);
     duckMusic(false); startMusic();
     // Run opening: the Striker walks into the ring under the stage card. The Arc 1
@@ -408,7 +412,11 @@ function pauseKey(code) {
         else if (code === 'ArrowRight') moveLoadoutSel(0, 1);
         return;
     }
-    if (pauseTab === 'resume' && (code === 'Enter' || code === 'Space')) closePause();
+    if (pauseTab === 'resume') {
+        if (code === 'ArrowUp') moveMenu(-1);
+        else if (code === 'ArrowDown') moveMenu(1);
+        else if (code === 'Enter' || code === 'Space') activateMenu();
+    }
 }
 
 // ==========================================
@@ -472,7 +480,12 @@ function pollGamepad() {
             if (st.inputDevice !== fam) { setInputDevice(fam); onDeviceChanged(); }
         }
 
-        if (st.screen === 'start') { if (st.pad.instinct || st.pad.pause || st.pad.jab) startGame(); }
+        // v19 MENU NAV: D-pad / stick moves the highlight, × / A picks it.
+        const navUp = st.pad.up || stickLeft, navDown = st.pad.down || stickRight;
+        if (st.screen === 'start') {
+            if (navUp) moveMenu(-1); else if (navDown) moveMenu(1);
+            else if (jp(0)) activateMenu(); else if (st.pad.pause) startGame();
+        }
         else if (st.screen === 'playing') {
             if (posterWaiting()) { if (anyPress) confirmPoster(); }
             else if (st.pad.pause && !SequenceManager.active && !st.finisher) openPause();
@@ -486,7 +499,7 @@ function pollGamepad() {
             else if (jp(14)) pauseKey('ArrowLeft');
             else if (jp(15)) pauseKey('ArrowRight');
             else if (st.pad.instinct) pauseKey('Enter');
-            else if (st.pad.hook) returnToMenu();
+            else if (st.pad.hook) closePause(); // ○ / B = back to the fight (it used to QUIT)
         }
         else if (st.screen === 'tutorial') { if (st.pad.instinct || st.pad.jab || st.pad.cross) dismissTutorial(); }
         else if (st.screen === 'vignette') { if (anyPress) skipVignette(); }
@@ -500,9 +513,13 @@ function pollGamepad() {
             else if (jp(15) || stickRight) moveDraftFocus(1);
             else if (jp(0)) confirmDraftFocus();
         }
+        else if (st.screen === 'records' || st.screen === 'howto') {
+            if (jp(0) || jp(1)) activateMenu(true);
+        }
         else if (st.screen === 'gameover') {
-            if (st.pad.instinct || st.pad.jab) startGame();
-            if (st.pad.hook || st.pad.cross) returnToMenu();
+            if (navUp) moveMenu(-1); else if (navDown) moveMenu(1);
+            else if (jp(0)) activateMenu();
+            else if (jp(1)) returnToMenu();
         }
 
         for(let i=0; i<gp.buttons.length; i++) st.lastGamepadState.buttons[i] = p(i);
@@ -528,7 +545,16 @@ window.addEventListener('keydown', e => {
     // other keys) rather than letting a stray keypress start a run underneath it.
     if (st.screen === 'records') { if (e.code === 'Escape' || e.code === 'KeyH' || e.code === 'Enter') toggleRecords(); return; }
     // FIXED: Keyboard 'A' now starts the game as indicated by menu text
-    if (st.screen === 'start' && (e.code === 'Space' || e.code === 'Enter' || e.code === 'KeyA')) { startGame(); return; }
+    if (st.screen === 'start') {
+        if (e.code === 'ArrowUp') { moveMenu(-1); return; }
+        if (e.code === 'ArrowDown') { moveMenu(1); return; }
+        if (e.code === 'Enter') { activateMenu(); return; }
+        if (e.code === 'Space' || e.code === 'KeyA') { startGame(); return; }
+    }
+    if (st.screen === 'gameover' && (e.code === 'ArrowUp' || e.code === 'ArrowDown' || e.code === 'Enter')) {
+        if (e.code === 'Enter') activateMenu(); else moveMenu(e.code === 'ArrowUp' ? -1 : 1);
+        return;
+    }
     if (st.screen === 'vignette') { if (!e.repeat) skipVignette(); return; }
     if (posterWaiting()) { if (!e.repeat) confirmPoster(); return; }
     if (st.screen === 'wager') {
@@ -578,6 +604,7 @@ const DRAFT_HOLD_FRAMES = 20;
 
 export function update() {
     if (st.screen !== 'playing') return;
+    tmTick(); // game-clock time (only while actually playing)
 
     // v16 FINISHER: the whole exchange drops into slow-mo — only the finisher,
     // particles (at half rate, frozen on impact) and the HUD advance.
@@ -617,7 +644,6 @@ export function update() {
     if (st.tutorialGrace > 0) st.tutorialGrace--;
     if (st.tutorialDelay > 0) st.tutorialDelay--;
     if (st.bossIntroTimer > 0 && !posterWaiting()) st.bossIntroTimer--;
-    if (st.sweepHint > 0) st.sweepHint--;
     if (st.instinctPauseTimer > 0) {
         st.instinctPauseTimer--;
     } else if (st.isInstinct) {
@@ -738,6 +764,12 @@ function endRun() {
 
     const runResult = commitRun(score, grade, st.currentStage);
 
+    // v19 TELEMETRY: close the run record; show the run clock + what ended it.
+    const endedBy = liveRun() && liveRun().lastDamageSrc;
+    const rec17 = tmEndRun({ stage: st.currentStage, score, grade });
+    const rt = document.getElementById('run-time-ui');
+    if (rt && rec17) rt.innerText = `RUN TIME ${fmtTime(rec17.frames)} · ROUND ${st.currentStage}${endedBy ? ' · ENDED BY ' + prettySource(endedBy) : ''}`;
+
     // RETENTION: commit to the local leaderboard + lifetime stats and grant any
     // grade-keyed cosmetics this run earned. The per-run boss streak is simply
     // the number of bosses cleared in a row this run (a loss ends the run).
@@ -835,6 +867,31 @@ function commitRun(score, grade, stage) {
     return { isBest, isDailyBest };
 }
 
+const SOURCE_NAMES = { grunt: 'GRUNT', shield: 'SHIELD', bruiser: 'BRUISER', assassin: 'ASSASSIN', zoner: 'ZONER', hazard: 'RAIL HAZARD', live_lane: 'LIVE LANE', negative_echo: 'NEGATIVE ECHO', neon_enforcer: 'NEON ENFORCER', phantom_boxer: 'PHANTOM BOXER', static_monk: 'STATIC MONK', live_wire: 'LIVE WIRE', negative: 'NEGATIVE' };
+function prettySource(s) { return SOURCE_NAMES[s] || String(s).toUpperCase(); }
+
+// v19 RUN DATA panel on the Records screen + JSON export (tuning telemetry).
+function renderRunData() {
+    const el = document.getElementById('run-data');
+    if (!el) return;
+    const sum = summarizeTelemetry(loadTelemetry());
+    if (!sum.runs) { el.innerHTML = '<div class="opacity-60 text-xs py-2">No recorded runs yet.</div>'; return; }
+    const stages = Object.keys(sum.reached).map(Number).sort((a, b) => a - b);
+    const rows = stages.map(s => `<div class="rd-row"><span>R${s}</span><span>${sum.reached[s]} reached</span><span class="${sum.ends[s] ? 'rd-end' : ''}">${sum.ends[s] || 0} ended</span><span>${fmtTime(sum.avgTime[s])} avg</span></div>`).join('');
+    const hurt = sum.topHurt.slice(0, 5).map(([k, v]) => `<span class="rd-chip">${prettySource(k)} ${v}</span>`).join('');
+    el.innerHTML = `<div class="rd-sub">LAST ${sum.runs} RUNS · WHAT HITS YOU (total damage)</div><div class="rd-chips">${hurt}</div>
+        <div class="rd-sub">WHERE RUNS END</div><div class="rd-table">${rows}</div>`;
+}
+window.engineExportRunData = function () {
+    try {
+        const blob = new Blob([exportTelemetryJSON()], { type: 'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob); a.download = `neon-strike-runs-${todayKey()}.json`;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    } catch (e) { console.warn('export failed', e); }
+};
+
 // RETENTION: the records/leaderboard/cosmetics screen.
 function applyStrikerColor() { st.strikerColor = selectedStrikerColor(); }
 
@@ -885,6 +942,7 @@ function renderRecords() {
         }
     }
 
+    renderRunData();
     const stats = document.getElementById('records-stats');
     if (stats) {
         const best = lb.length ? lb[0].score.toLocaleString() : '—';
@@ -968,7 +1026,7 @@ export function posterWaiting() {
 }
 function confirmPoster() {
     if (!posterWaiting()) return false;
-    st.posterConfirmed = true; playSound('bell');
+    st.posterConfirmed = true; playSound('bell'); st.inputGrace = INPUT_GRACE_FRAMES;
     return true;
 }
 window.engineConfirmPoster = confirmPoster;
@@ -983,9 +1041,51 @@ function onDeviceChanged() {
     renderInstructions();
 }
 
+// v19 MENU NAVIGATION: every menu's buttons are a focus list (D-pad / stick /
+// arrows move it, × / A / Enter picks). Playtest: no D-pad on the main menu or
+// the pause screen.
+const MENU_ROOTS = { start: 'start-screen', gameover: 'gameover-screen', records: 'records-screen', howto: 'howto-screen' };
+let menuFocus = 0, menuFor = null;
+function menuButtons() {
+    let root = null;
+    if (st.screen === 'paused') { if (pauseTab !== 'resume') return []; root = document.getElementById('ppanel-resume'); }
+    else if (MENU_ROOTS[st.screen]) root = document.getElementById(MENU_ROOTS[st.screen]);
+    if (!root || typeof root.querySelectorAll !== 'function') return [];
+    return Array.from(root.querySelectorAll('.orb-btn'));
+}
+function syncMenuFocus() {
+    const key = st.screen + (st.screen === 'paused' ? pauseTab : '');
+    if (key !== menuFor) { menuFor = key; menuFocus = 0; }
+    const btns = menuButtons();
+    if (menuFocus >= btns.length) menuFocus = 0;
+    btns.forEach((b, i) => b.classList && b.classList.toggle('menu-focus', i === menuFocus));
+}
+function moveMenu(d) {
+    const b = menuButtons(); if (!b.length) return;
+    menuFocus = (menuFocus + d + b.length) % b.length; syncMenuFocus(); playSound('slip');
+}
+// `last` = the close button of a scrolling screen (records / manual)
+function activateMenu(last = false) {
+    const b = menuButtons(); const el = last ? b[b.length - 1] : b[menuFocus];
+    if (el && typeof el.click === 'function') el.click();
+}
+
+// v19 INPUT GRACE: the press that closes a menu / overlay (× on the evolution
+// screen, Enter on a wager, Esc on pause…) must not also land in the fight —
+// playtest: confirming the upgrade screen with × fired Instinct. Any time
+// control returns to play, gameplay input is swallowed for a few frames.
+const INPUT_GRACE_FRAMES = 8;
+let lastScreenSeen = 'start';
+function watchResume() {
+    if (st.screen === 'playing' && lastScreenSeen !== 'playing') st.inputGrace = INPUT_GRACE_FRAMES;
+    lastScreenSeen = st.screen;
+}
+
 function loop() {
     st.uiFrame = (st.uiFrame || 0) + 1;
     pollGamepad();
+    watchResume();
+    if (st.screen !== 'playing') syncMenuFocus();
     syncCinematicClass();
     if (st.screen === 'vignette') updateVignette();
     update(); draw();
@@ -996,7 +1096,7 @@ function init() { st.width = 1000; st.height = 600; if(canvas) { canvas.width = 
 init();
 
 // Test hooks for the headless harness / bot sim (tests/*.mjs). Not used in play.
-export const __test = { posterWaiting, confirmPoster, startGame, resetGame, update, triggerUpgradeDraft, resolveWager, openPause, closePause, setPauseTab, renderLoadout, renderSettings, endRun };
+export const __test = { posterWaiting, confirmPoster, watchResume, startGame, resetGame, update, triggerUpgradeDraft, resolveWager, openPause, closePause, setPauseTab, renderLoadout, renderSettings, endRun };
 
 // Dev/playtest hook: open the game with ?debug in the URL to get window.__ns —
 // state access plus a stage jump (e.g. __ns.jump(5) = Arc 1 boss). Off otherwise.
@@ -1008,6 +1108,7 @@ try {
             draft(n = 1) { st.pendingUpgrades += n; triggerUpgradeDraft(); },
             // Item-11 onboarding mockup: draws in-world teaching callouts over the
             // live scene. null clears it. Never set outside ?debug.
+            telemetry() { return { live: liveRun(), runs: loadTelemetry(), summary: summarizeTelemetry(loadTelemetry()) }; },
             mockOnboarding(scene) { st.onboardingMock = scene || null; draw(); },
             // Save the current frame (canvas + a painted stand-in for the DOM HUD
             // clusters) to a local receiver — used to export mockup images.
@@ -1028,7 +1129,7 @@ try {
             },
             // Advance the real frame loop n times synchronously (works even when the
             // tab is hidden and requestAnimationFrame is paused).
-            step(n = 1) { for (let i = 0; i < n; i++) { pollGamepad(); syncCinematicClass(); if (st.screen === 'vignette') updateVignette(); update(); st.lastKeys = { ...st.keys }; } draw(); }
+            step(n = 1) { for (let i = 0; i < n; i++) { pollGamepad(); watchResume(); syncCinematicClass(); if (st.screen === 'vignette') updateVignette(); update(); st.lastKeys = { ...st.keys }; } draw(); }
         };
     }
 } catch (e) {}
