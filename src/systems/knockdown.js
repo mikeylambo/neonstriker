@@ -10,6 +10,7 @@
 import { gameState as st } from '../state.js';
 import { CONSTANTS } from '../constants.js';
 import { playSound } from '../vfx_audio/audio.js';
+import { heatOn } from './heat.js';
 import { spawnFloatingText, doFlash, triggerShockwave } from '../vfx_audio/effects.js';
 import { getBinds } from './settings.js';
 import { tmKnockdown } from './telemetry.js';
@@ -17,6 +18,7 @@ import { tmKnockdown } from './telemetry.js';
 const K = CONSTANTS.KNOCKDOWN;
 
 export function canBeKnockedDown() {
+    if (heatOn('one_count')) return false; // v20 HEAT: no ten-count
     return (st.knockdownsThisArc || 0) === 0;
 }
 
@@ -75,6 +77,7 @@ function getUp() {
     k.phase = 'up'; k.upTimer = 50;
     k.hpFrac = recoveryHpFrac({ perfects: k.perfects, goods: k.goods, stumbles: k.stumbles, prompts: k.seq.length });
     st.health = Math.round(st.maxHealth * k.hpFrac);
+    st.hpCeil = st.health; // v20 HEAT (NO MERCY): the ten-count is the one way back up
     st.combo = 0;
     p.invuln = K.invulnFrames;
     st.inputGrace = 8; // the last get-up press doesn't also slip you

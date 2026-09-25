@@ -549,3 +549,68 @@ export function drawBillingCard(ctx, card, age, alpha) {
     if (card.tagline) { ctx.fillStyle = 'rgba(255,255,255,0.7)'; ctx.font = 'bold 12px Orbitron'; ctx.fillText(card.tagline, W / 2, by + 132); }
     ctx.restore();
 }
+
+// ==========================================
+// v20 INCOMING-THREAT PIPS: enemies that have spawned but haven't walked on yet
+// get a chevron at the right edge of their lane (their colour; Zoners get a
+// double chevron — they shoot from range). Brighter and pulsing as they near
+// the edge; a number when several queue in one lane.
+// ==========================================
+export function drawThreatPips(ctx) {
+    if (st.screen !== 'playing' || st.finisher || st.bossIntroTimer > 0) return;
+    const W = st.width, lanes = [[], [], []];
+    for (const e of st.enemies) if (e.hp > 0 && !e.isBoss && e.x > W - 20 && e.lane >= 0 && e.lane <= 2) lanes[e.lane].push(e);
+    const t = (st.uiFrame || 0);
+    ctx.save();
+    lanes.forEach((list, lane) => {
+        if (!list.length) return;
+        list.sort((a, b) => a.x - b.x);
+        const e = list[0], dist = e.x - W;
+        const near = Math.max(0, Math.min(1, 1 - dist / 700));
+        const y = st.height * CONSTANTS.LANE_Y[lane] - 38;
+        const pulse = near > 0.7 ? 0.5 + 0.5 * Math.sin(t * 0.4) : 0;
+        const x = W - 16;
+        ctx.globalAlpha = 0.35 + 0.65 * near;
+        ctx.fillStyle = 'rgba(0,0,0,0.55)';
+        ctx.beginPath(); ctx.arc(x - 6, y, 15 + pulse * 3, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = e.color || '#ff0055'; ctx.lineWidth = 3.5; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+        ctx.shadowColor = e.color || '#ff0055'; ctx.shadowBlur = 6 + pulse * 10;
+        const chev = ox => { ctx.beginPath(); ctx.moveTo(x + ox, y - 8); ctx.lineTo(x + ox - 9, y); ctx.lineTo(x + ox, y + 8); ctx.stroke(); };
+        chev(0); if (list.some(z => z.type === 'zoner')) chev(-8); // a Zoner anywhere in the queue
+        ctx.shadowBlur = 0;
+        if (list.length > 1) {
+            ctx.fillStyle = '#fff'; ctx.font = 'bold 10px Orbitron'; ctx.textAlign = 'center';
+            ctx.fillText(`×${list.length}`, x - 6, y + 28);
+        }
+    });
+    ctx.restore();
+}
+
+// ==========================================
+// v20 PRACTICE: SLIP WINDOWS. Above each attacker, a bar counting its attack
+// down to the hit: the grey band is the GOOD window, the white band the PERFECT
+// window. The cursor runs right-to-left; slip while it's in the white.
+// ==========================================
+export function drawSlipWindows(ctx) {
+    if (!st.practice || !st.practice.windows) return;
+    for (const e of st.enemies) {
+        if (e.hp <= 0 || e.isBoss || e.x > st.width) continue;
+        const { perfect, good } = CONSTANTS.getSlipThresholds(e.type, st.progressionMods.perfectSlipWindowBonus);
+        const span = good + 30, cd = e.attackCooldown;
+        if (cd > span || cd < 0) continue;
+        const w = 110, h = 10, x = e.x + 25 - w / 2, y = e.y - (e.h || 110) - 46;
+        const X = v => x + w * (v / span); // cooldown value -> x (0 = the hit, at the left)
+        ctx.save();
+        ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(x - 3, y - 3, w + 6, h + 6);
+        ctx.fillStyle = 'rgba(255,0,85,0.35)'; ctx.fillRect(X(good), y, w - (X(good) - x), h);
+        ctx.fillStyle = 'rgba(229,231,235,0.45)'; ctx.fillRect(x, y, X(good) - x, h);
+        ctx.fillStyle = '#ffffff'; ctx.fillRect(x, y, X(perfect) - x, h);
+        const inPerfect = cd <= perfect, inGood = cd <= good;
+        ctx.fillStyle = inPerfect ? '#22d3ee' : (inGood ? '#facc15' : '#ff3355');
+        ctx.fillRect(X(cd) - 2, y - 5, 4, h + 10);
+        ctx.font = 'bold 9px Orbitron'; ctx.textAlign = 'center';
+        ctx.fillStyle = inPerfect ? '#22d3ee' : '#9ca3af';
+        ctx.fillText(inPerfect ? 'SLIP NOW' : (inGood ? 'GOOD' : 'WAIT'), x + w / 2, y - 7);
+        ctx.restore();
+    }
+}

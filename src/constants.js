@@ -41,6 +41,46 @@ export const CONSTANTS = {
         const { arc, levelKey } = CONSTANTS.locateStage(stage);
         return (arc - 1) * 7 + levelKey;
     },
+    // v20 PUNCH FEEL — one table for how each blow lands: hitstop frames, spark
+    // scale, impact-ring radius, shake, sound. A counter is its own event (flat,
+    // not "the same punch ×1.5"): a long freeze, a big white ring, a crack.
+    PUNCH_FEEL: {
+        jab:     { stop: 2,  spark: 0.7, ring: 16, shake: 2,  snd: 'hit_jab' },
+        jab3:    { stop: 3,  spark: 1.0, ring: 24, shake: 3,  snd: 'hit' },
+        hook:    { stop: 4,  spark: 1.25, ring: 32, shake: 5, snd: 'hit_hook' },
+        cross:   { stop: 6,  spark: 1.5, ring: 42, shake: 8,  snd: 'hit_cross' },
+        guard:   { stop: 1,  spark: 0.5, ring: 0,  shake: 1,  snd: 'hit_jab' },
+        counter: { stop: 11, spark: 2.2, ring: 72, shake: 14, snd: 'counter_hit' }
+    },
+    punchFeel: (type, counter) => {
+        const F = CONSTANTS.PUNCH_FEEL;
+        if (counter) return F.counter;
+        if (type === 'jab1' || type === 'jab2') return F.jab;
+        if (type === 'guard_jab') return F.guard;
+        if (type === 'check_hook') return F.hook;
+        return F[type] || F.jab3;
+    },
+    // v20 HEAT: optional run modifiers, each adding to a score multiplier.
+    HEAT: {
+        relentlessCooldownMult: 0.8, glassJawMult: 1.25, platedJabMult: 0.5,
+        mods: [
+            { id: 'relentless', name: 'RELENTLESS', desc: 'Enemies recover 20% faster between attacks.', bonus: 0.20 },
+            { id: 'plated',     name: 'PLATED',     desc: 'Grunts shrug off half of every Jab.',           bonus: 0.15 },
+            { id: 'crowded',    name: 'CROWDED',    desc: 'An extra Grunt joins most waves.',              bonus: 0.20 },
+            { id: 'glass_jaw',  name: 'GLASS JAW',  desc: 'You take 25% more damage.',                     bonus: 0.20 },
+            { id: 'no_mercy',   name: 'NO MERCY',   desc: 'No healing — only the ten-count gets you back up.', bonus: 0.25 },
+            { id: 'one_count',  name: 'ONE COUNT',  desc: 'No ten-count: your first knockdown ends the run.', bonus: 0.30 }
+        ]
+    },
+    // v20 HP SCALING. It used to be +10% enemy HP per stage with no cap (≈4.4× by
+    // Arc 5, bosses 1000 → 3800) while the Striker's punches never hit harder —
+    // Power ranks add knockback, not damage. Regular enemies now keep their HP
+    // (difficulty comes from speed, density, new types, affixes); bosses grow a
+    // modest step per Arc, capped at Arc 5.
+    ENEMY_HP_PER_ARC: 0,
+    BOSS_HP: { base: 1000, perArc: 0.15, capArc: 5 },
+    enemyHpMult: (stage) => 1 + (Math.min(CONSTANTS.getArcIndex(stage), 5) - 1) * CONSTANTS.ENEMY_HP_PER_ARC,
+    bossHp: (stage) => Math.round(CONSTANTS.BOSS_HP.base * (1 + (Math.min(CONSTANTS.getArcIndex(stage), CONSTANTS.BOSS_HP.capArc) - 1) * CONSTANTS.BOSS_HP.perArc)),
     // SINGLE SOURCE OF TRUTH for slip windows. This used to be duplicated with
     // slightly different hardcoded numbers in player.js (the real gameplay check),
     // enemies.js (the red/white telegraph + danger-ring visuals), and draw.js (the

@@ -2,13 +2,13 @@ import { gameState as st } from '../state.js';
 import { playSound } from './audio.js';
 import { flashScale } from '../systems/settings.js';
 
-export function spawnFloatingText(x, y, text, color) { 
-    st.floatingTexts.push({ x: x, y: y, text: text, color: color, life: 1.0, velocity: -1.5 }); 
+export function spawnFloatingText(x, y, text, color) {
+    st.floatingTexts.push({ x: x, y: y, text: text, color: color, life: 1.0, velocity: -1.5 });
 }
 
 // --- FIXED: Toast Cascade Logic ---
 // Checks if other texts exist in the same area and cascades them downwards so they remain readable!
-export function showToast(msg, color='#fff') { 
+export function showToast(msg, color='#fff') {
     let yOffset = 0;
     st.floatingTexts.forEach(ft => {
         if (ft.y >= st.height * 0.25 - 10 && ft.y <= st.height * 0.25 + 100 && ft.life > 0.5) {
@@ -16,19 +16,19 @@ export function showToast(msg, color='#fff') {
         }
     });
 
-    spawnFloatingText(st.width / 2, st.height * 0.25 + yOffset, msg, color); 
-    
+    spawnFloatingText(st.width / 2, st.height * 0.25 + yOffset, msg, color);
+
     if (st.floatingTexts.length > 0) {
-        st.floatingTexts[st.floatingTexts.length - 1].velocity = -0.5; 
-        st.floatingTexts[st.floatingTexts.length - 1].life = 2.0; 
+        st.floatingTexts[st.floatingTexts.length - 1].velocity = -0.5;
+        st.floatingTexts[st.floatingTexts.length - 1].life = 2.0;
     }
 }
 
-export function triggerShockwave(x, y, color) { 
-    st.shockwaves.push({ x: x, y: y, radius: 10, maxRadius: 300, color: color, alpha: 1.0 }); 
+export function triggerShockwave(x, y, color) {
+    st.shockwaves.push({ x: x, y: y, radius: 10, maxRadius: 300, color: color, alpha: 1.0 });
 }
 
-export function doFlash(amt) { 
+export function doFlash(amt) {
     const scaled = amt * flashScale();
     if (scaled <= 0.001) return;
     const sf = document.getElementById('screen-flash');
@@ -44,43 +44,49 @@ export function spawnScorePop(x, y, pts, big = false) {
     st.scorePops.push({ x: x + (Math.random() * 30 - 15), y, text: `+${pts.toLocaleString()}`, life: 1.0, big });
 }
 
-export function createImpact(x, y, color) { 
-    if (st.particles.length > 100) return; 
-    let count = st.particles.length > 80 ? 3 : 5; 
+// scale: v20 punch weight (jab 0.7 … counter 2.2) — more, faster, bigger sparks.
+export function createImpact(x, y, color, scale = 1) {
+    if (st.particles.length > 120) return;
+    let count = Math.round((st.particles.length > 80 ? 3 : 5) * scale);
     for (let i = 0; i < count; i++) {
-        st.particles.push({ x: x, y: y, vx: (Math.random() - 0.5) * 20, vy: (Math.random() - 0.5) * 20, life: 1, color: color || '#fff', type: 'spark' }); 
+        st.particles.push({ x: x, y: y, vx: (Math.random() - 0.5) * 20 * scale, vy: (Math.random() - 0.5) * 20 * scale, life: 1, color: color || '#fff', type: 'spark', size: Math.max(3, Math.round(4 * scale)) });
+    }
+}
+// v20: an expanding impact ring at the point of contact (size = punch weight).
+export function createHitRing(x, y, color, radius) {
+    if (!radius) return;
+    st.particles.push({ x, y, vx: 0, vy: 0, life: 0.5, color: color || '#fff', type: 'ring', r0: radius * 0.35, r1: radius });
+}
+
+export function createVacuum(cx, cy) {
+    for (let i = 0; i < 15; i++) {
+        let a = Math.random() * Math.PI * 2; let d = 60 + Math.random() * 40;
+        st.particles.push({ x: cx + Math.cos(a) * d, y: cy + Math.sin(a) * d, vx: -Math.cos(a) * 10, vy: -Math.sin(a) * 10, life: 0.5, color: '#ffffff', type: 'vacuum' });
     }
 }
 
-export function createVacuum(cx, cy) { 
-    for (let i = 0; i < 15; i++) { 
-        let a = Math.random() * Math.PI * 2; let d = 60 + Math.random() * 40; 
-        st.particles.push({ x: cx + Math.cos(a) * d, y: cy + Math.sin(a) * d, vx: -Math.cos(a) * 10, vy: -Math.sin(a) * 10, life: 0.5, color: '#ffffff', type: 'vacuum' }); 
-    } 
-}
-
-export function createShatter(x, y, color) { 
+export function createShatter(x, y, color) {
     for (let i = 0; i < 20; i++) {
-        st.particles.push({ x: x, y: y, vx: (Math.random() - 0.5) * 40, vy: (Math.random() - 0.5) * 40, life: 1.5, color: color, type: 'shard', size: Math.random() * 8 + 3, rot: Math.random() * Math.PI * 2, rotV: (Math.random() - 0.5) * 0.5 }); 
+        st.particles.push({ x: x, y: y, vx: (Math.random() - 0.5) * 40, vy: (Math.random() - 0.5) * 40, life: 1.5, color: color, type: 'shard', size: Math.random() * 8 + 3, rot: Math.random() * Math.PI * 2, rotV: (Math.random() - 0.5) * 0.5 });
     }
     playSound('shatter');
 }
 
 export function updateParticlesAndTrails() {
     updateKoFx();
-    for (let i = st.particles.length - 1; i >= 0; i--) { 
-        st.particles[i].x += st.particles[i].vx; 
-        st.particles[i].y += st.particles[i].vy; 
-        st.particles[i].life -= 0.04; 
-        if (st.particles[i].life <= 0) st.particles.splice(i, 1); 
+    for (let i = st.particles.length - 1; i >= 0; i--) {
+        st.particles[i].x += st.particles[i].vx;
+        st.particles[i].y += st.particles[i].vy;
+        st.particles[i].life -= 0.04;
+        if (st.particles[i].life <= 0) st.particles.splice(i, 1);
     }
-    
-    for (let i = st.floatingTexts.length - 1; i >= 0; i--) { 
-        st.floatingTexts[i].y += st.floatingTexts[i].velocity; 
-        st.floatingTexts[i].life -= 0.02; 
-        if (st.floatingTexts[i].life <= 0) st.floatingTexts.splice(i, 1); 
+
+    for (let i = st.floatingTexts.length - 1; i >= 0; i--) {
+        st.floatingTexts[i].y += st.floatingTexts[i].velocity;
+        st.floatingTexts[i].life -= 0.02;
+        if (st.floatingTexts[i].life <= 0) st.floatingTexts.splice(i, 1);
     }
-    
+
     if (st.scorePops) for (let i = st.scorePops.length - 1; i >= 0; i--) {
         st.scorePops[i].y -= st.scorePops[i].big ? 0.9 : 1.3;
         st.scorePops[i].life -= st.scorePops[i].big ? 0.014 : 0.025;
@@ -94,13 +100,13 @@ export function updateParticlesAndTrails() {
     }
 
     if (st.player && st.player.trails) {
-        st.player.trails.forEach(t => { t.opacity -= 0.06; }); 
+        st.player.trails.forEach(t => { t.opacity -= 0.06; });
         st.player.trails = st.player.trails.filter(t => t.opacity > 0);
         st.player.trailTimer--;
-        
+
         if (st.player.trailTimer <= 0 && (st.isInstinct || st.player.state === 'ghost_step')) {
             st.player.trails.push({ x: st.player.x, y: st.player.y, lane: st.player.lane, opacity: 0.6, state: st.player.state, punchType: st.player.punchType, hitFrame: st.player.hitFrame, slipBuff: st.player.slipBuff, instinct: st.isInstinct });
-            st.player.trailTimer = 4; 
+            st.player.trailTimer = 4;
             if (st.player.trails.length > 6) st.player.trails.shift();
         }
     }

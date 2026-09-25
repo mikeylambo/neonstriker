@@ -45,6 +45,7 @@
                     <div class="hud-exp-track"><div id="exp-bar"></div></div>
                 </div>
                 <div class="hud-stage"><span id="stage-ui">ARC 1: SHATTERED CATHEDRAL</span> <span id="affix-ui"></span></div>
+                <div class="hud-par" id="arc-par"></div>
             </div>
         </div>
 
@@ -52,28 +53,49 @@
             <div id="best-run"></div>
             <h1 class="text-6xl mb-1 text-cyan-400 font-black italic tracking-tighter text-shadow-lg">NEON STRIKE</h1>
             <p class="text-pink-500 tracking-widest uppercase text-xs font-bold opacity-90 mb-3">The Neon Striker</p>
-            <p class="text-white tracking-widest uppercase text-xs opacity-70 mb-8">Press [SPACE] or [A] to Begin Gauntlet</p>
-            <div class="mb-10 flex items-center justify-center gap-3 bg-gray-900 bg-opacity-50 p-3 rounded border border-gray-800 pointer-events-auto">
+            <p class="text-white tracking-widest uppercase text-xs opacity-70 mb-4">Press [SPACE] or [A] to Begin Gauntlet</p>
+            <div class="mb-4 flex items-center justify-center gap-3 bg-gray-900 bg-opacity-50 p-2 rounded border border-gray-800 pointer-events-auto">
                 <input type="checkbox" id="tutorial-toggle-cb" checked class="w-5 h-5 cursor-pointer accent-pink-500">
                 <label for="tutorial-toggle-cb" class="text-cyan-400 font-bold uppercase tracking-widest cursor-pointer text-sm">Enable Interactive Tutorial</label>
             </div>
             <!-- FIXED: Added explicit clickable Start Button -->
-            <div class="orb-btn" onclick="startGame()">
+            <div class="orb-btn start-main" onclick="startGame()">
                 <div class="font-bold text-xl">START GAUNTLET</div>
                 <div class="text-xs opacity-70 mt-1 uppercase">[SPACE] / [ENTER] / [A] / Click</div>
             </div>
-            <div class="orb-btn" style="border-color:#facc15;" onclick="startDailyChallenge()">
-                <div class="font-bold text-xl" style="color:#facc15;">DAILY CHALLENGE</div>
-                <div class="text-xs opacity-70 mt-1 uppercase" id="daily-sub">Same seed for everyone, today only</div>
+            <!-- v20: secondary modes in a compact grid (menu focus still runs in DOM order) -->
+            <div class="start-grid">
+                <div class="orb-btn sm" style="border-color:#facc15;" onclick="startDailyChallenge()">
+                    <div class="font-bold" style="color:#facc15;">DAILY CHALLENGE</div>
+                    <div class="sub" id="daily-sub">Same seed for everyone, today only</div>
+                </div>
+                <div class="orb-btn sm" id="practice-btn" style="border-color:#a78bfa;" onclick="window.engineOpenPractice()">
+                    <div class="font-bold" style="color:#a78bfa;">PRACTICE</div><div class="sub">Reach the Arc 1 title fight</div>
+                </div>
+                <div class="orb-btn sm" id="heat-btn" style="border-color:#fb923c;" onclick="window.engineOpenHeat()">
+                    <div class="font-bold" style="color:#fb923c;">HEAT</div><div class="sub">Beat the Arc 1 boss</div>
+                </div>
+                <div class="orb-btn sm" onclick="toggleHowTo()">
+                    <div class="font-bold">COMBAT MANUAL</div>
+                    <div class="sub">Learn the Mechanics [H] / [Y]</div>
+                </div>
+                <div class="orb-btn sm span2" style="border-color:#34d399;" onclick="toggleRecords()">
+                    <div class="font-bold" style="color:#34d399;">RECORDS</div>
+                    <div class="sub">Leaderboard, medals &amp; run data</div>
+                </div>
             </div>
-            <div class="orb-btn" onclick="toggleHowTo()">
-                <div class="font-bold text-xl">COMBAT MANUAL</div>
-                <div class="text-xs opacity-70 mt-1 uppercase">Learn the Mechanics [H] / [Y]</div>
-            </div>
-            <div class="orb-btn" style="border-color:#34d399;" onclick="toggleRecords()">
-                <div class="font-bold text-xl" style="color:#34d399;">RECORDS</div>
-                <div class="text-xs opacity-70 mt-1 uppercase">Leaderboard &amp; Strikers</div>
-            </div>
+        </div>
+
+        <div id="practice-screen" class="fullscreen-overlay">
+            <h2 class="text-4xl mb-1 font-black italic tracking-tighter" style="color:#a78bfa;">PRACTICE ROOM</h2>
+            <p class="text-xs uppercase tracking-widest text-gray-400 mb-4">Loop one opponent · you can't lose · no score · quit from pause</p>
+            <div id="practice-list" class="submenu-grid"></div>
+        </div>
+
+        <div id="heat-screen" class="fullscreen-overlay">
+            <h2 class="text-4xl mb-1 font-black italic tracking-tighter" style="color:#fb923c;">HEAT</h2>
+            <p class="text-xs uppercase tracking-widest text-gray-400 mb-4">Stack modifiers for a bigger score multiplier</p>
+            <div id="heat-list" class="submenu-list"></div>
         </div>
 
         <div id="tutorial-screen" class="fullscreen-overlay">
@@ -181,10 +203,19 @@
         </div>
 
         <div id="gameover-screen" class="fullscreen-overlay">
+            <div id="recap-overlay" class="recap-overlay" style="display:none;" onclick="window.engineSkipRecap()">
+                <div class="recap-title">LAST MOMENTS</div>
+                <canvas id="recap-canvas" width="500" height="300"></canvas>
+                <div class="recap-line" id="recap-ended"></div>
+                <div class="recap-line recap-dim" id="recap-most"></div>
+                <div class="recap-tip" id="recap-tip"></div>
+                <div class="recap-skip">PRESS ANY BUTTON FOR RESULTS</div>
+            </div>
             <h2 class="text-6xl mb-1 text-pink-500 font-black italic tracking-tighter">GAUNTLET ENDED</h2>
             <p class="text-cyan-400 mb-1 tracking-widest uppercase text-xl" id="final-stage-ui">STAGE REACHED: 1</p>
             <p class="text-[10px] uppercase tracking-widest text-gray-500 mb-1" id="run-mode-ui"></p>
             <p class="text-[11px] uppercase tracking-widest text-gray-400 mb-1" id="run-time-ui"></p>
+            <p class="run-tip" id="run-tip"></p>
             <div class="results-hero">
                 <div id="stat-grade" class="rank-letter rank-C">C</div>
                 <div class="results-score">

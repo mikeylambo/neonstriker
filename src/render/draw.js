@@ -4,10 +4,10 @@ import { ctx } from '../engine_core.js';
 import { drawAtmosphere, drawLightSweep } from './atmosphere.js';
 import { drawBoxer } from './boxer.js';
 import { SequenceManager } from '../systems/sequences.js';
-import { shakeScale } from '../systems/settings.js';
+import { shakeScale, getSettings } from '../systems/settings.js';
 import { buildColor } from '../systems/colors.js';
 import { drawOnboardingMock } from './onboarding_mock.js';
-import { drawBossPoster, drawLiveLanes, drawAfterimages, drawKnockdownUI, drawKoFx, drawScorePops, drawBossTells, drawBossHud, drawFinisherDim, drawFinisherUI, drawVignette } from './overlays.js';
+import { drawBossPoster, drawLiveLanes, drawAfterimages, drawKnockdownUI, drawKoFx, drawScorePops, drawBossTells, drawBossHud, drawFinisherDim, drawFinisherUI, drawVignette, drawThreatPips, drawSlipWindows } from './overlays.js';
 
 const dl = (x1, y1, x2, y2) => { ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); };
 
@@ -98,7 +98,21 @@ export function draw() {
             ctx.strokeStyle = '#1a1a1a';
             ctx.lineWidth = 4;
         }
+        // v20 COLOUR-BLIND TELLS: the read no longer depends on red vs white.
+        // Wind-up = a DASHED lane; slip-now = a solid lane lined with chevrons.
+        const shapes = (state === 1 || state === 2) && getSettings().tellShapes;
+        if (shapes && state === 1) ctx.setLineDash([18, 14]);
         dl(0, st.height * yPct, st.width, st.height * yPct);
+        ctx.setLineDash([]);
+        if (shapes && state === 2) {
+            const y = st.height * yPct;
+            ctx.fillStyle = '#ffffff';
+            for (let x = 30; x < st.width; x += 56) {
+                for (const oy of [-14, 14]) {
+                    ctx.beginPath(); ctx.moveTo(x, y + oy); ctx.lineTo(x + 12, y + oy - 7); ctx.lineTo(x + 12, y + oy + 7); ctx.closePath(); ctx.fill();
+                }
+            }
+        }
     });
 
     // LANE HAZARDS — amber pulsing WARNING, then a white-cored STRIKE bar. Deliberately
@@ -134,8 +148,13 @@ export function draw() {
             ctx.fillRect(p.x - p.vx, p.y - p.vy, 2, 2);
         } else if (p.type === 'dash_line') {
             ctx.fillRect(p.x, p.y, 20, 2);
+        } else if (p.type === 'ring') {
+            const k = 1 - p.life / 0.5; // 0 → 1 as it fades
+            ctx.globalAlpha = Math.max(0, p.life * 2);
+            ctx.strokeStyle = p.color; ctx.lineWidth = Math.max(1, 6 * (1 - k));
+            ctx.beginPath(); ctx.arc(p.x, p.y, p.r0 + (p.r1 - p.r0) * k, 0, Math.PI * 2); ctx.stroke();
         } else {
-            ctx.fillRect(p.x, p.y, 4, 4);
+            const s = p.size || 4; ctx.fillRect(p.x, p.y, s, s);
         }
     });
     ctx.globalAlpha = 1.0;
@@ -262,12 +281,14 @@ export function draw() {
     });
     ctx.globalAlpha = 1;
     drawKoFx(ctx);
+    drawSlipWindows(ctx);
     drawScorePops(ctx);
 
     ctx.restore();
 
     // ---- screen-space overlays (never zoomed or shaken) ----
     if (st.screen !== 'start') drawBossHud(ctx);
+    drawThreatPips(ctx);
     drawFinisherUI(ctx);
     drawKnockdownUI(ctx);
     drawBossPoster(ctx);

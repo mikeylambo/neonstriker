@@ -1,8 +1,10 @@
 import { gameState as st } from '../state.js';
 import { $ } from '../engine_core.js';
 import { comboMultiplier } from '../systems/score.js';
+import { arcLive, fmtSecs, fmtK } from '../systems/arc_par.js';
+import { practiceHudText } from '../systems/practice.js';
 
-export const HUD = { 
+export const HUD = {
     get combo() { return $('combo-ui'); },
     get expBar() { return $('exp-bar'); },
     get expMult() { return $('exp-multiplier'); },
@@ -11,7 +13,7 @@ export const HUD = {
     get barCont() { return $('bar-cont'); },
     get health() { return $('health-ui'); },
     get flash() { return $('screen-flash'); },
-    get screens() { 
+    get screens() {
         return {
             upgrade: $('upgrade-screen'),
             pause: $('pause-screen'),
@@ -50,13 +52,28 @@ export function updateHUD() {
         st.lastHUD.wager = key;
     }
 
-    if (st.lastHUD.combo !== st.combo) { 
-        HUD.combo.innerText = st.combo; st.lastHUD.combo = st.combo; 
+    // v20 PRACTICE: the stage line becomes a drill readout; no par.
+    if (st.practice) {
+        const txt = practiceHudText();
+        if (st.lastHUD.practice !== txt) { if (HUD.stage) HUD.stage.innerText = txt; const el = $('arc-par'); if (el) el.innerHTML = ''; st.lastHUD.practice = txt; }
     }
-    
+    // v20 ARC PAR: live clock + score against this Arc's par (red once you're over).
+    const al = st.practice ? null : arcLive(), parKey = al ? `${al.arc}|${al.secs}|${Math.floor(al.score / 1000)}` : '';
+    if (al && st.lastHUD.par !== parKey) {
+        const el = $('arc-par');
+        if (el) {
+            const late = al.secs > al.par.time, rich = al.score >= al.par.score;
+            el.innerHTML = `PAR <span style="color:${late ? '#f87171' : '#e5e7eb'}">${fmtSecs(al.secs)}/${fmtSecs(al.par.time)}</span> · <span style="color:${rich ? '#facc15' : '#e5e7eb'}">${fmtK(al.score)}/${fmtK(al.par.score)}</span>`;
+        }
+        st.lastHUD.par = parKey;
+    }
+    if (st.lastHUD.combo !== st.combo) {
+        HUD.combo.innerText = st.combo; st.lastHUD.combo = st.combo;
+    }
+
     let expPct = Math.min(100, (st.exp / st.expNeeded) * 100);
     if (st.lastHUD.exp !== expPct) {
-        if (HUD.expBar) HUD.expBar.style.width = expPct + '%'; 
+        if (HUD.expBar) HUD.expBar.style.width = expPct + '%';
         st.lastHUD.exp = expPct;
     }
 
@@ -76,19 +93,19 @@ export function updateHUD() {
     }
 
     let roundInstinct = Math.floor(st.instinctMeter);
-    if (st.lastHUD.instinct !== roundInstinct) { 
-        HUD.instinctBar.style.width = roundInstinct + '%'; st.lastHUD.instinct = roundInstinct; 
+    if (st.lastHUD.instinct !== roundInstinct) {
+        HUD.instinctBar.style.width = roundInstinct + '%'; st.lastHUD.instinct = roundInstinct;
     }
     let displayHP = Math.max(0, Math.round(st.health));
-    if (st.lastHUD.hp !== displayHP) { 
-        HUD.health.innerText = `${displayHP}`; st.lastHUD.hp = displayHP; 
+    if (st.lastHUD.hp !== displayHP) {
+        HUD.health.innerText = `${displayHP}`; st.lastHUD.hp = displayHP;
         const bar = $('hp-bar');
         if (bar) { const pct = Math.max(0, Math.min(100, displayHP / (st.maxHealth || 100) * 100)); bar.style.width = pct + '%'; bar.classList.toggle('low', pct <= 25); }
     }
-    if (st.player && st.lastHUD.slipBuff !== st.player.slipBuff) { 
-        HUD.counterStatus.innerText = st.player.slipBuff > 0 ? (st.player.slipBuff > 1 ? 'READY ×2' : 'READY') : '—'; 
+    if (st.player && st.lastHUD.slipBuff !== st.player.slipBuff) {
+        HUD.counterStatus.innerText = st.player.slipBuff > 0 ? (st.player.slipBuff > 1 ? 'READY ×2' : 'READY') : '—';
         if (HUD.counterHud) HUD.counterHud.classList.toggle('ready', st.player.slipBuff > 0);
-        st.lastHUD.slipBuff = st.player.slipBuff; 
+        st.lastHUD.slipBuff = st.player.slipBuff;
     }
     // v17 KO SHATTER: the orb landing pulses the EXP bar.
     if (HUD.expBar) HUD.expBar.classList.toggle('pulse', (st.orbPulse || 0) > 6);

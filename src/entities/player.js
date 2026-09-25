@@ -7,6 +7,7 @@ import { checkHit } from '../systems/combat.js';
 import { addScore } from '../systems/score.js';
 import { flashScale, getBinds } from '../systems/settings.js';
 import { buildColor } from '../systems/colors.js';
+import { heatOn } from '../systems/heat.js';
 import { gateBossDamage } from '../systems/finisher.js';
 import { tmKill, tmDamage, tmAttack, tmLanded, tmSlip, tmGhost, tmGuard, tmKnockdown, tmFloored, tmFinisher, tmEvolution, tmWager, tmStage, tmStartRun, tmTick, tmEndRun } from '../systems/telemetry.js';
 
@@ -327,6 +328,7 @@ export function takeDamage(amt, isHeavy, en, opts = {}) {
     // +30% outgoing in combat.js. Applied before guard reduction so Guard still
     // scales the same proportion of a bigger hit.
     amt = amt * CONSTANTS.affixMod(st.currentAffix, 'playerDamageTakenMult', 1);
+    if (heatOn('glass_jaw')) amt *= CONSTANTS.HEAT.glassJawMult; // v20 HEAT
     let actualDmg = st.player.state === 'guarding' ? Math.floor(amt * guardMult) : Math.floor(amt);
     if (piercing) spawnFloatingText(st.player.x, st.player.y - 60, "GUARD PIERCED!", "#aa00ff");
     if (st.player.state === 'guarding' && st.progressionMods.guardRead) st.player.guardReadTimer = 16;

@@ -65,11 +65,12 @@ export const SETTINGS_DEFAULTS = Object.freeze({
     screenShake: 1.0,     // 0..1 multiplier
     flashIntensity: 1.0,  // 0..1 multiplier
     hitStop: true,
-    reducedMotion: false
+    reducedMotion: false,
+    tellShapes: false     // v20 colour-blind aid: wind-up = dashed lane, SLIP NOW = chevrons
 });
 
 const UNIT_KEYS = ['masterVolume', 'musicVolume', 'sfxVolume', 'screenShake', 'flashIntensity'];
-const BOOL_KEYS = ['hitStop', 'reducedMotion'];
+const BOOL_KEYS = ['hitStop', 'reducedMotion', 'tellShapes'];
 
 function safeGet(key) {
     try { const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : null; } catch (e) { return null; }

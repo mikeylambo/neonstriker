@@ -42,6 +42,9 @@ export function loadMeta() {
     return {
         totalRuns: m.totalRuns || 0,
         bestBossStreak: m.bestBossStreak || 0,
+        // v20: furthest round reached (Practice / Heat unlocks). Saves from before
+        // v20 don't have it — backfill from the local leaderboard.
+        bestStage: m.bestStage || (safeGet(LB_KEY) || []).reduce((n, e) => Math.max(n, (e && e.stage) || 0), 0),
         unlocked: Array.isArray(m.unlocked) && m.unlocked.length ? m.unlocked : ['cyan'],
         selectedSkin: m.selectedSkin || 'cyan',
         alias: typeof m.alias === 'string' && m.alias.length ? m.alias : 'STRIKER',
@@ -112,12 +115,18 @@ export function commitRunRecord(run) {
     const meta = loadMeta();
     meta.totalRuns += 1;
     meta.bestBossStreak = Math.max(meta.bestBossStreak, run.bossKills || 0);
+    meta.bestStage = Math.max(meta.bestStage || 0, run.stage || 0);
     const newly = unlocksForRun(run, meta.unlocked);
     if (newly.length) meta.unlocked = [...meta.unlocked, ...newly];
     saveMeta(meta);
 
     return { rank, newUnlocks: newly, bestBossStreak: meta.bestBossStreak, totalRuns: meta.totalRuns, leaderboard: list };
 }
+
+// v20 UNLOCKS. Practice: you've reached the Arc 1 title fight. Heat: you've
+// beaten the Arc 1 boss.
+export function practiceUnlocked(m = loadMeta()) { return (m.bestStage || 0) >= 5 || (m.bestBossStreak || 0) >= 1; }
+export function heatUnlocked(m = loadMeta()) { return (m.bestBossStreak || 0) >= 1; }
 
 export function selectSkin(id) {
     const m = loadMeta();

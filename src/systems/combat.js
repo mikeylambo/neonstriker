@@ -1,7 +1,7 @@
 import { gameState as st, getFlowMultiplier } from '../state.js';
 import { CONSTANTS } from '../constants.js';
 import { playSound } from '../vfx_audio/audio.js';
-import { spawnFloatingText, createImpact, doFlash, createShatter, triggerShockwave, createVacuum } from '../vfx_audio/effects.js';
+import { spawnFloatingText, createImpact, createHitRing, doFlash, createShatter, triggerShockwave, createVacuum } from '../vfx_audio/effects.js';
 import { takeDamage } from '../entities/player.js';
 import { random } from './rng.js';
 import { isBossOpen } from './boss_rules.js';
@@ -10,6 +10,7 @@ import { addScore, hitScore } from './score.js';
 import { buildColor } from './colors.js';
 import { negativeReact } from './negative.js';
 import { keyName } from './settings.js';
+import { heatOn } from './heat.js';
 
 export function checkHit(type) {
     let isJab = type.startsWith('jab') || type === 'guard_jab';
@@ -63,6 +64,7 @@ export function checkHit(type) {
             // value the enemy actually takes. The matching +30% incoming lives in
             // player.js takeDamage — the whole stage becomes a coin-flip either way.
             dmg = Math.round(dmg * CONSTANTS.affixMod(st.currentAffix, 'playerDamageDealtMult', 1));
+            if (isJab && en.type === 'grunt' && heatOn('plated')) dmg = Math.round(dmg * CONSTANTS.HEAT.platedJabMult); // v20 HEAT
 
             // PRESSURE/CASH-OUT: any landed non-guard punch pins pressure onto its
             // target (capped at 3). Branch into a Cross before it decays and the
@@ -273,8 +275,10 @@ export function checkHit(type) {
 
             hitSomething = true;
             // v17 colour identity: hit sparks wear the build colour.
+            const feel = CONSTANTS.punchFeel(type, buffActive);
             if ((buffActive || loaded) && en.tutorialType !== 'counter') { createShatter(en.x, en.y - 60, spark); }
-            else if (en.tutorialType !== 'counter') { createImpact(en.x, en.y - 60, spark); }
+            else if (en.tutorialType !== 'counter') { createImpact(en.x, en.y - 60, spark, feel.spark); }
+            if (en.tutorialType !== 'counter') createHitRing(en.x + 10, en.y - 60, buffActive ? '#ffffff' : spark, loaded ? feel.ring * 1.3 : feel.ring);
 
             if (st.orbCounts.power >= 4 && en.hp <= 0 && (type === 'cross' || buffActive)) { triggerShockwave(en.x, en.y - 60, spark); }
         }
@@ -298,18 +302,21 @@ export function checkHit(type) {
             st.instinctMeter = Math.min(100, st.instinctMeter + gain);
         }
 
-        let stopMult = 1 + (st.isInstinct ? 0.5 : 0) + (buffActive ? 0.5 : 0);
-        st.hitstop = isJab ? Math.floor(2 * stopMult) : (type === 'cross' ? Math.floor(5 * stopMult) : Math.floor(3 * stopMult));
+        // v20 PUNCH FEEL: per-punch weight from one table; a counter is its own
+        // (flat) event rather than the same punch ×1.5.
+        const feel = CONSTANTS.punchFeel(type, buffActive);
+        const stopMult = st.isInstinct ? 1.5 : 1;
+        st.hitstop = Math.floor(feel.stop * stopMult);
         if (loaded) st.hitstop += 6;
 
-        st.shake = (type === 'cross' ? 8 : (isJab ? 2 : 4)) * stopMult;
+        st.shake = feel.shake * stopMult;
         if (type === 'cross' || buffActive) doFlash(buffActive ? 0.6 : 0.2);
 
         if (type === 'cross' && st.orbCounts.power >= 2) { createImpact(st.player.x + reach, st.player.y - 40, spark); st.shake += 5; }
         if (novaLanes.length) st.enemies.forEach(o => { if (!o.isBoss && novaLanes.includes(o.lane) && !o.tutorialType) { o.hp = 0; createShatter(o.x, o.y - 60, CONSTANTS.FUSION_COLORS.evo_shatter_nova); } });
         if (st.orbCounts.speed >= 4 && (isJab || type === 'hook')) { st.player.moveCancelReady = true; }
 
-        if (!buffActive) playSound('hit');
+        playSound(feel.snd);
     }
 
     return hitSomething;

@@ -74,7 +74,7 @@ export const BOSS_ROSTER_IDS = BOSS_ROSTER.map(b => b.controller);
 // Uses the same stat/scaling shape as a normal wave Grunt so it reads as a familiar
 // threat, and enters off the right edge so it's always slippable/beatable on arrival.
 function spawnMonkAdd() {
-    let hp = Math.floor(45 * (1 + (CONSTANTS.difficultyStage(st.currentStage) - 1) * 0.10));
+    let hp = Math.floor(45 * CONSTANTS.enemyHpMult(st.currentStage));
     let lane = Math.floor(random() * 3);
     st.enemies.push({
         x: st.width + 60, lane, y: st.height * CONSTANTS.LANE_Y[lane],
@@ -96,7 +96,7 @@ export function spawnBoss() {
 
     // HP scales off the stage's DIFFICULTY position (the old uniform 7-per-arc
     // layout), so moving Arc 1's boss earlier doesn't shift every later boss.
-    let baseHp = 300 + (CONSTANTS.difficultyStage(st.currentStage) * 100);
+    let baseHp = CONSTANTS.bossHp(st.currentStage); // v20: +15%/Arc, capped (was +100 per stage, uncapped)
 
     const rawArcIndex = CONSTANTS.getArcIndex(st.currentStage);
     const bossIndex = (rawArcIndex - 1) % BOSS_ROSTER.length;

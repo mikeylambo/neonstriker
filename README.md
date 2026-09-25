@@ -23,7 +23,7 @@ Open `index.html` in a browser — that's it. The game ships as a single prebuil
 ```sh
 npm install
 npm run build        # rebuild dist/game.bundle.js from src/
-npm test             # headless harness + v16–v19 suites (includes a bot that plays the real loop)
+npm test             # headless harness + v16–v20 suites (includes a bot that plays the real loop)
 npm run smoke        # boots the shipped bundle in jsdom over file://
 npm run smoke:http   # same, over http (covers persistence)
 ```
@@ -37,7 +37,7 @@ Open `index.html?debug` for a dev hook on `window.__ns` (`jump(stage)`, `draft()
 ## Layout
 
 - `src/` — game source (ES modules): `systems/` (combat, finisher, knockdown, waves, wagers, score…), `entities/` (player, enemies, bosses), `render/`, `ui/`
-- `tests/` — headless verification (`harness.mjs`, `v16.mjs` … `v19.mjs`, shared `bot.mjs`) and the browser smoke test
+- `tests/` — headless verification (`harness.mjs`, `v16.mjs` … `v20.mjs`, shared `bot.mjs`) and the browser smoke test
 - `mockups/` — in-engine renders of the in-world onboarding prototype and v17 features
 
 The optional global leaderboard uses a Supabase publishable key (client-safe, protected by row-level security). Submitting scores is opt-in.

@@ -54,6 +54,8 @@ export function tmFloored(counter) { if (!stage) return; stage.floored++; if (co
 export function tmFinisher(kind, result, hits, prompts) { if (stage) stage.finishers.push({ kind, result, hits, prompts }); }
 export function tmEvolution(id) { if (run) run.evolutions.push({ stage: st.currentStage, frame: run.frames, id }); }
 export function tmWager(name) { if (stage) stage.wager = name || null; }
+// v20: an Arc's par result ({ arc, medal, secs, score }).
+export function tmArc(r) { if (run) (run.arcs = run.arcs || []).push({ arc: r.arc, medal: r.medal, secs: r.secs, score: r.score }); }
 
 export function tmEndRun({ stage: endStage, score, grade }) {
     if (!run) return null;

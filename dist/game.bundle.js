@@ -44,6 +44,48 @@
       const { arc, levelKey } = CONSTANTS.locateStage(stage2);
       return (arc - 1) * 7 + levelKey;
     },
+    // v20 PUNCH FEEL — one table for how each blow lands: hitstop frames, spark
+    // scale, impact-ring radius, shake, sound. A counter is its own event (flat,
+    // not "the same punch ×1.5"): a long freeze, a big white ring, a crack.
+    PUNCH_FEEL: {
+      jab: { stop: 2, spark: 0.7, ring: 16, shake: 2, snd: "hit_jab" },
+      jab3: { stop: 3, spark: 1, ring: 24, shake: 3, snd: "hit" },
+      hook: { stop: 4, spark: 1.25, ring: 32, shake: 5, snd: "hit_hook" },
+      cross: { stop: 6, spark: 1.5, ring: 42, shake: 8, snd: "hit_cross" },
+      guard: { stop: 1, spark: 0.5, ring: 0, shake: 1, snd: "hit_jab" },
+      counter: { stop: 11, spark: 2.2, ring: 72, shake: 14, snd: "counter_hit" }
+    },
+    punchFeel: (type, counter) => {
+      const F2 = CONSTANTS.PUNCH_FEEL;
+      if (counter) return F2.counter;
+      if (type === "jab1" || type === "jab2") return F2.jab;
+      if (type === "guard_jab") return F2.guard;
+      if (type === "check_hook") return F2.hook;
+      return F2[type] || F2.jab3;
+    },
+    // v20 HEAT: optional run modifiers, each adding to a score multiplier.
+    HEAT: {
+      relentlessCooldownMult: 0.8,
+      glassJawMult: 1.25,
+      platedJabMult: 0.5,
+      mods: [
+        { id: "relentless", name: "RELENTLESS", desc: "Enemies recover 20% faster between attacks.", bonus: 0.2 },
+        { id: "plated", name: "PLATED", desc: "Grunts shrug off half of every Jab.", bonus: 0.15 },
+        { id: "crowded", name: "CROWDED", desc: "An extra Grunt joins most waves.", bonus: 0.2 },
+        { id: "glass_jaw", name: "GLASS JAW", desc: "You take 25% more damage.", bonus: 0.2 },
+        { id: "no_mercy", name: "NO MERCY", desc: "No healing \u2014 only the ten-count gets you back up.", bonus: 0.25 },
+        { id: "one_count", name: "ONE COUNT", desc: "No ten-count: your first knockdown ends the run.", bonus: 0.3 }
+      ]
+    },
+    // v20 HP SCALING. It used to be +10% enemy HP per stage with no cap (≈4.4× by
+    // Arc 5, bosses 1000 → 3800) while the Striker's punches never hit harder —
+    // Power ranks add knockback, not damage. Regular enemies now keep their HP
+    // (difficulty comes from speed, density, new types, affixes); bosses grow a
+    // modest step per Arc, capped at Arc 5.
+    ENEMY_HP_PER_ARC: 0,
+    BOSS_HP: { base: 1e3, perArc: 0.15, capArc: 5 },
+    enemyHpMult: (stage2) => 1 + (Math.min(CONSTANTS.getArcIndex(stage2), 5) - 1) * CONSTANTS.ENEMY_HP_PER_ARC,
+    bossHp: (stage2) => Math.round(CONSTANTS.BOSS_HP.base * (1 + (Math.min(CONSTANTS.getArcIndex(stage2), CONSTANTS.BOSS_HP.capArc) - 1) * CONSTANTS.BOSS_HP.perArc)),
     // SINGLE SOURCE OF TRUTH for slip windows. This used to be duplicated with
     // slightly different hardcoded numbers in player.js (the real gameplay check),
     // enemies.js (the red/white telegraph + danger-ring visuals), and draw.js (the
@@ -781,10 +823,12 @@
     flashIntensity: 1,
     // 0..1 multiplier
     hitStop: true,
-    reducedMotion: false
+    reducedMotion: false,
+    tellShapes: false
+    // v20 colour-blind aid: wind-up = dashed lane, SLIP NOW = chevrons
   });
   var UNIT_KEYS = ["masterVolume", "musicVolume", "sfxVolume", "screenShake", "flashIntensity"];
-  var BOOL_KEYS = ["hitStop", "reducedMotion"];
+  var BOOL_KEYS = ["hitStop", "reducedMotion", "tellShapes"];
   function safeGet(key) {
     try {
       const raw = localStorage.getItem(key);
@@ -1023,6 +1067,24 @@
         f1 = 200;
         f2 = 50;
         v1 = 0.3;
+      } else if (type === "hit_jab") {
+        f1 = 320;
+        f2 = 120;
+        t = 0.07;
+        v1 = 0.18;
+      } else if (type === "hit_hook") {
+        tone("square", 180, 45, 0.16, 0.28, 0.01);
+        tone("triangle", 900, 300, 0.05, 0.06, 1e-3);
+        return;
+      } else if (type === "hit_cross") {
+        tone("square", 140, 32, 0.24, 0.34, 0.01);
+        tone("sine", 70, 30, 0.3, 0.3, 0.01);
+        return;
+      } else if (type === "counter_hit") {
+        tone("sawtooth", 3200, 400, 0.12, 0.16, 1e-3);
+        tone("square", 110, 28, 0.4, 0.38, 0.01);
+        tone("sine", 55, 25, 0.5, 0.35, 0.01);
+        return;
       } else if (type === "beat_tick") {
         sq = "sine";
         f1 = 1760;
@@ -1224,12 +1286,16 @@
     if (gameState.scorePops.length > 24) gameState.scorePops.shift();
     gameState.scorePops.push({ x: x + (Math.random() * 30 - 15), y, text: `+${pts.toLocaleString()}`, life: 1, big });
   }
-  function createImpact(x, y, color) {
-    if (gameState.particles.length > 100) return;
-    let count = gameState.particles.length > 80 ? 3 : 5;
-    for (let i = 0; i < count; i++) {
-      gameState.particles.push({ x, y, vx: (Math.random() - 0.5) * 20, vy: (Math.random() - 0.5) * 20, life: 1, color: color || "#fff", type: "spark" });
+  function createImpact(x, y, color, scale = 1) {
+    if (gameState.particles.length > 120) return;
+    let count2 = Math.round((gameState.particles.length > 80 ? 3 : 5) * scale);
+    for (let i = 0; i < count2; i++) {
+      gameState.particles.push({ x, y, vx: (Math.random() - 0.5) * 20 * scale, vy: (Math.random() - 0.5) * 20 * scale, life: 1, color: color || "#fff", type: "spark", size: Math.max(3, Math.round(4 * scale)) });
     }
+  }
+  function createHitRing(x, y, color, radius) {
+    if (!radius) return;
+    gameState.particles.push({ x, y, vx: 0, vy: 0, life: 0.5, color: color || "#fff", type: "ring", r0: radius * 0.35, r1: radius });
   }
   function createVacuum(cx, cy) {
     for (let i = 0; i < 15; i++) {
@@ -1331,6 +1397,41 @@
     if (gameState.orbPulse > 0) gameState.orbPulse--;
   }
 
+  // src/systems/heat.js
+  var KEY = "neon_strike_heat_v1";
+  function heatOn(id) {
+    return !!(gameState.heat && gameState.heat.includes(id));
+  }
+  function heatMultFor(ids) {
+    return 1 + (ids || []).reduce((n, id) => n + ((CONSTANTS.HEAT.mods.find((m) => m.id === id) || {}).bonus || 0), 0);
+  }
+  function heatMult() {
+    return heatMultFor(gameState.heat);
+  }
+  function heatLevel(ids = gameState.heat) {
+    return (ids || []).length;
+  }
+  function loadHeat() {
+    try {
+      const a = JSON.parse(localStorage.getItem(KEY) || "[]");
+      return Array.isArray(a) ? a.filter((id) => CONSTANTS.HEAT.mods.some((m) => m.id === id)) : [];
+    } catch (e) {
+      return [];
+    }
+  }
+  function saveHeat(ids) {
+    try {
+      localStorage.setItem(KEY, JSON.stringify(ids));
+    } catch (e) {
+    }
+  }
+  function toggleHeat(id) {
+    const cur = loadHeat();
+    const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
+    saveHeat(next);
+    return next;
+  }
+
   // src/systems/score.js
   var SC = CONSTANTS.SCORE;
   function comboMultiplier(combo) {
@@ -1346,7 +1447,7 @@
   function addScore(base, x, y, opts = {}) {
     if (!base || base <= 0) return 0;
     const mult = opts.noCombo ? wagerMultiplier() : currentMultiplier();
-    const pts = Math.round(base * mult);
+    const pts = Math.round(base * mult * heatMult());
     gameState.score = (gameState.score || 0) + pts;
     if (x !== void 0 && y !== void 0 && !opts.silent) spawnScorePop(x, y, pts, !!opts.big);
     return pts;
@@ -1379,6 +1480,2637 @@
     if (d > 0) return { text: `+${d.toLocaleString()} OVER YOUR BEST`, kind: "up" };
     if (d === 0) return { text: "TIED YOUR BEST", kind: "even" };
     return { text: `${Math.abs(d).toLocaleString()} SHORT OF YOUR BEST`, kind: "down" };
+  }
+
+  // src/systems/arc_par.js
+  var KEY2 = "neon_strike_arc_medals_v1";
+  var ARC_PAR = {
+    1: { time: 330, score: 7e4 },
+    2: { time: 540, score: 16e4 },
+    3: { time: 600, score: 26e4 },
+    4: { time: 660, score: 38e4 },
+    5: { time: 720, score: 52e4 }
+  };
+  var MEDALS = {
+    gold: { label: "GOLD", color: "#facc15", bonus: 5e3, rank: 3 },
+    silver: { label: "SILVER", color: "#e5e7eb", bonus: 2500, rank: 2 },
+    bronze: { label: "BRONZE", color: "#d97706", bonus: 1e3, rank: 1 }
+  };
+  function parFor(arc) {
+    return ARC_PAR[Math.min(Math.max(1, arc), 5)];
+  }
+  function arcParStart() {
+    gameState.arcFrames = 0;
+    gameState.arcStartScore = gameState.score || 0;
+  }
+  function arcParTick() {
+    gameState.arcFrames = (gameState.arcFrames || 0) + 1;
+  }
+  function arcLive() {
+    const arc = CONSTANTS.getArcIndex(gameState.currentStage);
+    return { arc, par: parFor(arc), secs: Math.floor((gameState.arcFrames || 0) / 60), score: (gameState.score || 0) - (gameState.arcStartScore || 0) };
+  }
+  function medalFor(par, secs, score) {
+    const fast = secs <= par.time, rich = score >= par.score;
+    return fast && rich ? "gold" : fast || rich ? "silver" : "bronze";
+  }
+  function loadMedals() {
+    try {
+      return JSON.parse(localStorage.getItem(KEY2) || "{}") || {};
+    } catch (e) {
+      return {};
+    }
+  }
+  function saveMedals(m) {
+    try {
+      localStorage.setItem(KEY2, JSON.stringify(m));
+    } catch (e) {
+    }
+  }
+  function judgeArc(arc) {
+    const par = parFor(arc);
+    const secs = Math.floor((gameState.arcFrames || 0) / 60), score = (gameState.score || 0) - (gameState.arcStartScore || 0);
+    const medal = medalFor(par, secs, score);
+    const best = loadMedals();
+    const prev = best[arc];
+    const isBest = !prev || MEDALS[medal].rank > MEDALS[prev].rank;
+    if (isBest && !gameState.practice) {
+      best[arc] = medal;
+      saveMedals(best);
+    }
+    return { arc, medal, secs, score, par, isBest };
+  }
+  var fmtSecs = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  var fmtK = (n) => n >= 1e3 ? `${Math.round(n / 1e3)}K` : String(n);
+
+  // src/systems/tutorial.js
+  function triggerTutorial(id, title, text) {
+    if (gameState.seenTutorials[id]) return;
+    gameState.seenTutorials[id] = true;
+    gameState.screen = "tutorial";
+    const titleElem = document.getElementById("tutorial-title");
+    const textElem = document.getElementById("tutorial-text");
+    const screenElem = document.getElementById("tutorial-screen");
+    if (titleElem) titleElem.innerText = title;
+    if (textElem) textElem.innerHTML = text;
+    if (screenElem) screenElem.style.display = "flex";
+  }
+  function dismissTutorial() {
+    gameState.screen = "playing";
+    const screenElem = document.getElementById("tutorial-screen");
+    if (screenElem) screenElem.style.display = "none";
+    gameState.tutorialGrace = 0;
+  }
+  function spawnTutorialEnemy(type) {
+    gameState.spawnTotal++;
+    gameState.player.lane = 1;
+    gameState.player.y = gameState.height * CONSTANTS.LANE_Y[gameState.player.lane];
+    gameState.player.x = 180;
+    let color = "#ff0055";
+    let hp = 45;
+    let speed = 2;
+    let cooldown = 60;
+    let weight = 1;
+    let enemyType = "grunt";
+    let spawnX = gameState.width + 100;
+    switch (type) {
+      case "slip":
+        color = "#ff0055";
+        speed = 4;
+        cooldown = 60;
+        break;
+      case "counter":
+        color = "#ffaa00";
+        speed = 1.5;
+        cooldown = 120;
+        gameState.player.slipBuff = 1;
+        spawnX = gameState.player.x + 100;
+        break;
+      case "ghost_step":
+        color = "#888888";
+        speed = 5.5;
+        spawnX = gameState.player.x + 100;
+        break;
+      case "shield":
+        color = "#ffaa00";
+        hp = 80;
+        speed = 1.5;
+        cooldown = 80;
+        enemyType = "shield";
+        spawnX = gameState.player.x + 130;
+        break;
+      case "guard":
+        color = "#aa00ff";
+        hp = 30;
+        speed = 5.5;
+        cooldown = 35;
+        enemyType = "assassin";
+        break;
+    }
+    gameState.enemies.push({
+      x: spawnX,
+      lane: 1,
+      y: gameState.player.y,
+      w: 50,
+      h: 110,
+      hp,
+      maxHp: hp,
+      speed,
+      color,
+      weight,
+      type: enemyType,
+      stun: 0,
+      stunResist: 0,
+      attackCooldown: cooldown,
+      maxCooldown: cooldown,
+      pressure: 0,
+      pressureDecay: 0,
+      isBoss: false,
+      tutorialType: type,
+      justAttacked: 0,
+      trails: [],
+      trailTimer: 0,
+      vx: 0
+    });
+  }
+
+  // src/systems/rng.js
+  var _state = Math.random() * 4294967295 >>> 0;
+  function seedRng(seed) {
+    _state = seed >>> 0;
+    if (_state === 0) _state = 2654435769;
+  }
+  function random() {
+    _state |= 0;
+    _state = _state + 1831565813 | 0;
+    let t = Math.imul(_state ^ _state >>> 15, 1 | _state);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  }
+  function dailySeedFromDate(date = /* @__PURE__ */ new Date()) {
+    const y = date.getUTCFullYear(), m = date.getUTCMonth() + 1, d = date.getUTCDate();
+    return y * 1e4 + m * 100 + d;
+  }
+  function todayKey(date = /* @__PURE__ */ new Date()) {
+    const y = date.getUTCFullYear(), m = String(date.getUTCMonth() + 1).padStart(2, "0"), d = String(date.getUTCDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+
+  // src/systems/waves.js
+  function applyFormations(defs, arcIndex) {
+    const out = defs.map((e) => ({ ...e }));
+    let added = 0;
+    const cap = CONSTANTS.FORMATION_RULES.maxAddsPerPacket || 2;
+    const coveredInFront = (lane, d) => out.some((e) => (e.t === "shield" || e.t === "bruiser") && e.l === lane && e.d < d);
+    const pBarricade = CONSTANTS.formationChance("barricade", arcIndex);
+    const pScreen = CONSTANTS.formationChance("screen", arcIndex);
+    for (const e of defs) {
+      if (added >= cap) break;
+      if (e.t === "zoner") {
+        if (random() < pBarricade && !coveredInFront(e.l, e.d)) {
+          out.push({ t: "shield", l: e.l, d: Math.max(0, (e.d || 0) - 30) });
+          added++;
+        }
+      }
+    }
+    for (const e of defs) {
+      if (added >= cap) break;
+      if (e.t === "assassin") {
+        if (random() < pScreen && !coveredInFront(e.l, e.d)) {
+          out.push({ t: "shield", l: e.l, d: Math.max(0, (e.d || 0) - 25) });
+          added++;
+        }
+      }
+    }
+    return out;
+  }
+  var ARC_BASE_LEVELS = {
+    1: {
+      // SHATTERED CATHEDRAL (Fundamentals)
+      speedMult: 1,
+      packets: [
+        [{ t: "grunt", l: 1, d: 0 }, { t: "grunt", l: 0, d: 50 }, { t: "grunt", l: 2, d: 100 }, { b: 60, th: 1 }],
+        [{ t: "grunt", l: 0, d: 0 }, { t: "grunt", l: 2, d: 45 }, { t: "grunt", l: 1, d: 90 }, { t: "grunt", l: 1, d: 135 }, { b: 60, th: 1 }],
+        [{ t: "shield", l: 1, d: 0 }, { t: "grunt", l: 0, d: 60 }, { t: "grunt", l: 2, d: 120 }, { t: "grunt", l: 1, d: 180 }, { b: 70, th: 1 }],
+        [{ t: "grunt", l: 0, d: 0 }, { t: "grunt", l: 2, d: 50 }, { t: "shield", l: 1, d: 100 }, { t: "grunt", l: 1, d: 150 }, { b: 90, th: 0 }]
+      ]
+    },
+    2: {
+      // GLASS RELIQUARY (Lane Awareness)
+      speedMult: 1.05,
+      packets: [
+        [{ t: "assassin", l: 1, d: 0 }, { t: "grunt", l: 0, d: 45 }, { t: "grunt", l: 2, d: 90 }, { b: 60, th: 1 }],
+        [{ t: "grunt", l: 0, d: 0 }, { t: "assassin", l: 2, d: 40 }, { t: "grunt", l: 1, d: 80 }, { t: "assassin", l: 0, d: 120 }, { b: 60, th: 1 }],
+        [{ t: "shield", l: 1, d: 0 }, { t: "assassin", l: 0, d: 50 }, { t: "assassin", l: 2, d: 100 }, { t: "grunt", l: 1, d: 150 }, { b: 60, th: 1 }],
+        [{ t: "assassin", l: 1, d: 0 }, { t: "assassin", l: 0, d: 35 }, { t: "assassin", l: 2, d: 70 }, { t: "grunt", l: 1, d: 110 }, { t: "grunt", l: 0, d: 150 }, { b: 90, th: 0 }]
+      ]
+    },
+    3: {
+      // ASHEN CLOISTER (Target Prioritization)
+      speedMult: 1.1,
+      packets: [
+        [{ t: "shield", l: 1, d: 0 }, { t: "zoner", l: 1, d: 50 }, { t: "grunt", l: 0, d: 100 }, { t: "grunt", l: 2, d: 150 }, { b: 60, th: 1 }],
+        [{ t: "bruiser", l: 1, d: 0 }, { t: "grunt", l: 0, d: 50 }, { t: "grunt", l: 2, d: 100 }, { t: "assassin", l: 1, d: 150 }, { b: 60, th: 1 }],
+        [{ t: "zoner", l: 0, d: 0 }, { t: "zoner", l: 2, d: 30 }, { t: "assassin", l: 1, d: 70 }, { t: "grunt", l: 1, d: 110 }, { b: 50, th: 2 }],
+        [{ t: "shield", l: 0, d: 0 }, { t: "shield", l: 2, d: 40 }, { t: "zoner", l: 1, d: 80 }, { t: "bruiser", l: 1, d: 140 }, { b: 70, th: 1 }],
+        [{ t: "bruiser", l: 1, d: 0 }, { t: "zoner", l: 0, d: 50 }, { t: "zoner", l: 2, d: 90 }, { t: "assassin", l: 1, d: 130 }, { t: "assassin", l: 0, d: 170 }, { b: 90, th: 0 }]
+      ]
+    },
+    4: {
+      // MIDNIGHT CAUSEWAY (The Flowing River)
+      speedMult: 1.15,
+      packets: [
+        [{ t: "assassin", l: 1, d: 0 }, { t: "assassin", l: 0, d: 40 }, { t: "assassin", l: 2, d: 40 }, { t: "grunt", l: 1, d: 100 }, { b: 40, th: 2 }],
+        [{ t: "assassin", l: 0, d: 0 }, { t: "assassin", l: 2, d: 30 }, { t: "grunt", l: 1, d: 80 }, { t: "assassin", l: 1, d: 120 }, { t: "grunt", l: 0, d: 160 }, { b: 50, th: 2 }],
+        [{ t: "grunt", l: 0, d: 0 }, { t: "grunt", l: 1, d: 30 }, { t: "grunt", l: 2, d: 60 }, { t: "assassin", l: 1, d: 100 }, { t: "assassin", l: 0, d: 140 }, { t: "assassin", l: 2, d: 140 }, { b: 60, th: 2 }],
+        [{ t: "shield", l: 1, d: 0 }, { t: "assassin", l: 0, d: 40 }, { t: "assassin", l: 2, d: 40 }, { t: "bruiser", l: 1, d: 100 }, { b: 60, th: 1 }],
+        [{ t: "assassin", l: 1, d: 0 }, { t: "grunt", l: 0, d: 40 }, { t: "assassin", l: 2, d: 80 }, { t: "grunt", l: 1, d: 120 }, { t: "assassin", l: 0, d: 160 }, { t: "grunt", l: 2, d: 200 }, { b: 90, th: 0 }]
+      ]
+    },
+    5: {
+      // ABYSS RAIL (Crack the Formation)
+      speedMult: 1.2,
+      packets: [
+        [{ t: "shield", l: 1, d: 0 }, { t: "zoner", l: 1, d: 40 }, { t: "grunt", l: 0, d: 80 }, { t: "grunt", l: 2, d: 80 }, { t: "assassin", l: 1, d: 140 }, { b: 60, th: 2 }],
+        [{ t: "zoner", l: 0, d: 0 }, { t: "zoner", l: 2, d: 0 }, { t: "shield", l: 1, d: 40 }, { t: "grunt", l: 0, d: 90 }, { t: "grunt", l: 2, d: 90 }, { b: 60, th: 2 }],
+        [{ t: "shield", l: 0, d: 0 }, { t: "shield", l: 2, d: 0 }, { t: "zoner", l: 0, d: 60 }, { t: "zoner", l: 2, d: 60 }, { t: "assassin", l: 1, d: 120 }, { b: 60, th: 1 }],
+        [{ t: "bruiser", l: 1, d: 0 }, { t: "zoner", l: 0, d: 40 }, { t: "zoner", l: 2, d: 40 }, { t: "grunt", l: 1, d: 100 }, { t: "assassin", l: 0, d: 140 }, { b: 70, th: 1 }],
+        [{ t: "shield", l: 0, d: 0 }, { t: "shield", l: 1, d: 0 }, { t: "shield", l: 2, d: 0 }, { t: "zoner", l: 1, d: 60 }, { t: "bruiser", l: 1, d: 150 }, { b: 90, th: 0 }]
+      ]
+    },
+    6: {
+      // THRONE OF STATIC (The Composure Exam)
+      speedMult: 1.25,
+      packets: [
+        [{ t: "assassin", l: 1, d: 0 }, { t: "shield", l: 0, d: 40 }, { t: "shield", l: 2, d: 40 }, { t: "grunt", l: 1, d: 100 }, { t: "zoner", l: 0, d: 140 }, { b: 50, th: 2 }],
+        [{ t: "shield", l: 1, d: 0 }, { t: "zoner", l: 1, d: 40 }, { t: "assassin", l: 0, d: 80 }, { t: "assassin", l: 2, d: 80 }, { t: "bruiser", l: 1, d: 140 }, { b: 50, th: 2 }],
+        [{ t: "grunt", l: 0, d: 0 }, { t: "grunt", l: 2, d: 0 }, { t: "assassin", l: 1, d: 40 }, { t: "zoner", l: 0, d: 100 }, { t: "zoner", l: 2, d: 100 }, { t: "shield", l: 1, d: 160 }, { b: 60, th: 1 }],
+        [{ t: "bruiser", l: 1, d: 0 }, { t: "shield", l: 0, d: 40 }, { t: "shield", l: 2, d: 40 }, { t: "zoner", l: 0, d: 100 }, { t: "zoner", l: 2, d: 100 }, { b: 60, th: 1 }],
+        [{ t: "assassin", l: 0, d: 0 }, { t: "assassin", l: 2, d: 30 }, { t: "shield", l: 1, d: 80 }, { t: "grunt", l: 0, d: 130 }, { t: "grunt", l: 2, d: 130 }, { t: "assassin", l: 1, d: 180 }, { b: 60, th: 1 }],
+        [{ t: "shield", l: 0, d: 0 }, { t: "shield", l: 1, d: 0 }, { t: "shield", l: 2, d: 0 }, { t: "zoner", l: 0, d: 80 }, { t: "zoner", l: 2, d: 80 }, { t: "bruiser", l: 1, d: 140 }, { b: 90, th: 0 }]
+      ]
+    }
+  };
+  function cloneEnemyDefs(packet) {
+    return packet.filter((e) => e.t).map((e) => ({ ...e }));
+  }
+  function markerOf(packet) {
+    return packet.find((e) => !e.t) || { b: 75, th: 1 };
+  }
+  function ruleEcho(enemies) {
+    if (!enemies.length) return enemies;
+    const last = enemies[enemies.length - 1];
+    const echoLane = (last.l + 1) % 3;
+    return [...enemies, { t: last.t === "zoner" ? "grunt" : last.t, l: echoLane, d: last.d + 55 }];
+  }
+  function rulePincerAndBruiser(enemies) {
+    let out = enemies.map((e) => ({ ...e }));
+    if (out.length >= 2 && out[0].l === out[1].l) out[1] = { ...out[1], l: (out[1].l + 1) % 3 };
+    if (!out.some((e) => e.t === "bruiser")) {
+      const midDelay = Math.round(out.reduce((s, e) => s + e.d, 0) / Math.max(1, out.length));
+      out.push({ t: "bruiser", l: 1, d: midDelay });
+    }
+    return out;
+  }
+  function ruleReadOverGuard(enemies) {
+    let assassinToggle = false;
+    return enemies.map((e) => {
+      if (e.t === "grunt") {
+        assassinToggle = !assassinToggle;
+        return assassinToggle ? { ...e, t: "assassin" } : e;
+      }
+      if (e.t === "zoner") return { ...e, d: Math.max(0, e.d - 20) };
+      return e;
+    });
+  }
+  function deriveArc(baseLevels, transforms, breatherCut, speedBump) {
+    const out = {};
+    for (const key of Object.keys(baseLevels)) {
+      const base = baseLevels[key];
+      const packets = base.packets.map((pkt) => {
+        var _a;
+        let enemies = cloneEnemyDefs(pkt);
+        for (const t of transforms) enemies = t(enemies);
+        const marker = markerOf(pkt);
+        const newB = Math.max(20, (marker.b || 75) - breatherCut);
+        const newTh = Math.max(0, ((_a = marker.th) != null ? _a : 1) - (breatherCut >= 20 ? 1 : 0));
+        return [...enemies, { b: newB, th: newTh }];
+      });
+      out[key] = { speedMult: +(base.speedMult * speedBump).toFixed(3), packets };
+    }
+    return out;
+  }
+  var ARC2_LEVELS = deriveArc(ARC_BASE_LEVELS, [ruleEcho], 12, 1.03);
+  var ARC3_LEVELS = deriveArc(ARC_BASE_LEVELS, [rulePincerAndBruiser], 16, 1.05);
+  var ARC4_LEVELS = deriveArc(ARC_BASE_LEVELS, [ruleReadOverGuard], 20, 1.04);
+  var ARC5_LEVELS = deriveArc(ARC_BASE_LEVELS, [ruleEcho, rulePincerAndBruiser, ruleReadOverGuard], 24, 1.08);
+  function compressLevel(level, keep, breather = 45) {
+    const packets = keep.map((pi, i) => {
+      var _a;
+      const pkt = level.packets[pi];
+      const enemies = cloneEnemyDefs(pkt);
+      const marker = markerOf(pkt);
+      const last = i === keep.length - 1;
+      return [...enemies, { b: last ? marker.b : Math.min(marker.b, breather), th: (_a = marker.th) != null ? _a : 1 }];
+    });
+    return { speedMult: level.speedMult, packets };
+  }
+  var ARC1_LEVELS = {
+    ...ARC_BASE_LEVELS,
+    1: compressLevel(ARC_BASE_LEVELS[1], [0, 2, 3]),
+    // grunts -> first armor -> mixed
+    2: compressLevel(ARC_BASE_LEVELS[2], [0, 2, 3]),
+    // assassin lead -> screened -> finale
+    3: compressLevel(ARC_BASE_LEVELS[3], [0, 1, 4]),
+    // zoner -> bruiser -> finale
+    6: compressLevel(ARC_BASE_LEVELS[6], [0, 1, 3, 5])
+    // the composure exam, trimmed
+  };
+  var ARC_WAVE_TABLES = { 1: ARC1_LEVELS, 2: ARC2_LEVELS, 3: ARC3_LEVELS, 4: ARC4_LEVELS, 5: ARC5_LEVELS };
+  function spawnEnemy() {
+    if (gameState.practice) return;
+    if (gameState.stageClearing || gameState.bossActive || gameState.bossIntroTimer > 0 || gameState.screen !== "playing" || gameState.purifyTimer > 0) return;
+    if (CONSTANTS.isBossStage(gameState.currentStage)) {
+      if (!gameState.bossActive && !gameState.stageClearing) {
+        gameState.stageClearing = true;
+        gameState.purifyTimer = 90;
+      }
+      return;
+    }
+    if (gameState.currentStage === 1 && gameState.tutorialEnabled) {
+      if (gameState.spawnTotal < 5) {
+        if (gameState.enemies.length > 0 || gameState.tutorialDelay > 0) return;
+        if (gameState.spawnTotal === 0) spawnTutorialEnemy("slip");
+        else if (gameState.spawnTotal === 1) spawnTutorialEnemy("counter");
+        else if (gameState.spawnTotal === 2) spawnTutorialEnemy("shield");
+        else if (gameState.spawnTotal === 3) spawnTutorialEnemy("guard");
+        else if (gameState.spawnTotal === 4) spawnTutorialEnemy("ghost_step");
+        return;
+      }
+      if (gameState.enemies.some((e) => e.tutorialType)) return;
+    }
+    if (gameState.pendingUpgrades > 0 && gameState.enemies.length === 0) return;
+    if (gameState.waveThreshold === void 0 || gameState.wavesCleared === 0) gameState.waveThreshold = 0;
+    if (gameState.enemies.length <= gameState.waveThreshold && gameState.tutorialDelay <= 0) {
+      if (gameState.waveTimer > 0) {
+        gameState.waveTimer--;
+        return;
+      }
+      const rawArcIndex = CONSTANTS.getArcIndex(gameState.currentStage);
+      const law = CONSTANTS.ARC_LAWS[Math.min(rawArcIndex, 5)] || CONSTANTS.ARC_LAWS[5];
+      const gm = law.globalMods;
+      let packetIndex = CONSTANTS.getLevelInArc(gameState.currentStage);
+      let levelData = ARC_WAVE_TABLES[Math.min(rawArcIndex, 5)][packetIndex];
+      if (gameState.wavesCleared >= levelData.packets.length) {
+        if (gameState.enemies.length === 0) {
+          gameState.stageClearing = true;
+          gameState.purifyTimer = 60;
+        }
+        return;
+      }
+      const affix = gameState.currentAffix;
+      const affixDelayMult = CONSTANTS.affixMod(affix, "packetDelayMult", 1);
+      const affixSubType = CONSTANTS.affixMod(affix, "gruntSub", null);
+      const affixSubEvery = CONSTANTS.affixMod(affix, "gruntSubEvery", 0);
+      let gruntSubCounter = 0;
+      gameState.stageSpeedMult = levelData.speedMult * gm.railSpeedMult * CONSTANTS.affixMod(affix, "speedMult", 1);
+      let packet = levelData.packets[gameState.wavesCleared];
+      gameState.wavesCleared++;
+      let nextBreather = Math.max(20, 75 - gm.maxBreatherCut);
+      let nextThreshold = 0;
+      const marker = packet.find((d) => !d.t);
+      if (marker) {
+        if (marker.b !== void 0) nextBreather = marker.b;
+        if (marker.th !== void 0) nextThreshold = marker.th;
+      }
+      const enemyDefs = applyFormations(packet.filter((d) => d.t), Math.min(rawArcIndex, 5));
+      enemyDefs.forEach((enemyDef) => {
+        gameState.spawnTotal++;
+        let type = enemyDef.t;
+        if (type === "grunt" && affixSubType && affixSubEvery > 0) {
+          if (gruntSubCounter % affixSubEvery === 0) type = affixSubType;
+          gruntSubCounter++;
+        }
+        gameState.enemies.push(makeEnemy(type, enemyDef.l, (enemyDef.d || 0) * gm.packetDelayMult * affixDelayMult));
+      });
+      if (heatOn("crowded") && enemyDefs.length && random() < 0.6) {
+        gameState.spawnTotal++;
+        gameState.enemies.push(makeEnemy("grunt", Math.floor(random() * 3), 45 + enemyDefs.length * 20));
+      }
+      gameState.waveTimer = nextBreather;
+      gameState.waveThreshold = nextThreshold;
+    }
+  }
+  function makeEnemy(type, lane, delayFrames = 0, opts = {}) {
+    const rawArcIndex = CONSTANTS.getArcIndex(gameState.currentStage);
+    const gm = (CONSTANTS.ARC_LAWS[Math.min(rawArcIndex, 5)] || CONSTANTS.ARC_LAWS[5]).globalMods;
+    let color = "#ff0055";
+    let hp = 45;
+    let speed = 3;
+    let cooldown = 60;
+    let weight = 1;
+    if (type === "bruiser") {
+      color = "#cc0000";
+      hp = 150;
+      speed = 1.8;
+      cooldown = 80;
+      weight = 2;
+    } else if (type === "shield") {
+      color = "#ffaa00";
+      hp = 80;
+      speed = 2.4;
+      weight = 1.5;
+    } else if (type === "zoner") {
+      color = "#00ff00";
+      hp = 40;
+      speed = 1.5;
+      cooldown = 100;
+    } else if (type === "assassin") {
+      color = "#aa00ff";
+      hp = 30;
+      speed = 4.5;
+      cooldown = 35;
+    }
+    hp = Math.floor(hp * CONSTANTS.enemyHpMult(gameState.currentStage) * gm.packetDensityMult);
+    if (type === "shield" || type === "bruiser") cooldown = Math.max(20, Math.round(cooldown * gm.enemyRecoveryMult));
+    speed *= gameState.stageSpeedMult;
+    if (gameState.laneTempo && gameState.laneTempo[lane] !== void 0) speed *= gameState.laneTempo[lane];
+    let spawnX = gameState.width + 50 + delayFrames * speed;
+    const PS = CONSTANTS.PUNCH_STRINGS, arcI = Math.min(rawArcIndex, 5);
+    let stringLen = 1;
+    if (opts.stringLen) stringLen = opts.stringLen;
+    else if (PS.types.includes(type) && (PS.chanceByArc[arcI] || 0) > 0 && random() < PS.chanceByArc[arcI]) stringLen = PS.lenByArc[arcI] || 2;
+    if (heatOn("relentless")) cooldown = Math.max(20, Math.round(cooldown * CONSTANTS.HEAT.relentlessCooldownMult));
+    return {
+      stringLen,
+      stringIdx: 0,
+      x: spawnX,
+      lane,
+      y: gameState.height * CONSTANTS.LANE_Y[lane],
+      w: type === "bruiser" ? 70 : 50,
+      h: type === "bruiser" ? 130 : 110,
+      hp,
+      maxHp: hp,
+      speed,
+      baseSpeed: speed,
+      color,
+      type,
+      weight,
+      stun: 0,
+      stunResist: 0,
+      attackCooldown: cooldown,
+      maxCooldown: cooldown,
+      isBoss: false,
+      justAttacked: 0,
+      trails: [],
+      trailTimer: 0,
+      vx: 0,
+      pressure: 0,
+      pressureDecay: 0,
+      menace: 0,
+      menaceLevel: 0
+    };
+  }
+
+  // src/systems/boss_rules.js
+  var BO = CONSTANTS.BOSS_OFFENSE;
+  function telegraphLead(en) {
+    const mult = en && en.arcMods && en.arcMods.punishWindowMult || 1;
+    return Math.max(BO.minTelegraphLead, Math.floor(BO.telegraphLead * mult));
+  }
+  function punishFrames(en, move) {
+    const mult = en && en.arcMods && en.arcMods.punishWindowMult || 1;
+    const base = BO.punishFrames[move] || BO.punishFrames.jab;
+    return Math.max(BO.minPunishFrames, Math.floor(base * mult));
+  }
+  function beginPunishWindow(en, move) {
+    const f = punishFrames(en, move);
+    en.recoverTimer = f;
+    en.recoverMax = f;
+    en.punishShown = false;
+    en.telegraphed = false;
+  }
+  function isBossOpen(en) {
+    if (!en || !en.isBoss) return false;
+    if ((en.recoverTimer || 0) > 0) return true;
+    return en.controller === "static_monk" && en.currentMove === "recharge";
+  }
+  function clampCycle(frames) {
+    return Math.max(BO.minTelegraphLead + 2, Math.round(frames));
+  }
+
+  // src/systems/telemetry.js
+  var KEY3 = "neon_strike_telemetry_v1";
+  var MAX_RUNS = 25;
+  var TELEMETRY_VERSION = "19.0.0";
+  var run = null;
+  var stage = null;
+  function safeGet2() {
+    try {
+      const r = localStorage.getItem(KEY3);
+      const a = r ? JSON.parse(r) : [];
+      return Array.isArray(a) ? a : [];
+    } catch (e) {
+      return [];
+    }
+  }
+  function safeSet2(a) {
+    try {
+      localStorage.setItem(KEY3, JSON.stringify(a));
+    } catch (e) {
+    }
+  }
+  var bump = (obj, k, n = 1) => {
+    obj[k] = (obj[k] || 0) + n;
+  };
+  function newStage(n) {
+    const arc = CONSTANTS.getArcIndex(n), lvl = CONSTANTS.getLevelInArc(n);
+    const t = CONSTANTS.ARC_STAGE_TABLES[Math.min(arc, 5)] || {};
+    return {
+      stage: n,
+      arc,
+      level: lvl,
+      name: t[lvl] && t[lvl].stageName || "",
+      boss: CONSTANTS.isBossStage(n),
+      frames: 0,
+      kills: {},
+      dmg: {},
+      hitsTaken: 0,
+      attacks: {},
+      landed: {},
+      slips: { perfect: 0, good: 0 },
+      ghosts: { used: 0, perfect: 0 },
+      guards: 0,
+      knockdowns: 0,
+      floored: 0,
+      counteredBy: 0,
+      finishers: [],
+      wager: null
+    };
+  }
+  function tmStartRun({ seed = null, daily = false } = {}) {
+    run = { v: TELEMETRY_VERSION, id: `${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`, date: (/* @__PURE__ */ new Date()).toISOString(), seed, daily, frames: 0, stages: [], evolutions: [], end: null };
+    stage = newStage(1);
+    run.stages.push(stage);
+  }
+  function tmStage(n) {
+    if (!run) return;
+    stage = newStage(n);
+    run.stages.push(stage);
+  }
+  function tmTick() {
+    if (!run || !stage) return;
+    run.frames++;
+    stage.frames++;
+  }
+  function tmKill(kind) {
+    if (stage) bump(stage.kills, kind);
+  }
+  function tmDamage(src, amt) {
+    if (!stage) return;
+    bump(stage.dmg, src || "unknown", Math.max(0, Math.round(amt)));
+    stage.hitsTaken++;
+    if (run) run.lastDamageSrc = src || "unknown";
+  }
+  function tmAttack(punch) {
+    if (stage) bump(stage.attacks, punch);
+  }
+  function tmLanded(punch) {
+    if (stage) bump(stage.landed, punch);
+  }
+  function tmSlip(quality) {
+    if (stage && stage.slips[quality] !== void 0) stage.slips[quality]++;
+  }
+  function tmGhost(perfect) {
+    if (!stage) return;
+    if (perfect) stage.ghosts.perfect++;
+    else stage.ghosts.used++;
+  }
+  function tmGuard() {
+    if (stage) stage.guards++;
+  }
+  function tmKnockdown() {
+    if (stage) stage.knockdowns++;
+  }
+  function tmFloored(counter) {
+    if (!stage) return;
+    stage.floored++;
+    if (counter) stage.counteredBy++;
+  }
+  function tmFinisher(kind, result, hits, prompts) {
+    if (stage) stage.finishers.push({ kind, result, hits, prompts });
+  }
+  function tmEvolution(id) {
+    if (run) run.evolutions.push({ stage: gameState.currentStage, frame: run.frames, id });
+  }
+  function tmWager(name) {
+    if (stage) stage.wager = name || null;
+  }
+  function tmArc(r) {
+    if (run) (run.arcs = run.arcs || []).push({ arc: r.arc, medal: r.medal, secs: r.secs, score: r.score });
+  }
+  function tmEndRun({ stage: endStage, score, grade }) {
+    if (!run) return null;
+    run.end = { stage: endStage, score, grade, frames: run.frames, cause: run.lastDamageSrc || "unknown" };
+    const all = safeGet2();
+    all.push(run);
+    safeSet2(all.slice(-MAX_RUNS));
+    const done = run;
+    run = null;
+    stage = null;
+    return done;
+  }
+  function liveRun() {
+    return run;
+  }
+  function loadTelemetry() {
+    return safeGet2();
+  }
+  function exportTelemetryJSON() {
+    return JSON.stringify({ exported: (/* @__PURE__ */ new Date()).toISOString(), game: "neon-strike", version: TELEMETRY_VERSION, runs: safeGet2() }, null, 2);
+  }
+  function fmtTime(frames) {
+    const s = Math.floor((frames || 0) / 60);
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  }
+  function summarizeTelemetry(runs) {
+    const ends = {}, hurt = {}, stageTime = {}, reached = {};
+    for (const r of runs) {
+      if (r.end) bump(ends, r.end.stage);
+      for (const s of r.stages || []) {
+        bump(reached, s.stage);
+        (stageTime[s.stage] = stageTime[s.stage] || []).push(s.frames);
+        for (const [k, v] of Object.entries(s.dmg || {})) bump(hurt, k, v);
+      }
+    }
+    const avgTime = {};
+    for (const [k, arr] of Object.entries(stageTime)) avgTime[k] = Math.round(arr.reduce((a, b) => a + b, 0) / arr.length);
+    const topHurt = Object.entries(hurt).sort((a, b) => b[1] - a[1]);
+    return { runs: runs.length, ends, reached, avgTime, topHurt };
+  }
+
+  // src/systems/finisher.js
+  var F = CONSTANTS.FINISHER;
+  var LANE_STEP = { up: -1, down: 1 };
+  function finisherSequence(controller, kind) {
+    const set = F.sequences[controller] || F.sequences.neon_enforcer;
+    return set[kind] || set.break1;
+  }
+  function gateBossDamage(en, dmg) {
+    if (!en || !en.isBoss || en.koDone || gameState.finisher || en.pendingFinisher) return dmg;
+    const stage2 = en.finisherStage || 0;
+    if (stage2 < F.thresholds.length) {
+      const line = en.maxHp * F.thresholds[stage2];
+      if (en.hp - dmg <= line) {
+        en.finisherStage = stage2 + 1;
+        en.pendingFinisher = "break" + (stage2 + 1);
+        return Math.max(0, en.hp - line);
+      }
+    }
+    if (en.hp - dmg <= 0) {
+      en.pendingFinisher = "ko";
+      return Math.max(0, en.hp - 1);
+    }
+    return dmg;
+  }
+  function checkBossThresholds(en) {
+    if (!en || !en.isBoss || en.koDone || gameState.finisher || en.pendingFinisher) return;
+    const stage2 = en.finisherStage || 0;
+    if (en.hp <= 0) {
+      en.hp = 1;
+      en.pendingFinisher = "ko";
+      return;
+    }
+    if (stage2 < F.thresholds.length && en.hp <= en.maxHp * F.thresholds[stage2]) {
+      en.finisherStage = stage2 + 1;
+      en.pendingFinisher = "break" + (stage2 + 1);
+    }
+  }
+  function startFinisher(en, kind) {
+    const seq = finisherSequence(en.controller, kind).slice();
+    let dmgPerHit = 0;
+    if (kind !== "ko") {
+      const nextStage = en.finisherStage || 0;
+      const floorFrac = nextStage < F.thresholds.length ? F.thresholds[nextStage] + 0.02 : 0.02;
+      const budget = Math.max(0, Math.min(en.maxHp * F.breakDamageFrac, en.hp - en.maxHp * floorFrac));
+      dmgPerHit = budget / seq.length;
+    }
+    gameState.finisher = {
+      boss: en,
+      kind,
+      seq,
+      idx: 0,
+      phase: "intro",
+      frame: 0,
+      timer: F.introFrames,
+      nextBeat: 0,
+      hits: 0,
+      perfects: 0,
+      result: null,
+      dmgPerHit,
+      zoom: 1,
+      bars: 0,
+      freeze: 0,
+      poseTimer: 0,
+      judge: null,
+      judgeTimer: 0,
+      jabAlt: false,
+      landed: [],
+      playIdx: 0,
+      playTimer: 0,
+      lockFlash: 0
+    };
+    const p = gameState.player;
+    p.state = "idle";
+    p.punchTimer = 0;
+    p.hitFrame = 0;
+    p.inputBuffer = null;
+    p.movementBuffer = null;
+    p.lane = 1;
+    p.x = Math.min(Math.max(p.x, 160), 300);
+    en.lane = 1;
+    en.x = p.x + 118;
+    en.vx = 0;
+    en.stun = 0;
+    const midY = gameState.height * CONSTANTS.LANE_Y[1];
+    en.y = midY;
+    p.y = midY;
+    en.recoverTimer = 0;
+    en.telegraphed = false;
+    en.shiftWarning = 0;
+    en.exposedTimer = 0;
+    en.decoyTimer = 0;
+    en.targetLanes = [];
+    en.justAttacked = 0;
+    gameState.hazards = [];
+    gameState.liveLanes = [];
+    gameState.hitstop = 0;
+    const label = kind === "ko" ? "FINAL BLOW" : "STAGGERED!";
+    spawnFloatingText(en.x + en.w / 2, en.y - 190, label, kind === "ko" ? "#ff0055" : "#ffffff");
+    playSound("stagger");
+    doFlash(kind === "ko" ? 0.7 : 0.5);
+    triggerShockwave(en.x, en.y - 60, gameState.bossThemeColor || "#ffffff");
+    createShatter(en.x, en.y - 60, gameState.bossThemeColor || "#ffffff");
+    gameState.shake = Math.max(gameState.shake, 20);
+  }
+  function justPressed(code) {
+    return !!gameState.keys[code] && !gameState.lastKeys[code];
+  }
+  function readFinisherInput() {
+    const K2 = getBinds();
+    if (justPressed(K2.up) || gameState.pad.up) return "up";
+    if (justPressed(K2.down) || gameState.pad.down) return "down";
+    if (justPressed(K2.jab) || gameState.pad.jab) return "jab";
+    if (justPressed(K2.cross) || gameState.pad.cross) return "cross";
+    if (justPressed(K2.hook) || gameState.pad.hook) return "hook";
+    return null;
+  }
+  var ease = (t) => 1 - Math.pow(1 - Math.min(1, Math.max(0, t)), 3);
+  function judge(text, color) {
+    const f = gameState.finisher;
+    f.judge = { text, color };
+    f.judgeTimer = 34;
+  }
+  var PLAY_GAP = 17;
+  function recordPrompt(isPerfect) {
+    const f = gameState.finisher;
+    f.landed.push({ move: f.seq[f.idx], perfect: isPerfect });
+    judge(isPerfect ? "PERFECT" : "GOOD", isPerfect ? "#ffffff" : "#22d3ee");
+    playSound(isPerfect ? "perfect_slip" : "slip");
+    f.lockFlash = 10;
+    f.idx++;
+    if (f.idx >= f.seq.length) endInput("clean");
+    else f.nextBeat += F.beatFrames;
+  }
+  function endInput(result) {
+    const f = gameState.finisher;
+    f.result = result;
+    if (f.landed.length) {
+      f.phase = "playback";
+      f.playIdx = 0;
+      f.playTimer = 14;
+      f.judge = null;
+    } else endPrompts(result);
+  }
+  function landPrompt(isPerfect, moveOverride) {
+    const f = gameState.finisher, en = f.boss, p = gameState.player;
+    const move = moveOverride || f.seq[f.idx];
+    if (move in LANE_STEP) {
+      const old = { x: en.x, y: en.y };
+      p.lane += LANE_STEP[move];
+      p.slipCooldown = 20;
+      en.lane = p.lane;
+      createShatter(old.x, old.y - 60, gameState.bossThemeColor || "#ffffff");
+      p.state = "punching";
+      p.punchType = "cross";
+      p.hitFrame = 0;
+      p.didHit = true;
+    } else {
+      p.state = "punching";
+      p.punchType = move === "jab" ? (f.jabAlt = !f.jabAlt) ? "jab1" : "jab2" : move;
+      p.hitFrame = 0;
+      p.didHit = true;
+    }
+    f.poseTimer = 12;
+    if (f.kind !== "ko") en.hp = Math.max(1, en.hp - f.dmgPerHit);
+    f.hits++;
+    gameState.statFinisherHits = (gameState.statFinisherHits || 0) + 1;
+    if (isPerfect) f.perfects++;
+    gameState.combo++;
+    if (gameState.combo > gameState.statMaxCombo) gameState.statMaxCombo = gameState.combo;
+    addScore(CONSTANTS.SCORE.finisherHit + (isPerfect ? CONSTANTS.SCORE.finisherPerfect : 0), en.x + en.w / 2, en.y - 150, { big: true });
+    judge(isPerfect ? "PERFECT" : "GREAT", isPerfect ? "#ffffff" : "#22d3ee");
+    playSound("finisher_hit");
+    doFlash(isPerfect ? 0.45 : 0.3);
+    gameState.shake = Math.max(gameState.shake, isPerfect ? 26 : 18);
+    triggerShockwave(en.x, en.y - 60, isPerfect ? "#ffffff" : gameState.bossThemeColor || "#ff0055");
+    createShatter(en.x, en.y - 70, isPerfect ? "#ffffff" : gameState.bossThemeColor || "#ff0055");
+    for (let i = 0; i < 3; i++) createImpact(en.x, en.y - 60 - i * 20, "#ffffff");
+    if (en.controller === "live_wire") {
+      createImpact(en.x + 30, en.y - 80, "#fff36b");
+      createImpact(en.x + 10, en.y - 40, "#fff36b");
+      playSound("shock");
+    }
+    f.freeze = hitStopEnabled() ? isPerfect ? 9 : 6 : 0;
+  }
+  function missPrompt(reason) {
+    judge(reason, "#ff8800");
+    playSound("finisher_miss");
+    endInput("broken");
+  }
+  function endPrompts(result) {
+    const f = gameState.finisher;
+    tmFinisher(f.kind, result, f.landed ? f.landed.length : f.hits, f.seq.length);
+    f.result = result;
+    f.phase = "outro";
+    f.timer = F.outroFrames;
+    const en = f.boss;
+    if (result === "clean") {
+      gameState.statFinishersClean = (gameState.statFinishersClean || 0) + 1;
+      addScore(CONSTANTS.SCORE.finisherClean, en.x + en.w / 2, en.y - 210, { big: true });
+      spawnFloatingText(en.x + en.w / 2, en.y - 230, f.kind === "ko" ? "FLAWLESS FINISH" : "FULL BREAK!", "#facc15");
+    } else if (f.kind !== "ko") {
+      spawnFloatingText(en.x + en.w / 2, en.y - 230, "STAGGER BROKEN", "#ff8800");
+    }
+    if (f.kind === "ko") {
+      playSound("finisher_ko");
+      doFlash(0.8);
+      gameState.shake = Math.max(gameState.shake, 40);
+      for (let i = 0; i < 3; i++) triggerShockwave(en.x, en.y - 60 - i * 10, i === 1 ? "#ffffff" : gameState.bossThemeColor || "#ff0055");
+      spawnFloatingText(en.x + en.w / 2, en.y - 260, "K.O.", "#ffffff");
+    }
+  }
+  function finishFinisher() {
+    const f = gameState.finisher, en = f.boss, p = gameState.player;
+    p.state = "idle";
+    p.punchType = null;
+    if (f.kind === "ko") {
+      en.koDone = true;
+      en.hp = 0;
+    } else {
+      en.x = Math.min(gameState.width - 150, en.x + 150);
+      en.stun = 0;
+      en.stunResist = 60;
+      en.recoverTimer = 0;
+      en.telegraphed = false;
+      en.attackCooldown = (en.maxCooldown || 60) + 40;
+      if (en.controller === "static_monk") {
+        en.currentMove = "laser";
+        en.attackCooldown = 110;
+        en.bossMashCount = 0;
+      }
+    }
+    gameState.finisher = null;
+    gameState.finisherZoom = 1;
+  }
+  function updateFinisher() {
+    const f = gameState.finisher;
+    if (!f) return;
+    f.frame++;
+    if (f.judgeTimer > 0) f.judgeTimer--;
+    if (f.freeze > 0) f.freeze--;
+    if (f.poseTimer > 0 && --f.poseTimer === 0) gameState.player.state = "idle";
+    gameState.player.y += (gameState.height * CONSTANTS.LANE_Y[gameState.player.lane] - gameState.player.y) * 0.35;
+    f.boss.y += (gameState.height * CONSTANTS.LANE_Y[f.boss.lane] - f.boss.y) * 0.35;
+    if (gameState.player.slipCooldown > 0) gameState.player.slipCooldown--;
+    if (f.phase === "intro") {
+      f.timer--;
+      const k = ease(1 - f.timer / F.introFrames);
+      f.zoom = 1 + (F.zoom - 1) * k;
+      f.bars = k;
+      if (f.timer <= 0) {
+        f.phase = "prompts";
+        f.nextBeat = f.frame + F.beatFrames * F.leadBeats;
+      }
+    } else if (f.phase === "playback") {
+      f.zoom = F.zoom;
+      f.bars = 1;
+      if (f.freeze <= 0 && --f.playTimer <= 0) {
+        const hit = f.landed[f.playIdx++];
+        if (hit) {
+          landPrompt(hit.perfect, hit.move);
+          f.playTimer = PLAY_GAP;
+        } else endPrompts(f.result);
+      }
+    } else if (f.phase === "prompts") {
+      f.zoom = F.zoom;
+      f.bars = 1;
+      if (f.lockFlash > 0) f.lockFlash--;
+      const t = f.frame - f.nextBeat;
+      if (t === 0) playSound("beat_tick");
+      const input = readFinisherInput();
+      const want = f.seq[f.idx];
+      if (input) {
+        if (t < -F.windowEarly) missPrompt("TOO EARLY");
+        else if (input !== want) missPrompt("WRONG MOVE");
+        else recordPrompt(Math.abs(t) <= F.perfectWindow);
+      } else if (t > F.windowLate) {
+        missPrompt("MISSED");
+      }
+    } else if (f.phase === "outro") {
+      f.timer--;
+      const k = ease(f.timer / F.outroFrames);
+      f.zoom = 1 + (F.zoom - 1) * k;
+      f.bars = k;
+      if (f.timer <= 0) {
+        finishFinisher();
+        return;
+      }
+    }
+    gameState.finisherZoom = reducedMotion() ? 1 : f.zoom;
+  }
+  function promptProgress() {
+    const f = gameState.finisher;
+    if (!f || f.phase !== "prompts") return null;
+    const lead = F.beatFrames * F.leadBeats;
+    const t = f.frame - f.nextBeat;
+    return { move: f.seq[f.idx], progress: Math.min(1.2, Math.max(0, (t + lead) / lead)), t };
+  }
+
+  // src/systems/colors.js
+  function treeColor(tree) {
+    return CONSTANTS.TREES[tree] && CONSTANTS.TREES[tree].color || "#ffffff";
+  }
+  function upgradeColorFor(u) {
+    if (!u) return "#ffffff";
+    if (CONSTANTS.FUSION_COLORS[u.id]) return CONSTANTS.FUSION_COLORS[u.id];
+    if (u.kind === "overclock") return "#c084fc";
+    return treeColor(u.tree);
+  }
+  function buildColor() {
+    const owned = gameState.acquiredUpgradeIds || [];
+    for (let i = owned.length - 1; i >= 0; i--) {
+      if (CONSTANTS.FUSION_COLORS[owned[i]]) return CONSTANTS.FUSION_COLORS[owned[i]];
+    }
+    let best = null, bestRank = 0;
+    const order = gameState.rankOrder || [];
+    for (const tree of CONSTANTS.TREE_ORDER) {
+      const r = gameState.orbCounts && gameState.orbCounts[tree] || 0;
+      if (r > bestRank || r === bestRank && r > 0 && order.lastIndexOf(tree) > order.lastIndexOf(best)) {
+        best = tree;
+        bestRank = r;
+      }
+    }
+    return best ? treeColor(best) : "#ffffff";
+  }
+
+  // src/systems/negative.js
+  var ECHO_DELAY = 26;
+  function invertHex(hex) {
+    const h = String(hex || "#00ffff").replace("#", "");
+    const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h.padEnd(6, "0").slice(0, 6);
+    const n = parseInt(full, 16);
+    return "#" + (16777215 ^ n).toString(16).padStart(6, "0");
+  }
+  function negativeReact(en, buffActive) {
+    const m = en.arcMods || {};
+    if (en.slipCooldown > 0) return false;
+    if (buffActive && random() < (m.counterRead || 0.5)) {
+      en.slipCooldown = 40;
+      spawnFloatingText(en.x + 20, en.y - 150, "READ YOU.", en.color);
+      playSound("feint_tell");
+      en.currentMove = "cross";
+      en.attackCooldown = telegraphLead(en) + 2;
+      en.telegraphed = false;
+      return true;
+    }
+    if (random() < (m.echoChance || 0.35)) {
+      en.slipCooldown = 36;
+      const oldLane = en.lane;
+      const lanes = [oldLane - 1, oldLane + 1].filter((l) => l >= 0 && l <= 2);
+      en.lane = lanes[Math.floor(random() * lanes.length)];
+      if (!gameState.enemyEchoes) gameState.enemyEchoes = [];
+      gameState.enemyEchoes.push({ lane: oldLane, x: en.x, y: gameState.height * CONSTANTS.LANE_Y[oldLane], timer: ECHO_DELAY, fade: 20, fired: false, color: en.color });
+      createShatter(en.x, en.y - 60, en.color);
+      spawnFloatingText(en.x + 20, en.y - 150, "AFTERIMAGE", en.color);
+      playSound("ghost_step");
+      return true;
+    }
+    return false;
+  }
+
+  // src/systems/combat.js
+  function checkHit(type) {
+    let isJab = type.startsWith("jab") || type === "guard_jab";
+    let isGuardPunch = type === "guard_jab" || type === "check_hook";
+    let reachMult = gameState.orbCounts.power >= 2 ? 1.25 : 1;
+    let reach = isJab ? 120 : type === "cross" ? 140 * reachMult : 140;
+    let hitSomething = false;
+    let buffActive = gameState.player.slipBuff > 0;
+    const loaded = type === "cross" && !!gameState.player.crossLoaded;
+    const spark = buildColor();
+    let novaLanes = [];
+    if (gameState.player.slipBuff > 0) gameState.player.slipBuff--;
+    const jX = () => Math.random() * 50 - 25;
+    const jY = () => Math.random() * 30 - 15;
+    for (let i = 0; i < gameState.enemies.length; i++) {
+      let en = gameState.enemies[i];
+      if (en.lane === gameState.player.lane && en.x > gameState.player.x - 20 && en.x < gameState.player.x + reach) {
+        if (en.tutorialType === "counter") {
+          if (buffActive) {
+            en.hp = 0;
+            createShatter(en.x, en.y - 60, "#ffffff");
+            spawnFloatingText(en.x + jX(), en.y - 100 + jY(), "SHATTERED!", "#ffffff");
+            gameState.statCounterHits++;
+          } else {
+            spawnFloatingText(gameState.player.x + jX(), gameState.player.y - 50 + jY(), "USE CHARGED STRIKE!", "#ffaa00");
+            en.x = gameState.player.x + 200;
+            en.attackCooldown = en.maxCooldown;
+            gameState.player.slipBuff = 1;
+            playSound("bounce");
+            continue;
+          }
+        }
+        if (en.tutorialType === "slip") {
+          spawnFloatingText(en.x, en.y - 80, "SLIP IT! (UP/DOWN)", "#ffaa00");
+          hitSomething = true;
+          continue;
+        }
+        if (en.tutorialType === "guard") {
+          spawnFloatingText(en.x, en.y - 80, `WAIT & HOLD [${keyName("guard")}]!`, "#ffaa00");
+          hitSomething = true;
+          continue;
+        }
+        if (en.tutorialType === "ghost_step") {
+          spawnFloatingText(en.x, en.y - 80, `GHOST STEP [${keyName("ghost")}]!`, "#ffaa00");
+          hitSomething = true;
+          continue;
+        }
+        if (en.tutorialType === "shield") {
+          if (type === "cross") {
+            en.hp = 0;
+            spawnFloatingText(gameState.player.x + jX(), gameState.player.y - 50 + jY(), "ARMOR BROKEN!", "#00ffff");
+          } else {
+            spawnFloatingText(gameState.player.x + jX(), gameState.player.y - 50 + jY(), `USE CROSS [${keyName("cross")}] TO BREAK!`, "#ffaa00");
+            en.x = gameState.player.x + 200;
+            en.attackCooldown = en.maxCooldown;
+            playSound("bounce");
+            continue;
+          }
+        } else if (en.type === "shield" && type !== "cross") {
+          createImpact(en.x, en.y - 80, "#ffaa00");
+          en.x += 5;
+          gameState.shake = 2;
+          playSound("bounce");
+          continue;
+        }
+        let dmg = 0;
+        if (type === "jab1" || type === "jab2") dmg = 15;
+        else if (type === "jab3") dmg = 25;
+        else if (type === "hook") dmg = 35;
+        else if (type === "cross") dmg = 50;
+        else if (type === "guard_jab") dmg = 10;
+        else if (type === "check_hook") dmg = 25;
+        dmg = Math.round(dmg * CONSTANTS.affixMod(gameState.currentAffix, "playerDamageDealtMult", 1));
+        if (isJab && en.type === "grunt" && heatOn("plated")) dmg = Math.round(dmg * CONSTANTS.HEAT.platedJabMult);
+        const prevPressure = en.pressure || 0;
+        if (!isGuardPunch) {
+          en.pressure = Math.min(3, prevPressure + 1);
+          let jpm = en.isBoss && en.name === "NEON ENFORCER" && en.arcMods ? en.arcMods.jabPressureMult : 1;
+          en.pressureDecay = Math.max(15, Math.floor(45 / jpm));
+        }
+        if (buffActive) dmg *= 2;
+        if (loaded) dmg = Math.round(dmg * 1.3);
+        if (gameState.progressionMods.shatterNova && buffActive && type === "cross") {
+          if (en.isBoss) dmg += Math.round(en.maxHp * 0.08);
+          else novaLanes.push(en.lane);
+          spawnFloatingText(en.x + jX(), en.y - 150 + jY(), "SHATTER NOVA", CONSTANTS.FUSION_COLORS.evo_shatter_nova);
+        }
+        if (loaded) spawnFloatingText(en.x + jX(), en.y - 110 + jY(), "LOADED!", spark);
+        if (en.type === "shield" && type === "cross") {
+          en.type = "grunt";
+          if (!en.isBoss) en.color = "#ff0055";
+          dmg *= 1.5;
+        }
+        const bossOpen = en.isBoss && isBossOpen(en);
+        if (bossOpen) {
+          dmg = Math.round(dmg * CONSTANTS.BOSS_OFFENSE.punishDamageMult);
+          addScore(CONSTANTS.SCORE.punishBonus, en.x + jX(), en.y - 170 + jY(), { silent: true });
+          if (!en.punishShown) {
+            en.punishShown = true;
+            spawnFloatingText(en.x + jX(), en.y - 150 + jY(), "PUNISH!", "#22d3ee");
+            playSound("punish");
+          }
+        }
+        if (en.controller === "negative" && !bossOpen && negativeReact(en, buffActive)) return false;
+        let trueReadActive = false;
+        if (en.isBoss && (en.exposedTimer || 0) > 0 && (type === "cross" || type === "hook" || buffActive)) {
+          trueReadActive = true;
+          en.exposedTimer = 0;
+          dmg = Math.floor(dmg * 1.25);
+          gameState.hitstop += 8;
+          gameState.instinctPauseTimer = 45;
+          gameState.statBossBreaks++;
+          spawnFloatingText(en.x + jX(), en.y - 140 + jY(), "TRUE READ!", "#00ffff");
+          triggerShockwave(en.x, en.y - 60, "#00ffff");
+          playSound("laser");
+        }
+        if (type === "cross" && !buffActive && !trueReadActive && prevPressure > 0) {
+          let cashOutBonus = prevPressure * 15;
+          dmg += cashOutBonus;
+          en.pressure = 0;
+          spawnFloatingText(en.x + jX(), en.y - 110 + jY(), `CASH OUT! +${cashOutBonus}`, "#ff0055");
+          gameState.shake += 4;
+        }
+        if (en.isBoss) {
+          if (en.name === "PHANTOM BOXER" && !bossOpen) {
+            en.bossMashCount = (en.bossMashCount || 0) + 1;
+            en.mashDecay = 60;
+            if (en.shiftWarning > 0) {
+              if (trueReadActive) {
+                en.shiftWarning = 0;
+                en.shiftCooldown = 150;
+                en.bossMashCount = 0;
+              } else {
+                en.shiftWarning = 0;
+                en.bossMashCount = 0;
+                en.shiftCooldown = 150;
+                let oldX = en.x;
+                let oldY = en.y;
+                createShatter(oldX, oldY - 60, "#ffffff");
+                playSound("shatter");
+                spawnFloatingText(oldX + jX(), oldY - 100 + jY(), "PHANTOM SHIFT", "#aa00ff");
+                let otherLanes = [0, 1, 2].filter((l) => l !== en.lane);
+                let pinch = en.arcMods && en.arcMods.lanePinchBias || 0;
+                if (random() < pinch) {
+                  en.lane = otherLanes.reduce((a, b) => Math.abs(b - gameState.player.lane) < Math.abs(a - gameState.player.lane) ? b : a);
+                } else {
+                  en.lane = otherLanes[Math.floor(random() * otherLanes.length)];
+                }
+                en.y = gameState.height * CONSTANTS.LANE_Y[en.lane];
+                createImpact(en.x, en.y - 60, "#aa00ff");
+                en.attackCooldown = en.arcMods && en.arcMods.reentryDelayVariant ? 14 + Math.floor(random() * 11) : 18;
+                return false;
+              }
+            } else if (en.bossMashCount >= 3 && (en.shiftCooldown || 0) <= 0 && en.hp > 0 && !trueReadActive) {
+              en.shiftWarning = 20;
+              spawnFloatingText(en.x + jX(), en.y - 100 + jY(), "SHIFT READY", "#ffffff");
+            }
+          }
+          let enforcerArmored = !bossOpen && en.name === "NEON ENFORCER" && (en.phase === 2 || en.arcMods && en.arcMods.retaliationTimingVariant);
+          if (enforcerArmored) {
+            if (isJab && !trueReadActive && !isGuardPunch) {
+              let chain = en.arcMods && en.arcMods.armoredRetaliationChain || 1;
+              dmg = Math.floor(dmg * 0.25);
+              takeDamage(2 * chain, false, en);
+              gameState.statRecoilTaken++;
+              spawnFloatingText(gameState.player.x + jX(), gameState.player.y - 50 + jY(), "RECOIL!", "#ff0000");
+              return false;
+            }
+          }
+          dmg = gateBossDamage(en, dmg);
+          if (en.hp - dmg <= en.maxHp * 0.25 && !en.desperation) {
+            en.desperation = true;
+            spawnFloatingText(en.x + jX(), en.y - 120 + jY(), "DESPERATION!", "#ff0000");
+            gameState.shake += 15;
+            if (en.name === "PHANTOM BOXER") {
+              en.shiftCooldown = 0;
+              en.shiftWarning = 1;
+            } else if (en.name === "NEON ENFORCER") {
+              en.attackCooldown = 10;
+              en.currentMove = "bash";
+              en.enraged = true;
+            }
+          }
+          if (en.name === "NEON ENFORCER" && en.phase === 1 && en.hp - dmg <= en.maxHp * 0.5) {
+            en.phase = 2;
+            en.speed = 3.5;
+            gameState.shake = 50;
+            doFlash(0.8);
+            gameState.hitstop = 10;
+            triggerShockwave(en.x, en.y - 60, "#ff0000");
+            spawnFloatingText(en.x + jX(), en.y - 120 + jY(), "SHIELD SHATTERED!", "#ff0000");
+            for (let j = 0; j < 20; j++) createImpact(en.x, en.y - 60, "#ffaa00");
+            playSound("hit");
+          }
+          if (en.name === "PHANTOM BOXER" && en.phase === 1 && en.hp - dmg <= en.maxHp * 0.5) {
+            en.phase = 2;
+            en.speed = 3.5;
+            gameState.shake = 40;
+            doFlash(0.6);
+            gameState.hitstop = 10;
+            triggerShockwave(en.x, en.y - 60, "#aa00ff");
+            createImpact(en.x, en.y - 80, "#aa00ff");
+            spawnFloatingText(en.x + jX(), en.y - 120 + jY(), "OVERDRIVE", "#aa00ff");
+            playSound("hit");
+          }
+        }
+        en.hp -= dmg;
+        if (type === "cross" && gameState.progressionMods.executionerCross && !en.isBoss && en.hp > 0 && en.hp <= en.maxHp * 0.25) {
+          en.hp = 0;
+          spawnFloatingText(en.x + jX(), en.y - 100 + jY(), "EXECUTED!", "#ff0055");
+          createShatter(en.x, en.y - 60, "#ff0055");
+        }
+        const instinctKB = gameState.isInstinct ? (gameState.zoneTimer || 0) > 0 ? CONSTANTS.ZONE.knockbackMult : 2 : 1;
+        let powerFactor = gameState.stats.powerMult * instinctKB * (buffActive ? 1.5 : 1);
+        if (trueReadActive) powerFactor *= 1.5;
+        let baseKB = 0;
+        if (loaded) {
+          baseKB = CONSTANTS.VERBS.loadedCross.knockback;
+        } else if (buffActive || trueReadActive) {
+          baseKB = 45;
+        } else {
+          if (type === "jab1" || type === "jab2") {
+            baseKB = 1;
+          } else if (type === "jab3") {
+            baseKB = 12;
+          } else if (type === "guard_jab") {
+            baseKB = 2;
+          } else if (type === "hook" || type === "check_hook") {
+            baseKB = Math.max(30, gameState.progressionMods.hookKnockbackFloor);
+          } else if (type === "cross") {
+            baseKB = 5;
+          }
+        }
+        if (en.isBoss) {
+          baseKB = isJab ? 0 : Math.max(2, Math.floor(baseKB * 0.3));
+          if (en.name === "NEON ENFORCER" && en.phase === 2 && !trueReadActive) {
+            baseKB = buffActive || gameState.isInstinct && type === "cross" ? 10 : 0;
+          }
+        } else {
+          baseKB = Math.floor(baseKB / (en.weight || 1));
+        }
+        en.vx += baseKB * powerFactor;
+        if (type === "cross" || type === "hook" || type === "check_hook" || buffActive || trueReadActive || isJab) {
+          let canStun = true;
+          let stunAmount = 0;
+          if (en.type === "bruiser" && isJab && !buffActive && !trueReadActive) canStun = false;
+          if (isJab) stunAmount = 18;
+          else if (type === "guard_jab") stunAmount = 10;
+          else if (type === "hook") stunAmount = 15;
+          else if (type === "check_hook") stunAmount = 20;
+          else if (type === "cross") stunAmount = 40;
+          if (buffActive) stunAmount += 15;
+          if (loaded) stunAmount += CONSTANTS.VERBS.loadedCross.stun;
+          if (type === "cross" && (en.type === "shield" || en.type === "bruiser" || en.isBoss && en.name === "NEON ENFORCER" && en.phase === 2)) {
+            stunAmount += gameState.progressionMods.crossArmorStunBonus;
+          }
+          if (gameState.progressionMods.shatterRead && buffActive && type === "cross" && en.isBoss) {
+            en.stunResist = Math.max(0, en.stunResist - 100 * gameState.progressionMods.shatterReadBossBypass);
+            stunAmount += gameState.progressionMods.shatterReadStaggerBonus;
+            spawnFloatingText(en.x + jX(), en.y - 120 + jY(), "SHATTER READ!", "#ff0055");
+          }
+          if (en.name === "NEON ENFORCER" && en.phase === 2) {
+            if (buffActive || trueReadActive || loaded) {
+              canStun = true;
+              stunAmount += 10;
+              gameState.statBossBreaks++;
+              spawnFloatingText(en.x + jX(), en.y - 100 + jY(), "ARMOR SHATTERED!", "#00ffff");
+            } else if (gameState.isInstinct && type === "cross") {
+              canStun = true;
+              stunAmount = 6;
+              spawnFloatingText(en.x + jX(), en.y - 100 + jY(), "PARTIAL BREAK", "#ff00ff");
+            } else {
+              canStun = false;
+            }
+          }
+          if (canStun) {
+            let isResisting = en.isBoss && en.stunResist > 0;
+            if (!isResisting) {
+              if (trueReadActive) stunAmount += 15;
+              en.stun = Math.max(en.stun, stunAmount);
+              if (en.isBoss) en.stunResist = en.stun + 30;
+            } else {
+              en.stun = Math.max(en.stun, 2);
+            }
+          } else if (!canStun && en.stunResist <= 0) {
+            spawnFloatingText(en.x + jX(), en.y - 80 + jY(), "ARMORED", "#ff0000");
+          }
+        }
+        if ((type === "cross" || type === "hook" || type === "check_hook") && (en.type === "shield" || en.type === "bruiser")) {
+          gameState.instinctMeter = Math.min(100, gameState.instinctMeter + gameState.progressionMods.hardTargetInstinctFlat);
+          gameState.exp += gameState.progressionMods.hardTargetExpFlat;
+        }
+        hitSomething = true;
+        const feel = CONSTANTS.punchFeel(type, buffActive);
+        if ((buffActive || loaded) && en.tutorialType !== "counter") {
+          createShatter(en.x, en.y - 60, spark);
+        } else if (en.tutorialType !== "counter") {
+          createImpact(en.x, en.y - 60, spark, feel.spark);
+        }
+        if (en.tutorialType !== "counter") createHitRing(en.x + 10, en.y - 60, buffActive ? "#ffffff" : spark, loaded ? feel.ring * 1.3 : feel.ring);
+        if (gameState.orbCounts.power >= 4 && en.hp <= 0 && (type === "cross" || buffActive)) {
+          triggerShockwave(en.x, en.y - 60, spark);
+        }
+      }
+    }
+    if (hitSomething) {
+      if (!isGuardPunch) {
+        gameState.combo++;
+        if (gameState.combo > gameState.statMaxCombo) gameState.statMaxCombo = gameState.combo;
+      }
+      addScore(hitScore(type) * (buffActive ? CONSTANTS.SCORE.counterHitMult : 1), gameState.player.x + reach * 0.6, gameState.player.y - 110);
+      if (buffActive) spawnFloatingText(gameState.player.x + reach / 2 + jX(), gameState.player.y - 80 + jY(), "COUNTER HIT!", "#ffffff");
+      gameState.player.flowStreak = (gameState.player.flowStreak || 0) + 1;
+      const flowMult = getFlowMultiplier(gameState);
+      if (gameState.progressionMods.flowState && (gameState.player.flowStreak === 10 || gameState.player.flowStreak === 25)) {
+        spawnFloatingText(gameState.player.x, gameState.player.y - 90 + jY(), "FLOW STATE!", "#ff8ad8");
+      }
+      if (!gameState.isInstinct) {
+        let gain = 6 * gameState.stats.techMult * (1 + gameState.progressionMods.instinctGainBonusMult) * flowMult;
+        gain *= CONSTANTS.affixMod(gameState.currentAffix, "instinctGainMult", 1);
+        gameState.instinctMeter = Math.min(100, gameState.instinctMeter + gain);
+      }
+      const feel = CONSTANTS.punchFeel(type, buffActive);
+      const stopMult = gameState.isInstinct ? 1.5 : 1;
+      gameState.hitstop = Math.floor(feel.stop * stopMult);
+      if (loaded) gameState.hitstop += 6;
+      gameState.shake = feel.shake * stopMult;
+      if (type === "cross" || buffActive) doFlash(buffActive ? 0.6 : 0.2);
+      if (type === "cross" && gameState.orbCounts.power >= 2) {
+        createImpact(gameState.player.x + reach, gameState.player.y - 40, spark);
+        gameState.shake += 5;
+      }
+      if (novaLanes.length) gameState.enemies.forEach((o) => {
+        if (!o.isBoss && novaLanes.includes(o.lane) && !o.tutorialType) {
+          o.hp = 0;
+          createShatter(o.x, o.y - 60, CONSTANTS.FUSION_COLORS.evo_shatter_nova);
+        }
+      });
+      if (gameState.orbCounts.speed >= 4 && (isJab || type === "hook")) {
+        gameState.player.moveCancelReady = true;
+      }
+      playSound(feel.snd);
+    }
+    return hitSomething;
+  }
+
+  // src/entities/player.js
+  function resetPlayerObj() {
+    return {
+      lane: 1,
+      x: 180,
+      y: 0,
+      w: 50,
+      h: 110,
+      state: "idle",
+      punchTimer: 0,
+      punchType: null,
+      hitFrame: 0,
+      didHit: false,
+      slipCooldown: 0,
+      slipBuff: 0,
+      color: "#00ffff",
+      trails: [],
+      trailTimer: 0,
+      recoveryTimer: 0,
+      moveCancelReady: false,
+      jabStep: 0,
+      comboWindow: 0,
+      inputBuffer: null,
+      inputBufferTimer: 0,
+      movementBuffer: null,
+      movementBufferTimer: 0,
+      ghostStepTimer: 0,
+      ghostStepCooldown: 0,
+      ghostStepCharges: 1,
+      dangerLevel: 0,
+      hitStun: 0,
+      lastPunchLanded: null,
+      dempseyActive: false,
+      guardReadTimer: 0,
+      flowStreak: 0,
+      // v17
+      invuln: 0,
+      pivotTimer: 0,
+      charging: false,
+      crossCharge: 0,
+      crossLoaded: false,
+      bufferedCharge: 0,
+      dempseyAlternations: 0
+    };
+  }
+  var FW = CONSTANTS.FOOTWORK;
+  var FOOTWORK_MIN_X = FW.minX;
+  var FOOTWORK_MAX_X = FW.maxX;
+  var FOOTWORK_ADVANCE_SPD = FW.advanceSpd;
+  var FOOTWORK_RETREAT_SPD = FW.retreatSpd;
+  var FOOTWORK_HOME_PULL = FW.homePull;
+  function resetJabString() {
+    if (gameState.player) {
+      gameState.player.jabStep = 0;
+      gameState.player.comboWindow = 0;
+      gameState.player.lastPunchLanded = null;
+      gameState.player.dempseyActive = false;
+    }
+  }
+  function executeAttackInput(action, charge = 0) {
+    if (gameState.player.state === "guarding") {
+      if (action === "jab") startPunch("guard_jab");
+      if (action === "hook") startPunch("check_hook");
+      return;
+    }
+    if (action === "jab") {
+      if (gameState.player.jabStep === 0) startPunch("jab1");
+      else if (gameState.player.jabStep === 1) startPunch("jab2");
+      else if (gameState.player.jabStep === 2) startPunch("jab3");
+      else startPunch("jab1");
+    } else if (action === "cross") startPunch("cross", charge);
+    else if (action === "hook") startPunch("hook");
+  }
+  function ghostStep() {
+    const maxGhostCharges = gameState.progressionMods.blurStep ? 2 : 1;
+    if (gameState.player.ghostStepCharges === void 0) gameState.player.ghostStepCharges = maxGhostCharges;
+    if (gameState.player.ghostStepCharges <= 0) return;
+    gameState.player.ghostStepCharges--;
+    tmGhost(false);
+    gameState.player.state = "ghost_step";
+    gameState.player.ghostStepTimer = 18;
+    gameState.player.ghostPerfected = false;
+    gameState.player.charging = false;
+    if (gameState.player.ghostStepCharges <= 0) gameState.player.ghostStepCooldown = Math.max(10, Math.floor(60 * gameState.progressionMods.ghostStepCooldownMult));
+    resetJabString();
+    playSound("ghost_step");
+    for (let i = 0; i < 8; i++) {
+      gameState.particles.push({ x: gameState.player.x + Math.random() * 30, y: gameState.player.y - 30 - Math.random() * 60, vx: -10 - Math.random() * 15, vy: 0, life: 0.6, color: "#666666", type: "dash_line" });
+    }
+  }
+  function executeMovementInput(action) {
+    if (action === "guard") {
+      tmGuard();
+      gameState.player.state = "guarding";
+      gameState.player.charging = false;
+      gameState.combo = 0;
+      resetJabString();
+    } else if (action === "ghost") ghostStep();
+    else if (action === "up" || action === "down") {
+      const oldLane = gameState.player.lane;
+      if (action === "up") gameState.player.lane = Math.max(0, gameState.player.lane - 1);
+      if (action === "down") gameState.player.lane = Math.min(2, gameState.player.lane + 1);
+      if (oldLane !== gameState.player.lane) {
+        if (gameState.player.slipCooldown <= 0) {
+          checkPerfectSlip(oldLane);
+          gameState.player.slipCooldown = 12;
+          resetJabString();
+          if (gameState.progressionMods.pivotSlip) pivotForward();
+          resolveBodies(gameState.player);
+        } else {
+          gameState.player.lane = oldLane;
+        }
+      }
+    }
+  }
+  function pivotForward() {
+    const V = CONSTANTS.VERBS.pivotSlip, p = gameState.player;
+    const target = gameState.enemies.filter((e) => e.lane === p.lane && e.x > p.x).sort((a, b) => a.x - b.x)[0];
+    const want = target ? Math.min(target.x - 95, p.x + V.advance) : p.x;
+    if (want > p.x + 4) {
+      p.x = Math.min(FOOTWORK_MAX_X, want);
+      for (let i = 0; i < 6; i++) gameState.particles.push({ x: p.x - 20 - Math.random() * 30, y: p.y - 30 - Math.random() * 60, vx: -8 - Math.random() * 8, vy: 0, life: 0.5, color: buildColor(), type: "dash_line" });
+    }
+    p.pivotTimer = V.instantWindow;
+  }
+  function registerPerfectGhostStep(attacker) {
+    const p = gameState.player;
+    if (!p || p.ghostPerfected) return false;
+    p.ghostPerfected = true;
+    gameState.combo++;
+    if (gameState.combo > gameState.statMaxCombo) gameState.statMaxCombo = gameState.combo;
+    gameState.statGhostSteps = (gameState.statGhostSteps || 0) + 1;
+    tmGhost(true);
+    p.flowStreak = (p.flowStreak || 0) + 1;
+    addScore(CONSTANTS.SCORE.perfectGhostStep, p.x + 40, p.y - 120);
+    spawnFloatingText(p.x, p.y - 95, "PERFECT GHOST +1", "#e5e7eb");
+    const zoneReady = gameState.instinctMeter >= 100 && !gameState.isInstinct;
+    const flowMult = getFlowMultiplier(gameState);
+    if (!gameState.isInstinct) {
+      let gain = 20 * gameState.stats.techMult * (1 + gameState.progressionMods.perfectSlipRewardBonusMult) * flowMult;
+      gain *= CONSTANTS.affixMod(gameState.currentAffix, "instinctGainMult", 1);
+      gameState.instinctMeter = Math.min(100, gameState.instinctMeter + gain);
+    }
+    const heal = gameState.progressionMods.perfectSlipHeal + CONSTANTS.affixMod(gameState.currentAffix, "perfectSlipHeal", 0);
+    if (heal > 0) gameState.health = Math.min(gameState.maxHealth, gameState.health + heal);
+    gameState.exp += Math.floor(2 * (1 + gameState.progressionMods.expGainBonusMult) * flowMult);
+    if (zoneReady) activateInstinct(true);
+    if (gameState.progressionMods.phantomRiposte) spawnAfterimage(p.lane, p.x, 8);
+    return true;
+  }
+  function checkPerfectSlip(oldLane) {
+    let slipQuality = "none", bossSlipped = null;
+    gameState.enemies.forEach((en) => {
+      if (en.lane === oldLane && en.stun <= 0) {
+        let isThreat = false;
+        const { perfect: perfectThresh, good: goodThresh } = CONSTANTS.getSlipThresholds(en.type, gameState.progressionMods.perfectSlipWindowBonus);
+        if (en.type === "zoner") {
+          if (en.attackCooldown <= 40 && en.x > gameState.player.x - 20) isThreat = true;
+        } else if (Math.abs(en.x - gameState.player.x) < 130 && en.attackCooldown <= 22 && en.x > gameState.player.x - 20) {
+          isThreat = true;
+        }
+        if (isThreat) {
+          let oldCooldown = en.attackCooldown;
+          if (en.tutorialType === "slip") {
+            if (oldCooldown <= perfectThresh) {
+              slipQuality = "perfect";
+              en.hp = 0;
+            } else {
+              slipQuality = "good";
+              en.x = gameState.player.x + 200;
+              en.attackCooldown = en.maxCooldown;
+              en.justAttacked = 0;
+              spawnFloatingText(gameState.player.x, gameState.player.y - 50, "TOO EARLY!", "#ffaa00");
+              gameState.player.slipBuff = 0;
+            }
+          } else {
+            if (oldCooldown <= perfectThresh) {
+              slipQuality = "perfect";
+              if (en.isBoss) bossSlipped = en;
+              if (en.type === "zoner") {
+                en.attackCooldown = en.maxCooldown;
+              } else en.attackCooldown = Math.max(en.attackCooldown, 18);
+            } else if (oldCooldown <= goodThresh && slipQuality !== "perfect") {
+              slipQuality = "good";
+              if (en.type === "zoner") {
+                en.attackCooldown = en.maxCooldown;
+              } else en.attackCooldown = Math.max(en.attackCooldown, 18);
+            } else {
+              en.attackCooldown = Math.max(en.attackCooldown, 18);
+            }
+          }
+        }
+      }
+    });
+    if (slipQuality !== "none") triggerPerfectSlip(bossSlipped, slipQuality);
+    if (slipQuality === "perfect" && gameState.progressionMods.afterimageSlip) spawnAfterimage(oldLane, gameState.player.x);
+  }
+  function spawnAfterimage(lane, x, delayOverride) {
+    if (!gameState.afterimages) gameState.afterimages = [];
+    gameState.afterimages.push({ lane, x, y: gameState.height * CONSTANTS.LANE_Y[lane], timer: delayOverride !== void 0 ? delayOverride : CONSTANTS.VERBS.afterimage.delay, fade: 22, fired: false, color: buildColor() });
+  }
+  function fireAfterimage(ai) {
+    const V = CONSTANTS.VERBS.afterimage;
+    let hit = false;
+    for (const en of gameState.enemies) {
+      if (en.lane !== ai.lane || en.x < ai.x - 20 || en.x > ai.x + V.reach || en.hp <= 0) continue;
+      let dmg = Math.round(V.damage * gameState.stats.powerMult);
+      if (en.isBoss) dmg = gateBossDamage(en, dmg);
+      en.hp -= dmg;
+      en.stun = Math.max(en.stun, en.isBoss ? 6 : V.stun);
+      createImpact(en.x, en.y - 60, ai.color);
+      createShatter(en.x, en.y - 70, ai.color);
+      spawnFloatingText(en.x, en.y - 120, "ECHO!", ai.color);
+      hit = true;
+    }
+    if (hit) {
+      gameState.combo++;
+      if (gameState.combo > gameState.statMaxCombo) gameState.statMaxCombo = gameState.combo;
+      addScore(CONSTANTS.SCORE.hit.hook, ai.x + 80, ai.y - 110);
+      playSound("hit");
+      gameState.shake = Math.max(gameState.shake, 6);
+    }
+  }
+  function updateAfterimages() {
+    if (!gameState.afterimages || !gameState.afterimages.length) return;
+    for (const ai of gameState.afterimages) {
+      if (!ai.fired) {
+        if (--ai.timer <= 0) {
+          ai.fired = true;
+          fireAfterimage(ai);
+        }
+      } else ai.fade--;
+    }
+    gameState.afterimages = gameState.afterimages.filter((ai) => !ai.fired || ai.fade > 0);
+  }
+  function activateInstinct(zone = false) {
+    gameState.isInstinct = true;
+    gameState.instinctReadyTimer = 0;
+    if (HUD.instinctBanner) HUD.instinctBanner.style.display = "none";
+    if (HUD.barCont) HUD.barCont.classList.add("beast-active");
+    doFlash(0.5);
+    gameState.shake = 20;
+    gameState.hitstop = 10;
+    triggerShockwave(gameState.player.x, gameState.player.y - 50, "#ffffff");
+    playSound("perfect_slip");
+    if (zone) {
+      gameState.zoneTimer = CONSTANTS.ZONE.frames;
+      gameState.zoneHold = 0;
+      playSound("zone");
+      spawnFloatingText(gameState.player.x, gameState.player.y - 140, "THE ZONE", "#ffffff");
+    }
+  }
+  function triggerPerfectSlip(bossSlipped, slipQuality) {
+    tmSlip(slipQuality);
+    if (slipQuality === "perfect") {
+      const zoneReady = gameState.instinctMeter >= 100 && !gameState.isInstinct;
+      if (HUD.slipPopup) {
+        HUD.slipPopup.innerText = "PERFECT SLIP";
+        HUD.slipPopup.style.color = "#ffffff";
+        HUD.slipPopup.style.textShadow = "0 0 24px #00ffff";
+      }
+      gameState.player.flowStreak = (gameState.player.flowStreak || 0) + 1;
+      const flowMult = getFlowMultiplier(gameState);
+      if (gameState.progressionMods.flowState && (gameState.player.flowStreak === 10 || gameState.player.flowStreak === 25)) {
+        spawnFloatingText(gameState.player.x, gameState.player.y - 110, "FLOW STATE!", "#ff8ad8");
+      }
+      if (!gameState.isInstinct) {
+        let gain = 20 * gameState.stats.techMult * (1 + gameState.progressionMods.perfectSlipRewardBonusMult) * flowMult;
+        gain *= CONSTANTS.affixMod(gameState.currentAffix, "instinctGainMult", 1);
+        gameState.instinctMeter = Math.min(100, gameState.instinctMeter + gain);
+      }
+      const slipHeal = gameState.progressionMods.perfectSlipHeal + CONSTANTS.affixMod(gameState.currentAffix, "perfectSlipHeal", 0);
+      if (slipHeal > 0) gameState.health = Math.min(gameState.maxHealth, gameState.health + slipHeal);
+      gameState.shake = 10;
+      doFlash(0.2);
+      playSound("perfect_slip");
+      gameState.statTotalSlips++;
+      addScore(CONSTANTS.SCORE.perfectSlip, gameState.player.x + 40, gameState.player.y - 120);
+      gameState.exp += Math.floor(2 * (1 + gameState.progressionMods.expGainBonusMult) * flowMult);
+      gameState.player.slipBuff = gameState.orbCounts.technique >= 2 ? 2 : 1;
+      spawnFloatingText(gameState.player.x, gameState.player.y - 80, "COUNTER READY!", "#ffffff");
+      gameState.hitstop += 8;
+      if (gameState.orbCounts.speed >= 4) gameState.player.moveCancelReady = true;
+      if (bossSlipped && gameState.orbCounts.technique >= 4) {
+        bossSlipped.exposedTimer = 90 + gameState.progressionMods.bossExposeBonusFrames;
+        spawnFloatingText(bossSlipped.x, bossSlipped.y - 140, "EXPOSED!", "#00ffff");
+        playSound("feint_tell");
+      }
+      if (zoneReady) activateInstinct(true);
+    } else if (slipQuality === "good") {
+      if (HUD.slipPopup) {
+        HUD.slipPopup.innerText = "GOOD SLIP";
+        HUD.slipPopup.style.color = "#ff8ad8";
+        HUD.slipPopup.style.textShadow = "0 0 10px #ff00ff";
+      }
+      if (!gameState.isInstinct) {
+        gameState.instinctMeter = Math.min(100, gameState.instinctMeter + 5 * gameState.stats.techMult);
+      }
+      gameState.shake = 3;
+      playSound("slip");
+      addScore(CONSTANTS.SCORE.goodSlip, gameState.player.x + 40, gameState.player.y - 120);
+    }
+    if (HUD.slipPopup) {
+      HUD.slipPopup.style.opacity = 1;
+      setTimeout(() => {
+        if (HUD.slipPopup) HUD.slipPopup.style.opacity = 0;
+      }, 500);
+    }
+  }
+  function startPunch(t, charge = 0) {
+    if (gameState.player.state === "guarding") gameState.player.state = "idle";
+    tmAttack(t);
+    gameState.player.state = "punching";
+    gameState.player.punchType = t;
+    gameState.player.didHit = false;
+    gameState.player.moveCancelReady = false;
+    gameState.player.comboWindow = 0;
+    gameState.player.charging = false;
+    gameState.player.crossLoaded = t === "cross" && !!gameState.progressionMods.loadedCross && charge >= CONSTANTS.VERBS.loadedCross.chargeFrames;
+    let isJab1 = t === "jab1", isJab2 = t === "jab2", isJab3 = t === "jab3";
+    if (isJab1) gameState.player.jabStep = 1;
+    else if (isJab2) gameState.player.jabStep = 2;
+    else if (isJab3) gameState.player.jabStep = 3;
+    else gameState.player.jabStep = 0;
+    if (gameState.progressionMods.dempseyCircuit && gameState.player.lastPunchLanded) {
+      let lastWasJab = gameState.player.lastPunchLanded.startsWith("jab");
+      let thisIsHook = t === "hook";
+      let lastWasHook = gameState.player.lastPunchLanded === "hook";
+      let thisIsJab = t.startsWith("jab");
+      if (lastWasJab && thisIsHook || lastWasHook && thisIsJab) gameState.player.dempseyActive = true;
+      else gameState.player.dempseyActive = false;
+    } else {
+      gameState.player.dempseyActive = false;
+    }
+    let sF = Math.max(0.35, (gameState.isInstinct ? 0.6 : 1) * (1 / gameState.stats.speedMult));
+    let cF = Math.max(0.35, (gameState.isInstinct ? 0.6 : 1) * (1 / (1 + (gameState.stats.speedMult - 1) * 0.4)));
+    if (isJab1 || isJab2 || t === "guard_jab") {
+      gameState.player.punchTimer = Math.max(5, gameState.orbCounts.speed >= 2 ? Math.floor(5 * sF) : Math.floor(8 * sF));
+      gameState.player.hitFrame = Math.max(2, Math.floor(2 * sF));
+    } else if (isJab3) {
+      gameState.player.punchTimer = Math.max(6, gameState.orbCounts.speed >= 2 ? Math.floor(7 * sF) : Math.floor(12 * sF));
+      gameState.player.hitFrame = Math.max(2, Math.floor(3 * sF));
+    } else if (t === "cross") {
+      gameState.player.punchTimer = Math.max(12, Math.floor(22 * cF));
+      gameState.player.hitFrame = Math.max(4, Math.floor(8 * cF));
+    } else if (t === "hook" || t === "check_hook") {
+      gameState.player.punchTimer = Math.max(8, Math.floor(16 * sF));
+      gameState.player.hitFrame = Math.max(3, Math.floor(6 * sF));
+    }
+    if ((gameState.zoneTimer || 0) > 0 && t !== "guard_jab" && t !== "check_hook") {
+      const tgt = gameState.enemies.filter((e) => e.lane === gameState.player.lane && e.x > gameState.player.x && e.x - gameState.player.x < 320).sort((a, b) => a.x - b.x)[0];
+      if (tgt && tgt.x - gameState.player.x > 95) {
+        gameState.player.x = Math.min(tgt.x - 90, FOOTWORK_MAX_X + 120);
+        for (let i = 0; i < 6; i++) gameState.particles.push({ x: gameState.player.x - 20 - Math.random() * 40, y: gameState.player.y - 30 - Math.random() * 60, vx: -9, vy: 0, life: 0.5, color: "#ffffff", type: "dash_line" });
+      }
+    }
+    if (gameState.player.pivotTimer > 0 && t !== "guard_jab" && t !== "check_hook") {
+      gameState.player.hitFrame = 1;
+      gameState.player.pivotTimer = 0;
+    }
+    if (gameState.player.slipBuff > 0) {
+      playSound("vacuum");
+      createVacuum(gameState.player.x + 80, gameState.player.y - 40);
+    }
+  }
+  function takeDamage(amt, isHeavy, en, opts = {}) {
+    if ((gameState.player.invuln || 0) > 0) return;
+    const PH = CONSTANTS.PLAYER_HIT;
+    const guarding = gameState.player.state === "guarding";
+    gameState.player.flowStreak = 0;
+    gameState.player.charging = false;
+    let guardMult = 0.25;
+    let piercing = gameState.player.state === "guarding" && en && en.type === "assassin";
+    if (piercing) guardMult = 0.6;
+    amt = amt * CONSTANTS.affixMod(gameState.currentAffix, "playerDamageTakenMult", 1);
+    if (heatOn("glass_jaw")) amt *= CONSTANTS.HEAT.glassJawMult;
+    let actualDmg = gameState.player.state === "guarding" ? Math.floor(amt * guardMult) : Math.floor(amt);
+    if (piercing) spawnFloatingText(gameState.player.x, gameState.player.y - 60, "GUARD PIERCED!", "#aa00ff");
+    if (gameState.player.state === "guarding" && gameState.progressionMods.guardRead) gameState.player.guardReadTimer = 16;
+    gameState.health -= actualDmg;
+    tmDamage(opts.src || (en ? en.isBoss ? en.controller : en.type : "hazard"), actualDmg);
+    gameState.stageHitsTaken = (gameState.stageHitsTaken || 0) + 1;
+    gameState.player.hitStun = isHeavy ? PH.hitStun.heavy : PH.hitStun.light;
+    gameState.shake = isHeavy ? 30 : 15;
+    gameState.hitstop = Math.max(gameState.hitstop || 0, isHeavy ? PH.hitStop.heavy : PH.hitStop.light);
+    gameState.player.slideVx = -(isHeavy ? PH.slide.heavy : PH.slide.light) * gameState.progressionMods.incomingRecoilMult;
+    gameState.player.state = "hurt";
+    resetJabString();
+    gameState.player.charging = false;
+    if (opts.floor && !guarding) {
+      tmFloored(!!opts.counter);
+      gameState.player.state = "floored";
+      gameState.player.floorTimer = PH.floorFrames;
+      gameState.player.invuln = PH.floorFrames + PH.floorGrace;
+      gameState.player.slideVx *= 1.6;
+      spawnFloatingText(gameState.player.x + 10, gameState.player.y - 140, opts.counter ? "COUNTERED!" : "DOWN!", "#ff3355");
+      playSound("knockdown");
+    }
+    if (gameState.combo >= 2 && !gameState.isInstinct) spawnFloatingText(gameState.player.x, gameState.player.y - 50, "COMBO BROKEN", "#ff0055");
+    gameState.combo = 0;
+    if (!gameState.isInstinct) doFlash(isHeavy ? 0.4 : 0.2);
+    playSound("hit");
+    let sf = document.getElementById("screen-flash");
+    if (sf && flashScale() > 0.01) {
+      sf.style.background = "red";
+      sf.style.opacity = 0.4 * flashScale();
+      setTimeout(() => {
+        if (sf) {
+          sf.style.background = "white";
+          sf.style.opacity = 0;
+        }
+      }, 150);
+    }
+    if (HUD.health) {
+      HUD.health.classList.add("text-red-500", "scale-125");
+      setTimeout(() => HUD.health.classList.remove("text-red-500", "scale-125"), 200);
+    }
+    if (gameState.enemies.some((e) => e.isBoss && e.desperation)) gameState.statDespDamage++;
+  }
+  var BODY_GAP = 62;
+  var FRONT_GAP = 70;
+  function resolveBodies(p) {
+    for (const e of gameState.enemies) {
+      if (e.hp <= 0 || e.controller === "static_monk" || e.x > gameState.width) continue;
+      const gap = e.lane === p.lane ? BODY_GAP : FRONT_GAP;
+      if (e.x - p.x < gap && e.x > p.x - 200) p.x = Math.max(FOOTWORK_MIN_X, e.x - gap);
+    }
+  }
+  function isEngaged(p) {
+    if (p.comboWindow > 0 || p.state === "punching" || p.state === "recovery") return true;
+    return gameState.enemies.some((e) => e.hp > 0 && e.lane === p.lane && e.x > p.x - 30 && e.x - p.x < 160);
+  }
+  function readInput() {
+    if ((gameState.inputGrace || 0) > 0) {
+      gameState.inputGrace--;
+      return { up: false, down: false, ghost: false, jab: false, cross: false, hook: false, instinct: false, guard: false, holdLeft: false, holdRight: false, crossHeld: false };
+    }
+    const K2 = getBinds();
+    const jp = (code) => !!gameState.keys[code] && !gameState.lastKeys[code];
+    const pad = gameState.pad;
+    return {
+      up: pad.up || jp(K2.up),
+      down: pad.down || jp(K2.down),
+      ghost: pad.ghost || jp(K2.ghost),
+      jab: pad.jab || jp(K2.jab),
+      cross: pad.cross || jp(K2.cross),
+      hook: pad.hook || jp(K2.hook),
+      instinct: pad.instinct || jp(K2.instinct),
+      guard: !!(pad.guard || gameState.keys[K2.guard]),
+      holdLeft: !!(gameState.keys[K2.left] || pad.leftHeld),
+      holdRight: !!(gameState.keys[K2.right] || pad.rightHeld),
+      crossHeld: !!(gameState.keys[K2.cross] || pad.crossHeld)
+    };
+  }
+  function updatePlayer() {
+    const input = readInput();
+    const p = gameState.player;
+    gameState.scrollX += (gameState.isInstinct ? 20 : 8) * (gameState.stageSpeedMult || 1);
+    if (p.invuln > 0) p.invuln--;
+    if (p.pivotTimer > 0) p.pivotTimer--;
+    if (p.slipCooldown > 0) p.slipCooldown--;
+    if (p.ghostStepCooldown > 0) {
+      p.ghostStepCooldown--;
+      if (p.ghostStepCooldown <= 0) {
+        const maxGhostCharges = gameState.progressionMods.blurStep ? 2 : 1;
+        p.ghostStepCharges = Math.min(maxGhostCharges, (p.ghostStepCharges || 0) + 1);
+        if (p.ghostStepCharges < maxGhostCharges) p.ghostStepCooldown = Math.max(10, Math.floor(60 * gameState.progressionMods.ghostStepCooldownMult));
+      }
+    }
+    if (p.guardReadTimer > 0) p.guardReadTimer--;
+    updateAfterimages();
+    const targetY = gameState.height * CONSTANTS.LANE_Y[p.lane];
+    p.y += (targetY - p.y) * 0.25;
+    if (p.state !== "hurt" && p.state !== "punching") {
+      if (input.holdRight) p.x = Math.min(FOOTWORK_MAX_X, p.x + FOOTWORK_ADVANCE_SPD);
+      else if (input.holdLeft) p.x = Math.max(FOOTWORK_MIN_X, p.x - FOOTWORK_RETREAT_SPD);
+      else if (!FW.holdGroundWhenEngaged || !isEngaged(p)) p.x += (180 - p.x) * FOOTWORK_HOME_PULL;
+    }
+    resolveBodies(p);
+    if (input.instinct && gameState.instinctMeter >= 100 && !gameState.isInstinct) activateInstinct(false);
+    if (p.inputBufferTimer > 0) {
+      if (--p.inputBufferTimer <= 0) {
+        p.inputBuffer = null;
+        p.bufferedCharge = 0;
+      }
+    }
+    if (p.movementBufferTimer > 0) {
+      if (--p.movementBufferTimer <= 0) p.movementBuffer = null;
+    }
+    if (p.slideVx && Math.abs(p.slideVx) > 0.2) {
+      p.x = Math.max(FOOTWORK_MIN_X, p.x + p.slideVx);
+      p.slideVx *= 0.8;
+    } else p.slideVx = 0;
+    if (p.state === "floored") {
+      if (--p.floorTimer <= 0) {
+        p.state = "idle";
+        gameState.inputGrace = 6;
+      }
+      return;
+    }
+    if (p.state === "hurt") {
+      if (--p.hitStun <= 0) p.state = "idle";
+      return;
+    }
+    if (p.state === "recovery") {
+      if (--p.recoveryTimer <= 0) p.state = "idle";
+    } else if (p.state === "ghost_step") {
+      if (--p.ghostStepTimer <= 0) p.state = "idle";
+    }
+    let crossAttempt = input.cross, crossCharge = 0;
+    if (gameState.progressionMods.loadedCross) {
+      const LC = CONSTANTS.VERBS.loadedCross;
+      crossAttempt = false;
+      if (input.cross) {
+        p.charging = true;
+        p.crossCharge = 0;
+      }
+      if (p.charging) {
+        if (input.crossHeld) {
+          p.crossCharge = Math.min(LC.maxFrames, p.crossCharge + 1);
+          if (p.crossCharge === LC.chargeFrames) playSound("charge_ready");
+        } else {
+          crossAttempt = true;
+          crossCharge = p.crossCharge;
+          p.charging = false;
+        }
+      }
+    }
+    if (input.guard) {
+      if (p.state === "idle" && !p.charging) {
+        p.state = "guarding";
+        gameState.combo = 0;
+        resetJabString();
+      }
+    } else {
+      if (p.state === "guarding") {
+        p.state = "idle";
+        if (p.guardReadTimer > 0 && gameState.progressionMods.guardRead) {
+          p.guardReadTimer = 0;
+          p.slipBuff = Math.max(p.slipBuff, 1);
+          playSound("perfect_slip");
+          doFlash(0.15);
+          gameState.shake = Math.max(gameState.shake, 6);
+          spawnFloatingText(p.x, p.y - 80, "GUARD READ!", "#ffffff");
+        }
+      }
+    }
+    let canAct = p.state === "idle" || p.state === "guarding";
+    const moveAction = input.up ? "up" : input.down ? "down" : input.ghost ? "ghost" : null;
+    const attackAction = input.jab ? "jab" : crossAttempt ? "cross" : input.hook ? "hook" : null;
+    let attemptMovement = !!moveAction || input.guard;
+    if (!canAct && p.moveCancelReady && attemptMovement && p.state !== "ghost_step") {
+      canAct = true;
+      p.moveCancelReady = false;
+      p.state = "idle";
+      createImpact(p.x, p.y - 50, "#00ffff");
+      playSound("slip");
+    }
+    if (canAct) {
+      if (attackAction) {
+        if (p.charging && attackAction !== "cross") p.charging = false;
+        if (Math.abs(p.y - targetY) < 5) executeAttackInput(attackAction, crossCharge);
+        else {
+          p.inputBuffer = attackAction;
+          p.bufferedCharge = crossCharge;
+          p.inputBufferTimer = 12;
+        }
+      } else if (moveAction) {
+        if (p.state === "guarding") p.state = "idle";
+        if (moveAction === "ghost") p.charging = false;
+        executeMovementInput(moveAction);
+      } else if (input.guard && !p.charging) {
+        executeMovementInput("guard");
+      } else {
+        if (p.state === "guarding") p.state = "idle";
+      }
+    } else if (p.state === "punching" || p.state === "recovery") {
+      if (attackAction) {
+        p.inputBuffer = attackAction;
+        p.bufferedCharge = crossCharge;
+        p.inputBufferTimer = 12;
+      } else if (moveAction) {
+        p.movementBuffer = moveAction;
+        p.movementBufferTimer = 12;
+      }
+    }
+    if (p.state === "idle" || p.state === "guarding") {
+      if (p.comboWindow > 0) {
+        if (--p.comboWindow <= 0) resetJabString();
+      }
+      if (p.movementBuffer) {
+        let c = p.movementBuffer;
+        p.movementBuffer = null;
+        p.movementBufferTimer = 0;
+        executeMovementInput(c);
+      } else if (p.inputBuffer) {
+        if (Math.abs(p.y - targetY) < 5) {
+          let c = p.inputBuffer, ch = p.bufferedCharge || 0;
+          p.inputBuffer = null;
+          p.bufferedCharge = 0;
+          p.inputBufferTimer = 0;
+          executeAttackInput(c, ch);
+        }
+      }
+    }
+    if (p.state === "punching") {
+      p.punchTimer--;
+      if (p.hitFrame > 0) {
+        p.hitFrame--;
+        if (p.hitFrame === 0) {
+          p.didHit = checkHit(p.punchType);
+          if (p.didHit) tmLanded(p.punchType);
+        }
+      }
+      if (p.punchTimer <= 0) {
+        if (!p.didHit) {
+          p.state = "recovery";
+          let isJab = p.punchType && p.punchType.startsWith("jab"), iGP = p.punchType === "guard_jab" || p.punchType === "check_hook";
+          p.recoveryTimer = isJab || p.punchType === "guard_jab" ? 6 : p.punchType === "hook" || p.punchType === "check_hook" ? Math.floor(9 * gameState.progressionMods.hookRecoveryMult) : 13;
+          if (p.dempseyActive) p.recoveryTimer = Math.max(1, Math.floor(p.recoveryTimer * (1 - gameState.progressionMods.dempseyRecoveryBonus)));
+          const circuitSafe = gameState.progressionMods.infiniteCircuit && p.dempseyActive;
+          if (circuitSafe) {
+          } else if (isJab && !iGP) {
+            if (gameState.progressionMods.relentlessRhythm && (p.punchType === "jab1" || p.punchType === "jab2")) {
+              gameState.combo = Math.max(0, gameState.combo - 1);
+            } else if (gameState.orbCounts.speed < 2) {
+              gameState.combo = Math.max(0, gameState.combo - 1);
+            } else {
+              gameState.combo = 0;
+            }
+          } else if (!iGP) gameState.combo = 0;
+          resetJabString();
+          let cD = gameState.enemies.find((e) => e.tutorialType === "counter");
+          if (cD) {
+            spawnFloatingText(p.x, p.y - 50, "MISSED! TRY AGAIN!", "#ffaa00");
+            cD.x = p.x + 250;
+            cD.attackCooldown = cD.maxCooldown;
+            cD.justAttacked = 0;
+            p.slipBuff = 1;
+          }
+        } else {
+          p.state = "idle";
+          p.comboWindow = p.dempseyActive ? 35 : 25;
+          if (gameState.progressionMods.infiniteCircuit && p.dempseyActive) {
+            p.dempseyAlternations = (p.dempseyAlternations || 0) + 1;
+            if (p.dempseyAlternations % 4 === 0) {
+              p.slipBuff = Math.max(p.slipBuff, 1);
+              spawnFloatingText(p.x, p.y - 100, "CIRCUIT CHARGED", CONSTANTS.FUSION_COLORS.evo_infinite_circuit);
+            }
+          }
+          p.lastPunchLanded = p.punchType;
+        }
+        p.crossLoaded = false;
+      }
+    }
+  }
+
+  // src/entities/bosses.js
+  var BOSS_ROSTER = [
+    {
+      name: "NEON ENFORCER",
+      color: "#ffaa00",
+      controller: "neon_enforcer",
+      type: "shield",
+      weight: 2,
+      speed: 1.2,
+      cooldown: 60,
+      baseHpMult: 1,
+      startMove: "jab"
+    },
+    {
+      name: "PHANTOM BOXER",
+      color: "#aa00ff",
+      controller: "phantom_boxer",
+      type: "assassin",
+      weight: 1.5,
+      speed: 2.5,
+      cooldown: 40,
+      baseHpMult: 0.75,
+      startMove: "feint"
+    },
+    {
+      name: "STATIC MONK",
+      color: "#00ff00",
+      controller: "static_monk",
+      type: "zoner",
+      weight: 1.2,
+      speed: 1,
+      cooldown: 120,
+      baseHpMult: 0.85,
+      startMove: "laser"
+    },
+    // v17: the rotation no longer repeats inside Arcs 1-5.
+    {
+      name: "LIVE WIRE",
+      color: "#ffe14d",
+      controller: "live_wire",
+      type: "bruiser",
+      weight: 2.2,
+      speed: 1.7,
+      cooldown: 50,
+      baseHpMult: 1.05,
+      startMove: "string"
+    },
+    {
+      name: "NEGATIVE",
+      color: "#ff0000",
+      // replaced at spawn with the inverse of the Striker's colour
+      controller: "negative",
+      type: "grunt",
+      weight: 1.3,
+      speed: 2.2,
+      cooldown: 44,
+      baseHpMult: 1.2,
+      startMove: "jab"
+    }
+  ];
+  var BOSS_ROSTER_IDS = BOSS_ROSTER.map((b) => b.controller);
+  function spawnMonkAdd() {
+    let hp = Math.floor(45 * CONSTANTS.enemyHpMult(gameState.currentStage));
+    let lane = Math.floor(random() * 3);
+    gameState.enemies.push({
+      x: gameState.width + 60,
+      lane,
+      y: gameState.height * CONSTANTS.LANE_Y[lane],
+      w: 50,
+      h: 110,
+      hp,
+      maxHp: hp,
+      speed: 3 * (gameState.stageSpeedMult || 1),
+      color: "#ff0055",
+      type: "grunt",
+      weight: 1,
+      stun: 0,
+      stunResist: 0,
+      attackCooldown: 60,
+      maxCooldown: 60,
+      isBoss: false,
+      justAttacked: 0,
+      trails: [],
+      trailTimer: 0,
+      vx: 0,
+      pressure: 0,
+      pressureDecay: 0
+    });
+    spawnFloatingText(gameState.width - 120, gameState.height * 0.2, "SUPPORT INBOUND", "#00ff00");
+  }
+  function spawnBoss() {
+    gameState.bossActive = true;
+    gameState.bossIntroTimer = 180;
+    gameState.posterConfirmed = false;
+    gameState.shake = 15;
+    playSound("bash_tell");
+    setMusicIntensity(1);
+    let baseHp = CONSTANTS.bossHp(gameState.currentStage);
+    const rawArcIndex = CONSTANTS.getArcIndex(gameState.currentStage);
+    const bossIndex = (rawArcIndex - 1) % BOSS_ROSTER.length;
+    const template = { ...BOSS_ROSTER[bossIndex] };
+    if (template.controller === "negative") template.color = invertHex(gameState.strikerColor || "#00ffff");
+    gameState.bossThemeColor = template.color;
+    gameState.bossIntroText = template.name;
+    const arcData = CONSTANTS.ARC_STAGE_TABLES[Math.min(rawArcIndex, 5)] || {};
+    gameState.bossPoster = {
+      name: template.name,
+      controller: template.controller,
+      color: template.color,
+      arc: rawArcIndex,
+      tagline: (CONSTANTS.BOSS_BILLING[template.controller] || {}).tagline || "",
+      venue: arcData[7] && arcData[7].stageName || "Boss Chamber",
+      round: gameState.currentStage
+    };
+    playSound("bell");
+    const arcMods = CONSTANTS.getBossArcMods(template.controller, rawArcIndex);
+    gameState.enemies.push({
+      name: template.name,
+      controller: template.controller,
+      x: gameState.width - 150,
+      lane: 1,
+      y: gameState.height * CONSTANTS.LANE_Y[1],
+      w: template.type === "shield" ? 60 : 50,
+      h: template.type === "shield" ? 140 : 130,
+      hp: baseHp * template.baseHpMult,
+      maxHp: baseHp * template.baseHpMult,
+      speed: template.speed,
+      color: template.color,
+      type: template.type,
+      weight: template.weight,
+      phase: 1,
+      currentMove: template.startMove,
+      lastMove: null,
+      stun: 0,
+      stunResist: 0,
+      attackCooldown: template.cooldown,
+      maxCooldown: template.cooldown,
+      isBoss: true,
+      pressure: 0,
+      pressureDecay: 0,
+      justAttacked: 0,
+      trails: [],
+      trailTimer: 0,
+      bossMashCount: 0,
+      mashDecay: 0,
+      hitstunScaling: 0,
+      stunDecay: 0,
+      shiftWarning: 0,
+      shiftCooldown: 0,
+      vx: 0,
+      exposedTimer: 0,
+      desperation: false,
+      enraged: false,
+      targetLanes: [],
+      decoyTimer: 0,
+      decoyLane: -1,
+      decoyRolledThisCycle: false,
+      // v16 offense audit + finisher bookkeeping
+      telegraphed: false,
+      recoverTimer: 0,
+      recoverMax: 0,
+      punishShown: false,
+      feintSwitched: false,
+      finisherStage: 0,
+      pendingFinisher: null,
+      koDone: false,
+      stringIdx: 0,
+      stringsThrown: 0,
+      shockTimer: 0,
+      slipCooldown: 0,
+      arcMods
+      // Assigned directly to the entity!
+    });
+  }
+  function resolveBossStrike(en, rawDmg, isHeavy) {
+    if (en.lane !== gameState.player.lane) return;
+    if (Math.abs(en.x - gameState.player.x) > 100) return;
+    if (gameState.player.state === "ghost_step") {
+      spawnFloatingText(gameState.player.x, gameState.player.y - 50, "GHOST STEP", "#888888");
+      registerPerfectGhostStep();
+      if (gameState.progressionMods.ghostCounter && gameState.player.slipBuff === 0) {
+        gameState.player.slipBuff = 1;
+        playSound("perfect_slip");
+        spawnFloatingText(gameState.player.x, gameState.player.y - 80, "GHOST COUNTER!", "#ffffff");
+      }
+      return;
+    }
+    let dmg = gameState.isInstinct ? Math.floor(rawDmg * 0.5) : rawDmg;
+    const counter = gameState.player.state === "punching" || gameState.player.state === "recovery";
+    if (counter) dmg = Math.round(dmg * CONSTANTS.PLAYER_HIT.counterHitMult);
+    takeDamage(dmg, isHeavy || counter, en, { floor: isHeavy || counter, counter });
+  }
+  function nextCycle(en, frames) {
+    const mult = en.desperation ? CONSTANTS.BOSS_OFFENSE.desperationCooldownMult : 1;
+    return clampCycle(frames * mult);
+  }
+  function meleeTelegraph(en, inRange, onTell) {
+    const lead = telegraphLead(en);
+    if (!inRange) {
+      if (en.attackCooldown <= lead) {
+        en.attackCooldown = lead + 6;
+        en.telegraphed = false;
+      }
+      return;
+    }
+    if (!en.telegraphed && en.attackCooldown <= lead) {
+      en.telegraphed = true;
+      en.telegraphAt = en.attackCooldown;
+      onTell();
+    }
+  }
+  function handleNeonEnforcer(en) {
+    if (en.recoverTimer > 0) {
+      en.recoverTimer--;
+      return;
+    }
+    en.attackCooldown--;
+    if (en.currentMove !== "bash" && en.x > gameState.player.x + 100) {
+      en.x -= en.speed * 0.5 * en.arcMods.walkDownMult;
+    }
+    const inRange = Math.abs(en.x - gameState.player.x) < 140 && en.stun <= 0;
+    meleeTelegraph(en, inRange, () => {
+      playSound(en.currentMove === "bash" ? "bash_tell" : "jab_tell");
+      if (en.currentMove === "bash") createImpact(en.x, en.y - 60, "#ffaa00");
+    });
+    if (inRange && en.attackCooldown <= 0) {
+      en.justAttacked = 5;
+      const struck = en.currentMove;
+      resolveBossStrike(en, struck === "bash" ? 30 : 12, struck === "bash");
+      if (en.enraged) {
+        en.currentMove = "bash";
+        en.enraged = false;
+        en.maxCooldown = nextCycle(en, 55);
+      } else {
+        let roll = random();
+        if (en.phase === 1) {
+          en.currentMove = roll > 0.6 ? "bash" : "jab";
+          en.maxCooldown = nextCycle(en, en.currentMove === "bash" ? 70 : 45);
+        } else {
+          en.currentMove = roll > 0.5 ? "bash" : "jab";
+          en.maxCooldown = nextCycle(en, en.currentMove === "bash" ? 55 : 35);
+        }
+      }
+      en.attackCooldown = en.maxCooldown;
+      beginPunishWindow(en, struck);
+    }
+  }
+  function handlePhantomBoxer(en) {
+    if (en.recoverTimer > 0) {
+      en.recoverTimer--;
+      return;
+    }
+    en.attackCooldown--;
+    if (en.x > gameState.player.x + 100) {
+      en.x -= en.speed;
+    }
+    if (en.arcMods.fakeLaneFlash && !en.decoyRolledThisCycle && Math.abs(en.x - gameState.player.x) < 140 && en.attackCooldown <= Math.floor(28 * en.arcMods.punishWindowMult)) {
+      en.decoyRolledThisCycle = true;
+      if (random() < 0.45) {
+        const otherLanes = [0, 1, 2].filter((l) => l !== en.lane);
+        en.decoyLane = otherLanes[Math.floor(random() * otherLanes.length)];
+        en.decoyTimer = 16;
+      }
+    }
+    if (en.decoyTimer > 0) {
+      en.decoyTimer--;
+      gameState.laneFlash[en.decoyLane] = Math.max(gameState.laneFlash[en.decoyLane], en.decoyTimer < 6 ? 2 : 1);
+    }
+    if (en.arcMods.afterimageThreat && en.trails && en.trails.length > 0 && en.attackCooldown > 20) {
+      const ghost = en.trails[0];
+      if (ghost && ghost.lane !== void 0 && ghost.lane !== en.lane) {
+        gameState.laneFlash[ghost.lane] = Math.max(gameState.laneFlash[ghost.lane], 1);
+      }
+    }
+    const inRange = Math.abs(en.x - gameState.player.x) < 140 && en.stun <= 0;
+    meleeTelegraph(en, inRange, () => {
+      playSound(en.currentMove === "feint" ? "feint_tell" : "jab_tell");
+    });
+    if (inRange) {
+      if (en.currentMove === "feint" && !en.feintSwitched && en.attackCooldown <= Math.max(14, Math.floor(16 * en.arcMods.punishWindowMult))) {
+        en.feintSwitched = true;
+        en.lane = gameState.player.lane;
+        en.y = gameState.height * CONSTANTS.LANE_Y[en.lane];
+        createImpact(en.x, en.y - 60, "#aa00ff");
+      }
+      if (en.attackCooldown <= 0) {
+        en.justAttacked = 5;
+        const struck = en.currentMove;
+        resolveBossStrike(en, 15, false);
+        en.decoyRolledThisCycle = false;
+        en.decoyTimer = 0;
+        en.feintSwitched = false;
+        let roll = random();
+        if (en.phase === 1) {
+          en.currentMove = roll > 0.5 ? "feint" : "jab";
+          en.maxCooldown = nextCycle(en, en.currentMove === "feint" ? 45 : 30);
+        } else {
+          if (en.lastMove === "feint") en.currentMove = "jab";
+          else en.currentMove = roll > 0.2 ? "feint" : "jab";
+          en.maxCooldown = nextCycle(en, en.currentMove === "feint" ? 35 : 26);
+        }
+        en.lastMove = en.currentMove;
+        en.attackCooldown = en.maxCooldown;
+        beginPunishWindow(en, struck === "feint" ? "feint" : "jab");
+      }
+    }
+  }
+  function handleStaticMonk(en) {
+    en.attackCooldown--;
+    if (en.currentMove === "recharge") {
+      en.x = gameState.player.x + 100;
+      if (en.attackCooldown <= 0) {
+        en.currentMove = "laser";
+        en.x = gameState.width - 150;
+        en.attackCooldown = nextCycle(en, 100);
+        en.telegraphed = false;
+        playSound("ghost_step");
+        createShatter(en.x, en.y - 60, "#00ff00");
+      }
+    } else {
+      en.x = gameState.width - 150 + Math.sin(Date.now() * 2e-3) * 50;
+      if (!en.telegraphed && en.attackCooldown <= 80) {
+        en.telegraphed = true;
+        en.telegraphAt = en.attackCooldown;
+        playSound("zoner_tell");
+        en.targetLanes = [gameState.player.lane];
+        let adjacentLane = gameState.player.lane === 1 ? random() > 0.5 ? 0 : 2 : 1;
+        en.targetLanes.push(adjacentLane);
+      }
+      if (en.attackCooldown > 0 && en.targetLanes.length > 0) {
+        en.targetLanes.forEach((laneIndex) => {
+          gameState.laneFlash[laneIndex] = en.attackCooldown <= 15 ? 2 : 1;
+          if (gameState.player.lane === laneIndex) {
+            gameState.player.dangerLevel = Math.max(gameState.player.dangerLevel, en.attackCooldown <= 15 ? 2 : 1);
+          }
+        });
+        if (en.arcMods.deceptiveOrder && en.attackCooldown > 45) {
+          const safeLane = [0, 1, 2].find((l) => !en.targetLanes.includes(l));
+          if (safeLane !== void 0) gameState.laneFlash[safeLane] = Math.max(gameState.laneFlash[safeLane], 1);
+        }
+      }
+      if (en.attackCooldown <= 0) {
+        playSound("laser");
+        en.justAttacked = 10;
+        gameState.shake = 15;
+        if (en.targetLanes.length > 0) {
+          en.targetLanes.forEach((laneIndex) => {
+            for (let i = 0; i < 6; i++) {
+              createImpact(en.x - i * 150, gameState.height * CONSTANTS.LANE_Y[laneIndex], "#00ff00");
+            }
+            if (gameState.player.lane === laneIndex) {
+              if (gameState.player.state === "ghost_step") {
+                spawnFloatingText(gameState.player.x, gameState.player.y - 50, "EVADED", "#888888");
+                registerPerfectGhostStep();
+              } else takeDamage(gameState.isInstinct ? 15 : 30, true, en);
+            }
+          });
+        }
+        en.targetLanes = [];
+        en.telegraphed = false;
+        en.bossMashCount++;
+        const volleysPerBurst = 1 + (en.arcMods.patternChainLength || 1);
+        if (en.bossMashCount >= volleysPerBurst) {
+          en.currentMove = "recharge";
+          en.attackCooldown = Math.floor(180 / en.arcMods.teleportRateMult);
+          en.bossMashCount = 0;
+          en.lane = gameState.player.lane;
+          en.y = gameState.height * CONSTANTS.LANE_Y[en.lane];
+          en.x = gameState.player.x + 100;
+          en.punishShown = false;
+          playSound("ghost_step");
+          createImpact(en.x, en.y - 60, "#00ff00");
+          spawnFloatingText(en.x, en.y - 120, "RECHARGING \u2014 OPEN!", "#00ff00");
+          if (en.arcMods.summonSupportPressure && gameState.enemies.filter((e) => !e.isBoss).length < 1) {
+            spawnMonkAdd();
+          }
+        } else {
+          en.attackCooldown = en.arcMods.followupPattern ? 88 : 100;
+          let otherLanes = [0, 1, 2].filter((l) => l !== en.lane);
+          en.lane = otherLanes[Math.floor(random() * otherLanes.length)];
+          en.y = gameState.height * CONSTANTS.LANE_Y[en.lane];
+        }
+      }
+    }
+  }
+  function updateLiveLanes() {
+    if (!gameState.liveLanes || !gameState.liveLanes.length) return;
+    const L = CONSTANTS.LIVE_LANE, p = gameState.player;
+    for (const z of gameState.liveLanes) {
+      z.timer--;
+      if (z.phase === "warn") {
+        if (z.timer <= 0) {
+          z.phase = "live";
+          z.timer = L.liveFrames;
+          z.tick = 0;
+          playSound("shock");
+        }
+      } else {
+        if (p.lane === z.lane && !(p.invuln > 0) && p.state !== "ghost_step" && z.tick++ % L.tickEvery === 0) {
+          takeDamage(L.damage, false, null, { src: "live_lane" });
+          playSound("shock");
+          createImpact(p.x + 20, p.y - 70, "#fff36b");
+          spawnFloatingText(p.x + 10, p.y - 130, "SHOCKED!", "#fff36b");
+        }
+      }
+    }
+    gameState.liveLanes = gameState.liveLanes.filter((z) => z.phase === "warn" || z.timer > 0);
+  }
+  function electrifyLane(lane) {
+    if (!gameState.liveLanes) gameState.liveLanes = [];
+    if (gameState.liveLanes.some((z) => z.lane === lane)) return;
+    gameState.liveLanes.push({ lane, phase: "warn", timer: CONSTANTS.LIVE_LANE.warnFrames, tick: 0 });
+    spawnFloatingText(gameState.width * 0.5, gameState.height * CONSTANTS.LANE_Y[lane] - 50, "LIVE LANE", "#fff36b");
+  }
+  function handleLiveWire(en) {
+    if (en.recoverTimer > 0) {
+      en.recoverTimer--;
+      return;
+    }
+    en.attackCooldown--;
+    const p = gameState.player;
+    if (en.x > p.x + 100) en.x -= en.speed * 0.6 * (en.arcMods.walkDownMult || 1);
+    const K2 = getBinds();
+    const holding = gameState.keys[K2.right] || gameState.pad.rightHeld;
+    if (Math.abs(en.x - p.x) < 112 && !holding && p.state !== "punching") p.x = Math.max(CONSTANTS.FOOTWORK.minX, p.x - 0.7);
+    const inRange = Math.abs(en.x - p.x) < 140 && en.stun <= 0;
+    meleeTelegraph(en, inRange, () => {
+      playSound(en.currentMove === "shove" ? "bash_tell" : "jab_tell");
+      if (en.currentMove === "shove") createImpact(en.x, en.y - 60, "#ffe14d");
+    });
+    if (!(inRange && en.attackCooldown <= 0)) return;
+    en.justAttacked = 5;
+    if (en.currentMove === "string") {
+      resolveBossStrike(en, 10, false);
+      const len = en.arcMods.stringLength || 2;
+      en.stringIdx = (en.stringIdx || 0) + 1;
+      if (en.stringIdx < len) {
+        if (Math.abs(en.lane - p.lane) === 1) {
+          en.lane = p.lane;
+          en.y = gameState.height * CONSTANTS.LANE_Y[en.lane];
+        }
+        en.attackCooldown = telegraphLead(en) + 4;
+        en.telegraphed = false;
+        return;
+      }
+      en.stringIdx = 0;
+      en.stringsThrown = (en.stringsThrown || 0) + 1;
+      electrifyLane(en.lane);
+      const shoveNext = en.stringsThrown % (en.arcMods.shoveEvery || 3) === 0;
+      en.currentMove = shoveNext ? "shove" : "string";
+      en.maxCooldown = nextCycle(en, shoveNext ? 60 : 44);
+      en.attackCooldown = en.maxCooldown;
+      beginPunishWindow(en, "jab");
+    } else {
+      const connected = en.lane === p.lane && Math.abs(en.x - p.x) <= 100 && p.state !== "ghost_step";
+      resolveBossStrike(en, 14, true);
+      if (connected) {
+        p.x = Math.max(CONSTANTS.FOOTWORK.minX, p.x - 60);
+        spawnFloatingText(p.x, p.y - 120, "WALKED BACK", "#ffe14d");
+      }
+      en.currentMove = "string";
+      en.maxCooldown = nextCycle(en, 44);
+      en.attackCooldown = en.maxCooldown;
+      beginPunishWindow(en, "bash");
+    }
+  }
+  function updateEnemyEchoes() {
+    if (!gameState.enemyEchoes || !gameState.enemyEchoes.length) return;
+    const p = gameState.player;
+    for (const e of gameState.enemyEchoes) {
+      if (!e.fired) {
+        if (e.timer <= 12) gameState.laneFlash[e.lane] = Math.max(gameState.laneFlash[e.lane], e.timer <= 6 ? 2 : 1);
+        if (--e.timer <= 0) {
+          e.fired = true;
+          if (p.lane === e.lane && Math.abs(e.x - p.x) < 150) {
+            if (p.state === "ghost_step") {
+              spawnFloatingText(p.x, p.y - 50, "GHOST STEP", "#888888");
+              registerPerfectGhostStep();
+            } else takeDamage(gameState.isInstinct ? 6 : 12, false, null, { src: "negative_echo" });
+          }
+          createImpact(e.x - 40, e.y - 60, e.color);
+        }
+      } else e.fade--;
+    }
+    gameState.enemyEchoes = gameState.enemyEchoes.filter((e) => !e.fired || e.fade > 0);
+  }
+  function handleNegative(en) {
+    if (en.slipCooldown > 0) en.slipCooldown--;
+    if (en.phase === 1 && en.hp < en.maxHp * 0.5) {
+      en.phase = 2;
+      gameState.shake = 40;
+      doFlash(0.6);
+      triggerShockwave(en.x, en.y - 60, en.color);
+      spawnFloatingText(en.x + 20, en.y - 160, "THE MIRROR CRACKS", en.color);
+      playSound("hit");
+    }
+    if (en.recoverTimer > 0) {
+      en.recoverTimer--;
+      return;
+    }
+    en.attackCooldown--;
+    const p = gameState.player;
+    if (en.x > p.x + 100) en.x -= en.speed * 0.6;
+    const inRange = Math.abs(en.x - p.x) < 140 && en.stun <= 0;
+    meleeTelegraph(en, inRange, () => playSound(en.currentMove === "cross" ? "bash_tell" : "jab_tell"));
+    if (!(inRange && en.attackCooldown <= 0)) return;
+    en.justAttacked = 5;
+    const struck = en.currentMove;
+    resolveBossStrike(en, struck === "cross" ? 18 : 12, struck === "cross");
+    const roll = random();
+    en.currentMove = en.phase === 2 ? roll > 0.45 ? "cross" : "jab" : roll > 0.65 ? "cross" : "jab";
+    en.maxCooldown = nextCycle(en, en.currentMove === "cross" ? 48 : 34);
+    en.attackCooldown = en.maxCooldown;
+    beginPunishWindow(en, struck === "cross" ? "bash" : "jab");
+  }
+  function updateBosses() {
+    updateEnemyEchoes();
+    if (!gameState.finisher) updateLiveLanes();
+    for (const en of gameState.enemies) {
+      if (!en.isBoss) continue;
+      checkBossThresholds(en);
+      if (en.pendingFinisher && !gameState.finisher) {
+        const kind = en.pendingFinisher;
+        en.pendingFinisher = null;
+        startFinisher(en, kind);
+        return;
+      }
+      if (en.stun > 0 || gameState.bossIntroTimer > 0) continue;
+      if (en.controller === "neon_enforcer") handleNeonEnforcer(en);
+      else if (en.controller === "phantom_boxer") handlePhantomBoxer(en);
+      else if (en.controller === "static_monk") handleStaticMonk(en);
+      else if (en.controller === "live_wire") handleLiveWire(en);
+      else if (en.controller === "negative") handleNegative(en);
+    }
+  }
+
+  // src/systems/practice.js
+  var BOSS_NAMES = ["NEON ENFORCER", "PHANTOM BOXER", "STATIC MONK", "LIVE WIRE", "NEGATIVE"];
+  function practiceTargets() {
+    const a2 = CONSTANTS.firstStageOfArc(2);
+    const list = [
+      { id: "grunt", label: "GRUNT", type: "grunt", stage: 2, need: 0 },
+      { id: "shield", label: "GOLD ARMOR", type: "shield", stage: 3, need: 0 },
+      { id: "bruiser", label: "BRUISER", type: "bruiser", stage: 3, need: 0 },
+      { id: "zoner", label: "ZONER", type: "zoner", stage: 4, need: 0 },
+      { id: "assassin", label: "ASSASSIN", type: "assassin", stage: 4, need: 0 },
+      { id: "string", label: "PUNCH STRING", type: "grunt", stringLen: 3, stage: a2 + 1, need: a2 }
+    ];
+    for (let arc = 1; arc <= 5; arc++) {
+      const bs = CONSTANTS.bossStageOfArc(arc);
+      list.push({ id: `boss${arc}`, label: BOSS_NAMES[arc - 1], boss: arc, stage: bs, need: bs });
+    }
+    return list;
+  }
+  function practiceTargetUnlocked(t, bestStage) {
+    return (bestStage || 0) >= (t.need || 0);
+  }
+  function beginPractice(target, showWindows) {
+    gameState.practice = { id: target.id, target, windows: !!showWindows, respawn: 30, resets: 0, perfect0: 0 };
+    gameState.currentStage = target.stage;
+    gameState.stageClearing = false;
+    gameState.bossActive = false;
+    gameState.waveTimer = 9999;
+    gameState.seenTutorials = { ...gameState.seenTutorials || {}, footwork_tip: true, instinct: true, bruiser_id: true, string_id: true, assassin_id: true };
+    gameState.tutorialEnabled = false;
+    gameState.pendingUpgrades = 0;
+  }
+  function updatePractice() {
+    const P = gameState.practice;
+    if (!P) return;
+    gameState.exp = 0;
+    gameState.pendingUpgrades = 0;
+    gameState.stageClearing = false;
+    if (gameState.health < 40) {
+      gameState.health = gameState.maxHealth;
+      P.resets++;
+      spawnFloatingText(gameState.player.x, gameState.player.y - 130, "HP RESET", "#9ca3af");
+    }
+    const t = P.target;
+    const alive = t.boss ? gameState.enemies.some((e) => e.isBoss && e.hp > 0) || gameState.bossIntroTimer > 0 || !!gameState.finisher : gameState.enemies.some((e) => e.hp > 0);
+    if (alive) {
+      P.respawn = t.boss ? 90 : 40;
+      return;
+    }
+    if (--P.respawn > 0) return;
+    if (t.boss) {
+      gameState.enemies = gameState.enemies.filter((e) => !e.isBoss);
+      gameState.bossDefeatedThisStage = false;
+      gameState.bossActive = false;
+      spawnBoss();
+    } else {
+      const lane = gameState.player ? Math.random() < 0.6 ? gameState.player.lane : Math.floor(Math.random() * 3) : 1;
+      gameState.enemies.push(makeEnemy(t.type, lane, 0, { stringLen: t.stringLen }));
+    }
+  }
+  function practiceHudText() {
+    const P = gameState.practice;
+    if (!P) return "";
+    return `PRACTICE \xB7 ${P.target.label} \xB7 PERFECT ${gameState.statTotalSlips || 0} \xB7 HITS TAKEN ${gameState.stageHitsTaken || 0}`;
   }
 
   // src/ui/ui.js
@@ -1461,6 +4193,24 @@
         w.style.display = gameState.wagerMult > 1 ? "inline-block" : "none";
       }
       gameState.lastHUD.wager = key;
+    }
+    if (gameState.practice) {
+      const txt = practiceHudText();
+      if (gameState.lastHUD.practice !== txt) {
+        if (HUD.stage) HUD.stage.innerText = txt;
+        const el = $("arc-par");
+        if (el) el.innerHTML = "";
+        gameState.lastHUD.practice = txt;
+      }
+    }
+    const al = gameState.practice ? null : arcLive(), parKey = al ? `${al.arc}|${al.secs}|${Math.floor(al.score / 1e3)}` : "";
+    if (al && gameState.lastHUD.par !== parKey) {
+      const el = $("arc-par");
+      if (el) {
+        const late = al.secs > al.par.time, rich = al.score >= al.par.score;
+        el.innerHTML = `PAR <span style="color:${late ? "#f87171" : "#e5e7eb"}">${fmtSecs(al.secs)}/${fmtSecs(al.par.time)}</span> \xB7 <span style="color:${rich ? "#facc15" : "#e5e7eb"}">${fmtK(al.score)}/${fmtK(al.par.score)}</span>`;
+      }
+      gameState.lastHUD.par = parKey;
     }
     if (gameState.lastHUD.combo !== gameState.combo) {
       HUD.combo.innerText = gameState.combo;
@@ -1935,481 +4685,10 @@
     ctx3.globalAlpha = 1;
   }
 
-  // src/systems/boss_rules.js
-  var BO = CONSTANTS.BOSS_OFFENSE;
-  function telegraphLead(en) {
-    const mult = en && en.arcMods && en.arcMods.punishWindowMult || 1;
-    return Math.max(BO.minTelegraphLead, Math.floor(BO.telegraphLead * mult));
-  }
-  function punishFrames(en, move) {
-    const mult = en && en.arcMods && en.arcMods.punishWindowMult || 1;
-    const base = BO.punishFrames[move] || BO.punishFrames.jab;
-    return Math.max(BO.minPunishFrames, Math.floor(base * mult));
-  }
-  function beginPunishWindow(en, move) {
-    const f = punishFrames(en, move);
-    en.recoverTimer = f;
-    en.recoverMax = f;
-    en.punishShown = false;
-    en.telegraphed = false;
-  }
-  function isBossOpen(en) {
-    if (!en || !en.isBoss) return false;
-    if ((en.recoverTimer || 0) > 0) return true;
-    return en.controller === "static_monk" && en.currentMove === "recharge";
-  }
-  function clampCycle(frames) {
-    return Math.max(BO.minTelegraphLead + 2, Math.round(frames));
-  }
-
-  // src/systems/telemetry.js
-  var KEY = "neon_strike_telemetry_v1";
-  var MAX_RUNS = 25;
-  var TELEMETRY_VERSION = "19.0.0";
-  var run = null;
-  var stage = null;
-  function safeGet2() {
-    try {
-      const r = localStorage.getItem(KEY);
-      const a = r ? JSON.parse(r) : [];
-      return Array.isArray(a) ? a : [];
-    } catch (e) {
-      return [];
-    }
-  }
-  function safeSet2(a) {
-    try {
-      localStorage.setItem(KEY, JSON.stringify(a));
-    } catch (e) {
-    }
-  }
-  var bump = (obj, k, n = 1) => {
-    obj[k] = (obj[k] || 0) + n;
-  };
-  function newStage(n) {
-    const arc = CONSTANTS.getArcIndex(n), lvl = CONSTANTS.getLevelInArc(n);
-    const t = CONSTANTS.ARC_STAGE_TABLES[Math.min(arc, 5)] || {};
-    return {
-      stage: n,
-      arc,
-      level: lvl,
-      name: t[lvl] && t[lvl].stageName || "",
-      boss: CONSTANTS.isBossStage(n),
-      frames: 0,
-      kills: {},
-      dmg: {},
-      hitsTaken: 0,
-      attacks: {},
-      landed: {},
-      slips: { perfect: 0, good: 0 },
-      ghosts: { used: 0, perfect: 0 },
-      guards: 0,
-      knockdowns: 0,
-      floored: 0,
-      counteredBy: 0,
-      finishers: [],
-      wager: null
-    };
-  }
-  function tmStartRun({ seed = null, daily = false } = {}) {
-    run = { v: TELEMETRY_VERSION, id: `${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`, date: (/* @__PURE__ */ new Date()).toISOString(), seed, daily, frames: 0, stages: [], evolutions: [], end: null };
-    stage = newStage(1);
-    run.stages.push(stage);
-  }
-  function tmStage(n) {
-    if (!run) return;
-    stage = newStage(n);
-    run.stages.push(stage);
-  }
-  function tmTick() {
-    if (!run || !stage) return;
-    run.frames++;
-    stage.frames++;
-  }
-  function tmKill(kind) {
-    if (stage) bump(stage.kills, kind);
-  }
-  function tmDamage(src, amt) {
-    if (!stage) return;
-    bump(stage.dmg, src || "unknown", Math.max(0, Math.round(amt)));
-    stage.hitsTaken++;
-    if (run) run.lastDamageSrc = src || "unknown";
-  }
-  function tmAttack(punch) {
-    if (stage) bump(stage.attacks, punch);
-  }
-  function tmLanded(punch) {
-    if (stage) bump(stage.landed, punch);
-  }
-  function tmSlip(quality) {
-    if (stage && stage.slips[quality] !== void 0) stage.slips[quality]++;
-  }
-  function tmGhost(perfect) {
-    if (!stage) return;
-    if (perfect) stage.ghosts.perfect++;
-    else stage.ghosts.used++;
-  }
-  function tmGuard() {
-    if (stage) stage.guards++;
-  }
-  function tmKnockdown() {
-    if (stage) stage.knockdowns++;
-  }
-  function tmFloored(counter) {
-    if (!stage) return;
-    stage.floored++;
-    if (counter) stage.counteredBy++;
-  }
-  function tmFinisher(kind, result, hits, prompts) {
-    if (stage) stage.finishers.push({ kind, result, hits, prompts });
-  }
-  function tmEvolution(id) {
-    if (run) run.evolutions.push({ stage: gameState.currentStage, frame: run.frames, id });
-  }
-  function tmWager(name) {
-    if (stage) stage.wager = name || null;
-  }
-  function tmEndRun({ stage: endStage, score, grade }) {
-    if (!run) return null;
-    run.end = { stage: endStage, score, grade, frames: run.frames, cause: run.lastDamageSrc || "unknown" };
-    const all = safeGet2();
-    all.push(run);
-    safeSet2(all.slice(-MAX_RUNS));
-    const done = run;
-    run = null;
-    stage = null;
-    return done;
-  }
-  function liveRun() {
-    return run;
-  }
-  function loadTelemetry() {
-    return safeGet2();
-  }
-  function exportTelemetryJSON() {
-    return JSON.stringify({ exported: (/* @__PURE__ */ new Date()).toISOString(), game: "neon-strike", version: TELEMETRY_VERSION, runs: safeGet2() }, null, 2);
-  }
-  function fmtTime(frames) {
-    const s = Math.floor((frames || 0) / 60);
-    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-  }
-  function summarizeTelemetry(runs) {
-    const ends = {}, hurt = {}, stageTime = {}, reached = {};
-    for (const r of runs) {
-      if (r.end) bump(ends, r.end.stage);
-      for (const s of r.stages || []) {
-        bump(reached, s.stage);
-        (stageTime[s.stage] = stageTime[s.stage] || []).push(s.frames);
-        for (const [k, v] of Object.entries(s.dmg || {})) bump(hurt, k, v);
-      }
-    }
-    const avgTime = {};
-    for (const [k, arr] of Object.entries(stageTime)) avgTime[k] = Math.round(arr.reduce((a, b) => a + b, 0) / arr.length);
-    const topHurt = Object.entries(hurt).sort((a, b) => b[1] - a[1]);
-    return { runs: runs.length, ends, reached, avgTime, topHurt };
-  }
-
-  // src/systems/finisher.js
-  var F = CONSTANTS.FINISHER;
-  var LANE_STEP = { up: -1, down: 1 };
-  function finisherSequence(controller, kind) {
-    const set = F.sequences[controller] || F.sequences.neon_enforcer;
-    return set[kind] || set.break1;
-  }
-  function gateBossDamage(en, dmg) {
-    if (!en || !en.isBoss || en.koDone || gameState.finisher || en.pendingFinisher) return dmg;
-    const stage2 = en.finisherStage || 0;
-    if (stage2 < F.thresholds.length) {
-      const line = en.maxHp * F.thresholds[stage2];
-      if (en.hp - dmg <= line) {
-        en.finisherStage = stage2 + 1;
-        en.pendingFinisher = "break" + (stage2 + 1);
-        return Math.max(0, en.hp - line);
-      }
-    }
-    if (en.hp - dmg <= 0) {
-      en.pendingFinisher = "ko";
-      return Math.max(0, en.hp - 1);
-    }
-    return dmg;
-  }
-  function checkBossThresholds(en) {
-    if (!en || !en.isBoss || en.koDone || gameState.finisher || en.pendingFinisher) return;
-    const stage2 = en.finisherStage || 0;
-    if (en.hp <= 0) {
-      en.hp = 1;
-      en.pendingFinisher = "ko";
-      return;
-    }
-    if (stage2 < F.thresholds.length && en.hp <= en.maxHp * F.thresholds[stage2]) {
-      en.finisherStage = stage2 + 1;
-      en.pendingFinisher = "break" + (stage2 + 1);
-    }
-  }
-  function startFinisher(en, kind) {
-    const seq = finisherSequence(en.controller, kind).slice();
-    let dmgPerHit = 0;
-    if (kind !== "ko") {
-      const nextStage = en.finisherStage || 0;
-      const floorFrac = nextStage < F.thresholds.length ? F.thresholds[nextStage] + 0.02 : 0.02;
-      const budget = Math.max(0, Math.min(en.maxHp * F.breakDamageFrac, en.hp - en.maxHp * floorFrac));
-      dmgPerHit = budget / seq.length;
-    }
-    gameState.finisher = {
-      boss: en,
-      kind,
-      seq,
-      idx: 0,
-      phase: "intro",
-      frame: 0,
-      timer: F.introFrames,
-      nextBeat: 0,
-      hits: 0,
-      perfects: 0,
-      result: null,
-      dmgPerHit,
-      zoom: 1,
-      bars: 0,
-      freeze: 0,
-      poseTimer: 0,
-      judge: null,
-      judgeTimer: 0,
-      jabAlt: false,
-      landed: [],
-      playIdx: 0,
-      playTimer: 0,
-      lockFlash: 0
-    };
-    const p = gameState.player;
-    p.state = "idle";
-    p.punchTimer = 0;
-    p.hitFrame = 0;
-    p.inputBuffer = null;
-    p.movementBuffer = null;
-    p.lane = 1;
-    p.x = Math.min(Math.max(p.x, 160), 300);
-    en.lane = 1;
-    en.x = p.x + 118;
-    en.vx = 0;
-    en.stun = 0;
-    const midY = gameState.height * CONSTANTS.LANE_Y[1];
-    en.y = midY;
-    p.y = midY;
-    en.recoverTimer = 0;
-    en.telegraphed = false;
-    en.shiftWarning = 0;
-    en.exposedTimer = 0;
-    en.decoyTimer = 0;
-    en.targetLanes = [];
-    en.justAttacked = 0;
-    gameState.hazards = [];
-    gameState.liveLanes = [];
-    gameState.hitstop = 0;
-    const label = kind === "ko" ? "FINAL BLOW" : "STAGGERED!";
-    spawnFloatingText(en.x + en.w / 2, en.y - 190, label, kind === "ko" ? "#ff0055" : "#ffffff");
-    playSound("stagger");
-    doFlash(kind === "ko" ? 0.7 : 0.5);
-    triggerShockwave(en.x, en.y - 60, gameState.bossThemeColor || "#ffffff");
-    createShatter(en.x, en.y - 60, gameState.bossThemeColor || "#ffffff");
-    gameState.shake = Math.max(gameState.shake, 20);
-  }
-  function justPressed(code) {
-    return !!gameState.keys[code] && !gameState.lastKeys[code];
-  }
-  function readFinisherInput() {
-    const K2 = getBinds();
-    if (justPressed(K2.up) || gameState.pad.up) return "up";
-    if (justPressed(K2.down) || gameState.pad.down) return "down";
-    if (justPressed(K2.jab) || gameState.pad.jab) return "jab";
-    if (justPressed(K2.cross) || gameState.pad.cross) return "cross";
-    if (justPressed(K2.hook) || gameState.pad.hook) return "hook";
-    return null;
-  }
-  var ease = (t) => 1 - Math.pow(1 - Math.min(1, Math.max(0, t)), 3);
-  function judge(text, color) {
-    const f = gameState.finisher;
-    f.judge = { text, color };
-    f.judgeTimer = 34;
-  }
-  var PLAY_GAP = 17;
-  function recordPrompt(isPerfect) {
-    const f = gameState.finisher;
-    f.landed.push({ move: f.seq[f.idx], perfect: isPerfect });
-    judge(isPerfect ? "PERFECT" : "GOOD", isPerfect ? "#ffffff" : "#22d3ee");
-    playSound(isPerfect ? "perfect_slip" : "slip");
-    f.lockFlash = 10;
-    f.idx++;
-    if (f.idx >= f.seq.length) endInput("clean");
-    else f.nextBeat += F.beatFrames;
-  }
-  function endInput(result) {
-    const f = gameState.finisher;
-    f.result = result;
-    if (f.landed.length) {
-      f.phase = "playback";
-      f.playIdx = 0;
-      f.playTimer = 14;
-      f.judge = null;
-    } else endPrompts(result);
-  }
-  function landPrompt(isPerfect, moveOverride) {
-    const f = gameState.finisher, en = f.boss, p = gameState.player;
-    const move = moveOverride || f.seq[f.idx];
-    if (move in LANE_STEP) {
-      const old = { x: en.x, y: en.y };
-      p.lane += LANE_STEP[move];
-      p.slipCooldown = 20;
-      en.lane = p.lane;
-      createShatter(old.x, old.y - 60, gameState.bossThemeColor || "#ffffff");
-      p.state = "punching";
-      p.punchType = "cross";
-      p.hitFrame = 0;
-      p.didHit = true;
-    } else {
-      p.state = "punching";
-      p.punchType = move === "jab" ? (f.jabAlt = !f.jabAlt) ? "jab1" : "jab2" : move;
-      p.hitFrame = 0;
-      p.didHit = true;
-    }
-    f.poseTimer = 12;
-    if (f.kind !== "ko") en.hp = Math.max(1, en.hp - f.dmgPerHit);
-    f.hits++;
-    gameState.statFinisherHits = (gameState.statFinisherHits || 0) + 1;
-    if (isPerfect) f.perfects++;
-    gameState.combo++;
-    if (gameState.combo > gameState.statMaxCombo) gameState.statMaxCombo = gameState.combo;
-    addScore(CONSTANTS.SCORE.finisherHit + (isPerfect ? CONSTANTS.SCORE.finisherPerfect : 0), en.x + en.w / 2, en.y - 150, { big: true });
-    judge(isPerfect ? "PERFECT" : "GREAT", isPerfect ? "#ffffff" : "#22d3ee");
-    playSound("finisher_hit");
-    doFlash(isPerfect ? 0.45 : 0.3);
-    gameState.shake = Math.max(gameState.shake, isPerfect ? 26 : 18);
-    triggerShockwave(en.x, en.y - 60, isPerfect ? "#ffffff" : gameState.bossThemeColor || "#ff0055");
-    createShatter(en.x, en.y - 70, isPerfect ? "#ffffff" : gameState.bossThemeColor || "#ff0055");
-    for (let i = 0; i < 3; i++) createImpact(en.x, en.y - 60 - i * 20, "#ffffff");
-    if (en.controller === "live_wire") {
-      createImpact(en.x + 30, en.y - 80, "#fff36b");
-      createImpact(en.x + 10, en.y - 40, "#fff36b");
-      playSound("shock");
-    }
-    f.freeze = hitStopEnabled() ? isPerfect ? 9 : 6 : 0;
-  }
-  function missPrompt(reason) {
-    judge(reason, "#ff8800");
-    playSound("finisher_miss");
-    endInput("broken");
-  }
-  function endPrompts(result) {
-    const f = gameState.finisher;
-    tmFinisher(f.kind, result, f.landed ? f.landed.length : f.hits, f.seq.length);
-    f.result = result;
-    f.phase = "outro";
-    f.timer = F.outroFrames;
-    const en = f.boss;
-    if (result === "clean") {
-      gameState.statFinishersClean = (gameState.statFinishersClean || 0) + 1;
-      addScore(CONSTANTS.SCORE.finisherClean, en.x + en.w / 2, en.y - 210, { big: true });
-      spawnFloatingText(en.x + en.w / 2, en.y - 230, f.kind === "ko" ? "FLAWLESS FINISH" : "FULL BREAK!", "#facc15");
-    } else if (f.kind !== "ko") {
-      spawnFloatingText(en.x + en.w / 2, en.y - 230, "STAGGER BROKEN", "#ff8800");
-    }
-    if (f.kind === "ko") {
-      playSound("finisher_ko");
-      doFlash(0.8);
-      gameState.shake = Math.max(gameState.shake, 40);
-      for (let i = 0; i < 3; i++) triggerShockwave(en.x, en.y - 60 - i * 10, i === 1 ? "#ffffff" : gameState.bossThemeColor || "#ff0055");
-      spawnFloatingText(en.x + en.w / 2, en.y - 260, "K.O.", "#ffffff");
-    }
-  }
-  function finishFinisher() {
-    const f = gameState.finisher, en = f.boss, p = gameState.player;
-    p.state = "idle";
-    p.punchType = null;
-    if (f.kind === "ko") {
-      en.koDone = true;
-      en.hp = 0;
-    } else {
-      en.x = Math.min(gameState.width - 150, en.x + 150);
-      en.stun = 0;
-      en.stunResist = 60;
-      en.recoverTimer = 0;
-      en.telegraphed = false;
-      en.attackCooldown = (en.maxCooldown || 60) + 40;
-      if (en.controller === "static_monk") {
-        en.currentMove = "laser";
-        en.attackCooldown = 110;
-        en.bossMashCount = 0;
-      }
-    }
-    gameState.finisher = null;
-    gameState.finisherZoom = 1;
-  }
-  function updateFinisher() {
-    const f = gameState.finisher;
-    if (!f) return;
-    f.frame++;
-    if (f.judgeTimer > 0) f.judgeTimer--;
-    if (f.freeze > 0) f.freeze--;
-    if (f.poseTimer > 0 && --f.poseTimer === 0) gameState.player.state = "idle";
-    gameState.player.y += (gameState.height * CONSTANTS.LANE_Y[gameState.player.lane] - gameState.player.y) * 0.35;
-    f.boss.y += (gameState.height * CONSTANTS.LANE_Y[f.boss.lane] - f.boss.y) * 0.35;
-    if (gameState.player.slipCooldown > 0) gameState.player.slipCooldown--;
-    if (f.phase === "intro") {
-      f.timer--;
-      const k = ease(1 - f.timer / F.introFrames);
-      f.zoom = 1 + (F.zoom - 1) * k;
-      f.bars = k;
-      if (f.timer <= 0) {
-        f.phase = "prompts";
-        f.nextBeat = f.frame + F.beatFrames * F.leadBeats;
-      }
-    } else if (f.phase === "playback") {
-      f.zoom = F.zoom;
-      f.bars = 1;
-      if (f.freeze <= 0 && --f.playTimer <= 0) {
-        const hit = f.landed[f.playIdx++];
-        if (hit) {
-          landPrompt(hit.perfect, hit.move);
-          f.playTimer = PLAY_GAP;
-        } else endPrompts(f.result);
-      }
-    } else if (f.phase === "prompts") {
-      f.zoom = F.zoom;
-      f.bars = 1;
-      if (f.lockFlash > 0) f.lockFlash--;
-      const t = f.frame - f.nextBeat;
-      if (t === 0) playSound("beat_tick");
-      const input = readFinisherInput();
-      const want = f.seq[f.idx];
-      if (input) {
-        if (t < -F.windowEarly) missPrompt("TOO EARLY");
-        else if (input !== want) missPrompt("WRONG MOVE");
-        else recordPrompt(Math.abs(t) <= F.perfectWindow);
-      } else if (t > F.windowLate) {
-        missPrompt("MISSED");
-      }
-    } else if (f.phase === "outro") {
-      f.timer--;
-      const k = ease(f.timer / F.outroFrames);
-      f.zoom = 1 + (F.zoom - 1) * k;
-      f.bars = k;
-      if (f.timer <= 0) {
-        finishFinisher();
-        return;
-      }
-    }
-    gameState.finisherZoom = reducedMotion() ? 1 : f.zoom;
-  }
-  function promptProgress() {
-    const f = gameState.finisher;
-    if (!f || f.phase !== "prompts") return null;
-    const lead = F.beatFrames * F.leadBeats;
-    const t = f.frame - f.nextBeat;
-    return { move: f.seq[f.idx], progress: Math.min(1.2, Math.max(0, (t + lead) / lead)), t };
-  }
-
   // src/systems/knockdown.js
   var K = CONSTANTS.KNOCKDOWN;
   function canBeKnockedDown() {
+    if (heatOn("one_count")) return false;
     return (gameState.knockdownsThisArc || 0) === 0;
   }
   function knockdownSequence(n, rnd = Math.random) {
@@ -2482,6 +4761,7 @@
     k.upTimer = 50;
     k.hpFrac = recoveryHpFrac({ perfects: k.perfects, goods: k.goods, stumbles: k.stumbles, prompts: k.seq.length });
     gameState.health = Math.round(gameState.maxHealth * k.hpFrac);
+    gameState.hpCeil = gameState.health;
     gameState.combo = 0;
     p.invuln = K.invulnFrames;
     gameState.inputGrace = 8;
@@ -2563,33 +4843,6 @@
     const t = k.frame - k.nextBeat;
     if (t < -K.beatFrames) return null;
     return { move: k.seq[k.idx], progress: Math.min(1.2, Math.max(0, (t + K.beatFrames) / K.beatFrames)), t };
-  }
-
-  // src/systems/colors.js
-  function treeColor(tree) {
-    return CONSTANTS.TREES[tree] && CONSTANTS.TREES[tree].color || "#ffffff";
-  }
-  function upgradeColorFor(u) {
-    if (!u) return "#ffffff";
-    if (CONSTANTS.FUSION_COLORS[u.id]) return CONSTANTS.FUSION_COLORS[u.id];
-    if (u.kind === "overclock") return "#c084fc";
-    return treeColor(u.tree);
-  }
-  function buildColor() {
-    const owned = gameState.acquiredUpgradeIds || [];
-    for (let i = owned.length - 1; i >= 0; i--) {
-      if (CONSTANTS.FUSION_COLORS[owned[i]]) return CONSTANTS.FUSION_COLORS[owned[i]];
-    }
-    let best = null, bestRank = 0;
-    const order = gameState.rankOrder || [];
-    for (const tree of CONSTANTS.TREE_ORDER) {
-      const r = gameState.orbCounts && gameState.orbCounts[tree] || 0;
-      if (r > bestRank || r === bestRank && r > 0 && order.lastIndexOf(tree) > order.lastIndexOf(best)) {
-        best = tree;
-        bestRank = r;
-      }
-    }
-    return best ? treeColor(best) : "#ffffff";
   }
 
   // src/systems/vignette.js
@@ -3276,18 +5529,18 @@
     ctx3.globalAlpha = Math.min(1, k.frame / 12);
     drawBoxer(ctx3, { x: rx, y: ry, lane: p.lane, w: 50, h: 110, state: "idle", stun: 0, attackCooldown: 99, color: "#e5e7eb", type: "grunt", trails: [] }, false, 0.9);
     ctx3.globalAlpha = 1;
-    const count = Math.max(0, Math.min(10, k.count));
-    if (count > 0 && k.phase !== "up") {
+    const count2 = Math.max(0, Math.min(10, k.count));
+    if (count2 > 0 && k.phase !== "up") {
       const pulse = 1 + Math.max(0, 1 - k.frame % CONSTANTS.KNOCKDOWN.framesPerCount / 10) * 0.35;
       ctx3.save();
       ctx3.translate(rx + 25, Math.max(150, ry - 190));
       ctx3.scale(pulse, pulse);
-      ctx3.fillStyle = count >= 8 ? "#ff3355" : "#ffffff";
+      ctx3.fillStyle = count2 >= 8 ? "#ff3355" : "#ffffff";
       ctx3.font = "900 italic 64px Orbitron";
       ctx3.textAlign = "center";
       ctx3.shadowColor = ctx3.fillStyle;
       ctx3.shadowBlur = 20;
-      ctx3.fillText(String(count), 0, 0);
+      ctx3.fillText(String(count2), 0, 0);
       ctx3.restore();
     }
     ctx3.textAlign = "center";
@@ -3449,6 +5702,78 @@
       ctx3.fillText(card.tagline, W / 2, by + 132);
     }
     ctx3.restore();
+  }
+  function drawThreatPips(ctx3) {
+    if (gameState.screen !== "playing" || gameState.finisher || gameState.bossIntroTimer > 0) return;
+    const W = gameState.width, lanes = [[], [], []];
+    for (const e of gameState.enemies) if (e.hp > 0 && !e.isBoss && e.x > W - 20 && e.lane >= 0 && e.lane <= 2) lanes[e.lane].push(e);
+    const t = gameState.uiFrame || 0;
+    ctx3.save();
+    lanes.forEach((list, lane) => {
+      if (!list.length) return;
+      list.sort((a, b) => a.x - b.x);
+      const e = list[0], dist = e.x - W;
+      const near = Math.max(0, Math.min(1, 1 - dist / 700));
+      const y = gameState.height * CONSTANTS.LANE_Y[lane] - 38;
+      const pulse = near > 0.7 ? 0.5 + 0.5 * Math.sin(t * 0.4) : 0;
+      const x = W - 16;
+      ctx3.globalAlpha = 0.35 + 0.65 * near;
+      ctx3.fillStyle = "rgba(0,0,0,0.55)";
+      ctx3.beginPath();
+      ctx3.arc(x - 6, y, 15 + pulse * 3, 0, Math.PI * 2);
+      ctx3.fill();
+      ctx3.strokeStyle = e.color || "#ff0055";
+      ctx3.lineWidth = 3.5;
+      ctx3.lineCap = "round";
+      ctx3.lineJoin = "round";
+      ctx3.shadowColor = e.color || "#ff0055";
+      ctx3.shadowBlur = 6 + pulse * 10;
+      const chev = (ox) => {
+        ctx3.beginPath();
+        ctx3.moveTo(x + ox, y - 8);
+        ctx3.lineTo(x + ox - 9, y);
+        ctx3.lineTo(x + ox, y + 8);
+        ctx3.stroke();
+      };
+      chev(0);
+      if (list.some((z) => z.type === "zoner")) chev(-8);
+      ctx3.shadowBlur = 0;
+      if (list.length > 1) {
+        ctx3.fillStyle = "#fff";
+        ctx3.font = "bold 10px Orbitron";
+        ctx3.textAlign = "center";
+        ctx3.fillText(`\xD7${list.length}`, x - 6, y + 28);
+      }
+    });
+    ctx3.restore();
+  }
+  function drawSlipWindows(ctx3) {
+    if (!gameState.practice || !gameState.practice.windows) return;
+    for (const e of gameState.enemies) {
+      if (e.hp <= 0 || e.isBoss || e.x > gameState.width) continue;
+      const { perfect, good } = CONSTANTS.getSlipThresholds(e.type, gameState.progressionMods.perfectSlipWindowBonus);
+      const span = good + 30, cd = e.attackCooldown;
+      if (cd > span || cd < 0) continue;
+      const w = 110, h = 10, x = e.x + 25 - w / 2, y = e.y - (e.h || 110) - 46;
+      const X = (v) => x + w * (v / span);
+      ctx3.save();
+      ctx3.fillStyle = "rgba(0,0,0,0.7)";
+      ctx3.fillRect(x - 3, y - 3, w + 6, h + 6);
+      ctx3.fillStyle = "rgba(255,0,85,0.35)";
+      ctx3.fillRect(X(good), y, w - (X(good) - x), h);
+      ctx3.fillStyle = "rgba(229,231,235,0.45)";
+      ctx3.fillRect(x, y, X(good) - x, h);
+      ctx3.fillStyle = "#ffffff";
+      ctx3.fillRect(x, y, X(perfect) - x, h);
+      const inPerfect = cd <= perfect, inGood = cd <= good;
+      ctx3.fillStyle = inPerfect ? "#22d3ee" : inGood ? "#facc15" : "#ff3355";
+      ctx3.fillRect(X(cd) - 2, y - 5, 4, h + 10);
+      ctx3.font = "bold 9px Orbitron";
+      ctx3.textAlign = "center";
+      ctx3.fillStyle = inPerfect ? "#22d3ee" : "#9ca3af";
+      ctx3.fillText(inPerfect ? "SLIP NOW" : inGood ? "GOOD" : "WAIT", x + w / 2, y - 7);
+      ctx3.restore();
+    }
   }
 
   // src/systems/sequences.js
@@ -3714,28 +6039,6 @@
     ]
   };
 
-  // src/systems/rng.js
-  var _state = Math.random() * 4294967295 >>> 0;
-  function seedRng(seed) {
-    _state = seed >>> 0;
-    if (_state === 0) _state = 2654435769;
-  }
-  function random() {
-    _state |= 0;
-    _state = _state + 1831565813 | 0;
-    let t = Math.imul(_state ^ _state >>> 15, 1 | _state);
-    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
-    return ((t ^ t >>> 14) >>> 0) / 4294967296;
-  }
-  function dailySeedFromDate(date = /* @__PURE__ */ new Date()) {
-    const y = date.getUTCFullYear(), m = date.getUTCMonth() + 1, d = date.getUTCDate();
-    return y * 1e4 + m * 100 + d;
-  }
-  function todayKey(date = /* @__PURE__ */ new Date()) {
-    const y = date.getUTCFullYear(), m = String(date.getUTCMonth() + 1).padStart(2, "0"), d = String(date.getUTCDate()).padStart(2, "0");
-    return `${y}-${m}-${d}`;
-  }
-
   // src/systems/wagers.js
   var NONE = CONSTANTS.AFFIXES[0];
   function rollWagerOffer(stage2) {
@@ -3871,6 +6174,10 @@
     return { text: `${law.shortName}: ${data.stageName}`, color: ARC_COLORS[arc] || "#ec4899" };
   }
   function refreshStageHud() {
+    if (gameState.practice) {
+      gameState.lastHUD.practice = null;
+      return;
+    }
     const stageUI = document.getElementById("stage-ui");
     const affixUI = document.getElementById("affix-ui");
     const hud = stageHudText(gameState.currentStage);
@@ -3961,8 +6268,24 @@
     let subtitleText = isBoss ? law.uiText : CONSTANTS.STAGE_TAGLINES[levelInArc];
     const isNewArc = CONSTANTS.locateStage(gameState.currentStage).ordinal === 1 && gameState.currentStage > 1;
     if (isNewArc) gameState.knockdownsThisArc = 0;
+    let medalSteps = [];
+    if (isNewArc) {
+      const r = judgeArc(CONSTANTS.getArcIndex(prevStage));
+      const M = MEDALS[r.medal];
+      addScore(M.bonus * r.arc, void 0, void 0, { noCombo: true });
+      tmArc(r);
+      gameState.lastArcResult = r;
+      medalSteps = [{
+        type: "text",
+        title: `ARC ${r.arc} \xB7 ${M.label}${r.isBest ? " \u2605" : ""}`,
+        subtitle: `TIME ${fmtSecs(r.secs)} / PAR ${fmtSecs(r.par.time)}  \xB7  SCORE ${fmtK(r.score)} / PAR ${fmtK(r.par.score)}  \xB7  +${(M.bonus * r.arc).toLocaleString()}`,
+        duration: 150
+      }];
+      arcParStart();
+    }
     const chapterCardSteps = isNewArc ? [
       { type: "tint", color: "rgba(0, 0, 0, 0.82)", duration: 20 },
+      ...medalSteps,
       { type: "text", title: `ARC ${safeArcIndex}`, subtitle: law.name.toUpperCase(), duration: 85 },
       { type: "tint", color: ARC_TINTS[safeArcIndex] || "rgba(236, 72, 153, 0.18)", duration: 10 },
       { type: "text", title: law.name.toUpperCase(), subtitle: law.theme, duration: 160 },
@@ -4021,6 +6344,31 @@
       }
     }
     return true;
+  }
+  function fusionHint(option, st, poolIn, maxMissing = 2) {
+    var _a;
+    const pool = Array.isArray(poolIn) ? poolIn : Object.values(poolIn || {}).flat();
+    const inc = (option.effects || []).find((e) => e.op === "incOrb");
+    if (!inc) return null;
+    const after = { ...st.orbCounts, [inc.tree]: ((_a = st.orbCounts[inc.tree]) != null ? _a : 0) + (inc.amount || 1) };
+    let best = null;
+    for (const f of pool) {
+      if (f.kind !== "fusion" || !f.reqs || !f.reqs.orbTreeAtLeast) continue;
+      if (!(inc.tree in f.reqs.orbTreeAtLeast)) continue;
+      if (st.acquiredUpgradeIds.includes(f.id)) continue;
+      if ((f.reqs.hasUpgradeIds || []).some((id) => !st.acquiredUpgradeIds.includes(id))) continue;
+      const missing = Object.entries(f.reqs.orbTreeAtLeast).reduce((n, [t, v]) => {
+        var _a2;
+        return n + Math.max(0, v - ((_a2 = after[t]) != null ? _a2 : 0));
+      }, 0);
+      const before = Object.entries(f.reqs.orbTreeAtLeast).reduce((n, [t, v]) => {
+        var _a2;
+        return n + Math.max(0, v - ((_a2 = st.orbCounts[t]) != null ? _a2 : 0));
+      }, 0);
+      if (missing > maxMissing || missing >= before) continue;
+      if (!best || missing < best.missing) best = { id: f.id, name: f.name, missing, evolved: !!f.evolved };
+    }
+    return best;
   }
 
   // src/systems/progression/draft.js
@@ -4123,1130 +6471,6 @@
     st.currentDraftOptions = chosen;
     pushRecentlyOffered(st, chosen.map((c) => c.id));
     return chosen;
-  }
-
-  // src/systems/tutorial.js
-  function triggerTutorial(id, title, text) {
-    if (gameState.seenTutorials[id]) return;
-    gameState.seenTutorials[id] = true;
-    gameState.screen = "tutorial";
-    const titleElem = document.getElementById("tutorial-title");
-    const textElem = document.getElementById("tutorial-text");
-    const screenElem = document.getElementById("tutorial-screen");
-    if (titleElem) titleElem.innerText = title;
-    if (textElem) textElem.innerHTML = text;
-    if (screenElem) screenElem.style.display = "flex";
-  }
-  function dismissTutorial() {
-    gameState.screen = "playing";
-    const screenElem = document.getElementById("tutorial-screen");
-    if (screenElem) screenElem.style.display = "none";
-    gameState.tutorialGrace = 0;
-  }
-  function spawnTutorialEnemy(type) {
-    gameState.spawnTotal++;
-    gameState.player.lane = 1;
-    gameState.player.y = gameState.height * CONSTANTS.LANE_Y[gameState.player.lane];
-    gameState.player.x = 180;
-    let color = "#ff0055";
-    let hp = 45;
-    let speed = 2;
-    let cooldown = 60;
-    let weight = 1;
-    let enemyType = "grunt";
-    let spawnX = gameState.width + 100;
-    switch (type) {
-      case "slip":
-        color = "#ff0055";
-        speed = 4;
-        cooldown = 60;
-        break;
-      case "counter":
-        color = "#ffaa00";
-        speed = 1.5;
-        cooldown = 120;
-        gameState.player.slipBuff = 1;
-        spawnX = gameState.player.x + 100;
-        break;
-      case "ghost_step":
-        color = "#888888";
-        speed = 5.5;
-        spawnX = gameState.player.x + 100;
-        break;
-      case "shield":
-        color = "#ffaa00";
-        hp = 80;
-        speed = 1.5;
-        cooldown = 80;
-        enemyType = "shield";
-        spawnX = gameState.player.x + 130;
-        break;
-      case "guard":
-        color = "#aa00ff";
-        hp = 30;
-        speed = 5.5;
-        cooldown = 35;
-        enemyType = "assassin";
-        break;
-    }
-    gameState.enemies.push({
-      x: spawnX,
-      lane: 1,
-      y: gameState.player.y,
-      w: 50,
-      h: 110,
-      hp,
-      maxHp: hp,
-      speed,
-      color,
-      weight,
-      type: enemyType,
-      stun: 0,
-      stunResist: 0,
-      attackCooldown: cooldown,
-      maxCooldown: cooldown,
-      pressure: 0,
-      pressureDecay: 0,
-      isBoss: false,
-      tutorialType: type,
-      justAttacked: 0,
-      trails: [],
-      trailTimer: 0,
-      vx: 0
-    });
-  }
-
-  // src/systems/negative.js
-  var ECHO_DELAY = 26;
-  function invertHex(hex) {
-    const h = String(hex || "#00ffff").replace("#", "");
-    const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h.padEnd(6, "0").slice(0, 6);
-    const n = parseInt(full, 16);
-    return "#" + (16777215 ^ n).toString(16).padStart(6, "0");
-  }
-  function negativeReact(en, buffActive) {
-    const m = en.arcMods || {};
-    if (en.slipCooldown > 0) return false;
-    if (buffActive && random() < (m.counterRead || 0.5)) {
-      en.slipCooldown = 40;
-      spawnFloatingText(en.x + 20, en.y - 150, "READ YOU.", en.color);
-      playSound("feint_tell");
-      en.currentMove = "cross";
-      en.attackCooldown = telegraphLead(en) + 2;
-      en.telegraphed = false;
-      return true;
-    }
-    if (random() < (m.echoChance || 0.35)) {
-      en.slipCooldown = 36;
-      const oldLane = en.lane;
-      const lanes = [oldLane - 1, oldLane + 1].filter((l) => l >= 0 && l <= 2);
-      en.lane = lanes[Math.floor(random() * lanes.length)];
-      if (!gameState.enemyEchoes) gameState.enemyEchoes = [];
-      gameState.enemyEchoes.push({ lane: oldLane, x: en.x, y: gameState.height * CONSTANTS.LANE_Y[oldLane], timer: ECHO_DELAY, fade: 20, fired: false, color: en.color });
-      createShatter(en.x, en.y - 60, en.color);
-      spawnFloatingText(en.x + 20, en.y - 150, "AFTERIMAGE", en.color);
-      playSound("ghost_step");
-      return true;
-    }
-    return false;
-  }
-
-  // src/systems/combat.js
-  function checkHit(type) {
-    let isJab = type.startsWith("jab") || type === "guard_jab";
-    let isGuardPunch = type === "guard_jab" || type === "check_hook";
-    let reachMult = gameState.orbCounts.power >= 2 ? 1.25 : 1;
-    let reach = isJab ? 120 : type === "cross" ? 140 * reachMult : 140;
-    let hitSomething = false;
-    let buffActive = gameState.player.slipBuff > 0;
-    const loaded = type === "cross" && !!gameState.player.crossLoaded;
-    const spark = buildColor();
-    let novaLanes = [];
-    if (gameState.player.slipBuff > 0) gameState.player.slipBuff--;
-    const jX = () => Math.random() * 50 - 25;
-    const jY = () => Math.random() * 30 - 15;
-    for (let i = 0; i < gameState.enemies.length; i++) {
-      let en = gameState.enemies[i];
-      if (en.lane === gameState.player.lane && en.x > gameState.player.x - 20 && en.x < gameState.player.x + reach) {
-        if (en.tutorialType === "counter") {
-          if (buffActive) {
-            en.hp = 0;
-            createShatter(en.x, en.y - 60, "#ffffff");
-            spawnFloatingText(en.x + jX(), en.y - 100 + jY(), "SHATTERED!", "#ffffff");
-            gameState.statCounterHits++;
-          } else {
-            spawnFloatingText(gameState.player.x + jX(), gameState.player.y - 50 + jY(), "USE CHARGED STRIKE!", "#ffaa00");
-            en.x = gameState.player.x + 200;
-            en.attackCooldown = en.maxCooldown;
-            gameState.player.slipBuff = 1;
-            playSound("bounce");
-            continue;
-          }
-        }
-        if (en.tutorialType === "slip") {
-          spawnFloatingText(en.x, en.y - 80, "SLIP IT! (UP/DOWN)", "#ffaa00");
-          hitSomething = true;
-          continue;
-        }
-        if (en.tutorialType === "guard") {
-          spawnFloatingText(en.x, en.y - 80, `WAIT & HOLD [${keyName("guard")}]!`, "#ffaa00");
-          hitSomething = true;
-          continue;
-        }
-        if (en.tutorialType === "ghost_step") {
-          spawnFloatingText(en.x, en.y - 80, `GHOST STEP [${keyName("ghost")}]!`, "#ffaa00");
-          hitSomething = true;
-          continue;
-        }
-        if (en.tutorialType === "shield") {
-          if (type === "cross") {
-            en.hp = 0;
-            spawnFloatingText(gameState.player.x + jX(), gameState.player.y - 50 + jY(), "ARMOR BROKEN!", "#00ffff");
-          } else {
-            spawnFloatingText(gameState.player.x + jX(), gameState.player.y - 50 + jY(), `USE CROSS [${keyName("cross")}] TO BREAK!`, "#ffaa00");
-            en.x = gameState.player.x + 200;
-            en.attackCooldown = en.maxCooldown;
-            playSound("bounce");
-            continue;
-          }
-        } else if (en.type === "shield" && type !== "cross") {
-          createImpact(en.x, en.y - 80, "#ffaa00");
-          en.x += 5;
-          gameState.shake = 2;
-          playSound("bounce");
-          continue;
-        }
-        let dmg = 0;
-        if (type === "jab1" || type === "jab2") dmg = 15;
-        else if (type === "jab3") dmg = 25;
-        else if (type === "hook") dmg = 35;
-        else if (type === "cross") dmg = 50;
-        else if (type === "guard_jab") dmg = 10;
-        else if (type === "check_hook") dmg = 25;
-        dmg = Math.round(dmg * CONSTANTS.affixMod(gameState.currentAffix, "playerDamageDealtMult", 1));
-        const prevPressure = en.pressure || 0;
-        if (!isGuardPunch) {
-          en.pressure = Math.min(3, prevPressure + 1);
-          let jpm = en.isBoss && en.name === "NEON ENFORCER" && en.arcMods ? en.arcMods.jabPressureMult : 1;
-          en.pressureDecay = Math.max(15, Math.floor(45 / jpm));
-        }
-        if (buffActive) dmg *= 2;
-        if (loaded) dmg = Math.round(dmg * 1.3);
-        if (gameState.progressionMods.shatterNova && buffActive && type === "cross") {
-          if (en.isBoss) dmg += Math.round(en.maxHp * 0.08);
-          else novaLanes.push(en.lane);
-          spawnFloatingText(en.x + jX(), en.y - 150 + jY(), "SHATTER NOVA", CONSTANTS.FUSION_COLORS.evo_shatter_nova);
-        }
-        if (loaded) spawnFloatingText(en.x + jX(), en.y - 110 + jY(), "LOADED!", spark);
-        if (en.type === "shield" && type === "cross") {
-          en.type = "grunt";
-          if (!en.isBoss) en.color = "#ff0055";
-          dmg *= 1.5;
-        }
-        const bossOpen = en.isBoss && isBossOpen(en);
-        if (bossOpen) {
-          dmg = Math.round(dmg * CONSTANTS.BOSS_OFFENSE.punishDamageMult);
-          addScore(CONSTANTS.SCORE.punishBonus, en.x + jX(), en.y - 170 + jY(), { silent: true });
-          if (!en.punishShown) {
-            en.punishShown = true;
-            spawnFloatingText(en.x + jX(), en.y - 150 + jY(), "PUNISH!", "#22d3ee");
-            playSound("punish");
-          }
-        }
-        if (en.controller === "negative" && !bossOpen && negativeReact(en, buffActive)) return false;
-        let trueReadActive = false;
-        if (en.isBoss && (en.exposedTimer || 0) > 0 && (type === "cross" || type === "hook" || buffActive)) {
-          trueReadActive = true;
-          en.exposedTimer = 0;
-          dmg = Math.floor(dmg * 1.25);
-          gameState.hitstop += 8;
-          gameState.instinctPauseTimer = 45;
-          gameState.statBossBreaks++;
-          spawnFloatingText(en.x + jX(), en.y - 140 + jY(), "TRUE READ!", "#00ffff");
-          triggerShockwave(en.x, en.y - 60, "#00ffff");
-          playSound("laser");
-        }
-        if (type === "cross" && !buffActive && !trueReadActive && prevPressure > 0) {
-          let cashOutBonus = prevPressure * 15;
-          dmg += cashOutBonus;
-          en.pressure = 0;
-          spawnFloatingText(en.x + jX(), en.y - 110 + jY(), `CASH OUT! +${cashOutBonus}`, "#ff0055");
-          gameState.shake += 4;
-        }
-        if (en.isBoss) {
-          if (en.name === "PHANTOM BOXER" && !bossOpen) {
-            en.bossMashCount = (en.bossMashCount || 0) + 1;
-            en.mashDecay = 60;
-            if (en.shiftWarning > 0) {
-              if (trueReadActive) {
-                en.shiftWarning = 0;
-                en.shiftCooldown = 150;
-                en.bossMashCount = 0;
-              } else {
-                en.shiftWarning = 0;
-                en.bossMashCount = 0;
-                en.shiftCooldown = 150;
-                let oldX = en.x;
-                let oldY = en.y;
-                createShatter(oldX, oldY - 60, "#ffffff");
-                playSound("shatter");
-                spawnFloatingText(oldX + jX(), oldY - 100 + jY(), "PHANTOM SHIFT", "#aa00ff");
-                let otherLanes = [0, 1, 2].filter((l) => l !== en.lane);
-                let pinch = en.arcMods && en.arcMods.lanePinchBias || 0;
-                if (random() < pinch) {
-                  en.lane = otherLanes.reduce((a, b) => Math.abs(b - gameState.player.lane) < Math.abs(a - gameState.player.lane) ? b : a);
-                } else {
-                  en.lane = otherLanes[Math.floor(random() * otherLanes.length)];
-                }
-                en.y = gameState.height * CONSTANTS.LANE_Y[en.lane];
-                createImpact(en.x, en.y - 60, "#aa00ff");
-                en.attackCooldown = en.arcMods && en.arcMods.reentryDelayVariant ? 14 + Math.floor(random() * 11) : 18;
-                return false;
-              }
-            } else if (en.bossMashCount >= 3 && (en.shiftCooldown || 0) <= 0 && en.hp > 0 && !trueReadActive) {
-              en.shiftWarning = 20;
-              spawnFloatingText(en.x + jX(), en.y - 100 + jY(), "SHIFT READY", "#ffffff");
-            }
-          }
-          let enforcerArmored = !bossOpen && en.name === "NEON ENFORCER" && (en.phase === 2 || en.arcMods && en.arcMods.retaliationTimingVariant);
-          if (enforcerArmored) {
-            if (isJab && !trueReadActive && !isGuardPunch) {
-              let chain = en.arcMods && en.arcMods.armoredRetaliationChain || 1;
-              dmg = Math.floor(dmg * 0.25);
-              takeDamage(2 * chain, false, en);
-              gameState.statRecoilTaken++;
-              spawnFloatingText(gameState.player.x + jX(), gameState.player.y - 50 + jY(), "RECOIL!", "#ff0000");
-              return false;
-            }
-          }
-          dmg = gateBossDamage(en, dmg);
-          if (en.hp - dmg <= en.maxHp * 0.25 && !en.desperation) {
-            en.desperation = true;
-            spawnFloatingText(en.x + jX(), en.y - 120 + jY(), "DESPERATION!", "#ff0000");
-            gameState.shake += 15;
-            if (en.name === "PHANTOM BOXER") {
-              en.shiftCooldown = 0;
-              en.shiftWarning = 1;
-            } else if (en.name === "NEON ENFORCER") {
-              en.attackCooldown = 10;
-              en.currentMove = "bash";
-              en.enraged = true;
-            }
-          }
-          if (en.name === "NEON ENFORCER" && en.phase === 1 && en.hp - dmg <= en.maxHp * 0.5) {
-            en.phase = 2;
-            en.speed = 3.5;
-            gameState.shake = 50;
-            doFlash(0.8);
-            gameState.hitstop = 10;
-            triggerShockwave(en.x, en.y - 60, "#ff0000");
-            spawnFloatingText(en.x + jX(), en.y - 120 + jY(), "SHIELD SHATTERED!", "#ff0000");
-            for (let j = 0; j < 20; j++) createImpact(en.x, en.y - 60, "#ffaa00");
-            playSound("hit");
-          }
-          if (en.name === "PHANTOM BOXER" && en.phase === 1 && en.hp - dmg <= en.maxHp * 0.5) {
-            en.phase = 2;
-            en.speed = 3.5;
-            gameState.shake = 40;
-            doFlash(0.6);
-            gameState.hitstop = 10;
-            triggerShockwave(en.x, en.y - 60, "#aa00ff");
-            createImpact(en.x, en.y - 80, "#aa00ff");
-            spawnFloatingText(en.x + jX(), en.y - 120 + jY(), "OVERDRIVE", "#aa00ff");
-            playSound("hit");
-          }
-        }
-        en.hp -= dmg;
-        if (type === "cross" && gameState.progressionMods.executionerCross && !en.isBoss && en.hp > 0 && en.hp <= en.maxHp * 0.25) {
-          en.hp = 0;
-          spawnFloatingText(en.x + jX(), en.y - 100 + jY(), "EXECUTED!", "#ff0055");
-          createShatter(en.x, en.y - 60, "#ff0055");
-        }
-        const instinctKB = gameState.isInstinct ? (gameState.zoneTimer || 0) > 0 ? CONSTANTS.ZONE.knockbackMult : 2 : 1;
-        let powerFactor = gameState.stats.powerMult * instinctKB * (buffActive ? 1.5 : 1);
-        if (trueReadActive) powerFactor *= 1.5;
-        let baseKB = 0;
-        if (loaded) {
-          baseKB = CONSTANTS.VERBS.loadedCross.knockback;
-        } else if (buffActive || trueReadActive) {
-          baseKB = 45;
-        } else {
-          if (type === "jab1" || type === "jab2") {
-            baseKB = 1;
-          } else if (type === "jab3") {
-            baseKB = 12;
-          } else if (type === "guard_jab") {
-            baseKB = 2;
-          } else if (type === "hook" || type === "check_hook") {
-            baseKB = Math.max(30, gameState.progressionMods.hookKnockbackFloor);
-          } else if (type === "cross") {
-            baseKB = 5;
-          }
-        }
-        if (en.isBoss) {
-          baseKB = isJab ? 0 : Math.max(2, Math.floor(baseKB * 0.3));
-          if (en.name === "NEON ENFORCER" && en.phase === 2 && !trueReadActive) {
-            baseKB = buffActive || gameState.isInstinct && type === "cross" ? 10 : 0;
-          }
-        } else {
-          baseKB = Math.floor(baseKB / (en.weight || 1));
-        }
-        en.vx += baseKB * powerFactor;
-        if (type === "cross" || type === "hook" || type === "check_hook" || buffActive || trueReadActive || isJab) {
-          let canStun = true;
-          let stunAmount = 0;
-          if (en.type === "bruiser" && isJab && !buffActive && !trueReadActive) canStun = false;
-          if (isJab) stunAmount = 18;
-          else if (type === "guard_jab") stunAmount = 10;
-          else if (type === "hook") stunAmount = 15;
-          else if (type === "check_hook") stunAmount = 20;
-          else if (type === "cross") stunAmount = 40;
-          if (buffActive) stunAmount += 15;
-          if (loaded) stunAmount += CONSTANTS.VERBS.loadedCross.stun;
-          if (type === "cross" && (en.type === "shield" || en.type === "bruiser" || en.isBoss && en.name === "NEON ENFORCER" && en.phase === 2)) {
-            stunAmount += gameState.progressionMods.crossArmorStunBonus;
-          }
-          if (gameState.progressionMods.shatterRead && buffActive && type === "cross" && en.isBoss) {
-            en.stunResist = Math.max(0, en.stunResist - 100 * gameState.progressionMods.shatterReadBossBypass);
-            stunAmount += gameState.progressionMods.shatterReadStaggerBonus;
-            spawnFloatingText(en.x + jX(), en.y - 120 + jY(), "SHATTER READ!", "#ff0055");
-          }
-          if (en.name === "NEON ENFORCER" && en.phase === 2) {
-            if (buffActive || trueReadActive || loaded) {
-              canStun = true;
-              stunAmount += 10;
-              gameState.statBossBreaks++;
-              spawnFloatingText(en.x + jX(), en.y - 100 + jY(), "ARMOR SHATTERED!", "#00ffff");
-            } else if (gameState.isInstinct && type === "cross") {
-              canStun = true;
-              stunAmount = 6;
-              spawnFloatingText(en.x + jX(), en.y - 100 + jY(), "PARTIAL BREAK", "#ff00ff");
-            } else {
-              canStun = false;
-            }
-          }
-          if (canStun) {
-            let isResisting = en.isBoss && en.stunResist > 0;
-            if (!isResisting) {
-              if (trueReadActive) stunAmount += 15;
-              en.stun = Math.max(en.stun, stunAmount);
-              if (en.isBoss) en.stunResist = en.stun + 30;
-            } else {
-              en.stun = Math.max(en.stun, 2);
-            }
-          } else if (!canStun && en.stunResist <= 0) {
-            spawnFloatingText(en.x + jX(), en.y - 80 + jY(), "ARMORED", "#ff0000");
-          }
-        }
-        if ((type === "cross" || type === "hook" || type === "check_hook") && (en.type === "shield" || en.type === "bruiser")) {
-          gameState.instinctMeter = Math.min(100, gameState.instinctMeter + gameState.progressionMods.hardTargetInstinctFlat);
-          gameState.exp += gameState.progressionMods.hardTargetExpFlat;
-        }
-        hitSomething = true;
-        if ((buffActive || loaded) && en.tutorialType !== "counter") {
-          createShatter(en.x, en.y - 60, spark);
-        } else if (en.tutorialType !== "counter") {
-          createImpact(en.x, en.y - 60, spark);
-        }
-        if (gameState.orbCounts.power >= 4 && en.hp <= 0 && (type === "cross" || buffActive)) {
-          triggerShockwave(en.x, en.y - 60, spark);
-        }
-      }
-    }
-    if (hitSomething) {
-      if (!isGuardPunch) {
-        gameState.combo++;
-        if (gameState.combo > gameState.statMaxCombo) gameState.statMaxCombo = gameState.combo;
-      }
-      addScore(hitScore(type) * (buffActive ? CONSTANTS.SCORE.counterHitMult : 1), gameState.player.x + reach * 0.6, gameState.player.y - 110);
-      if (buffActive) spawnFloatingText(gameState.player.x + reach / 2 + jX(), gameState.player.y - 80 + jY(), "COUNTER HIT!", "#ffffff");
-      gameState.player.flowStreak = (gameState.player.flowStreak || 0) + 1;
-      const flowMult = getFlowMultiplier(gameState);
-      if (gameState.progressionMods.flowState && (gameState.player.flowStreak === 10 || gameState.player.flowStreak === 25)) {
-        spawnFloatingText(gameState.player.x, gameState.player.y - 90 + jY(), "FLOW STATE!", "#ff8ad8");
-      }
-      if (!gameState.isInstinct) {
-        let gain = 6 * gameState.stats.techMult * (1 + gameState.progressionMods.instinctGainBonusMult) * flowMult;
-        gain *= CONSTANTS.affixMod(gameState.currentAffix, "instinctGainMult", 1);
-        gameState.instinctMeter = Math.min(100, gameState.instinctMeter + gain);
-      }
-      let stopMult = 1 + (gameState.isInstinct ? 0.5 : 0) + (buffActive ? 0.5 : 0);
-      gameState.hitstop = isJab ? Math.floor(2 * stopMult) : type === "cross" ? Math.floor(5 * stopMult) : Math.floor(3 * stopMult);
-      if (loaded) gameState.hitstop += 6;
-      gameState.shake = (type === "cross" ? 8 : isJab ? 2 : 4) * stopMult;
-      if (type === "cross" || buffActive) doFlash(buffActive ? 0.6 : 0.2);
-      if (type === "cross" && gameState.orbCounts.power >= 2) {
-        createImpact(gameState.player.x + reach, gameState.player.y - 40, spark);
-        gameState.shake += 5;
-      }
-      if (novaLanes.length) gameState.enemies.forEach((o) => {
-        if (!o.isBoss && novaLanes.includes(o.lane) && !o.tutorialType) {
-          o.hp = 0;
-          createShatter(o.x, o.y - 60, CONSTANTS.FUSION_COLORS.evo_shatter_nova);
-        }
-      });
-      if (gameState.orbCounts.speed >= 4 && (isJab || type === "hook")) {
-        gameState.player.moveCancelReady = true;
-      }
-      if (!buffActive) playSound("hit");
-    }
-    return hitSomething;
-  }
-
-  // src/entities/player.js
-  function resetPlayerObj() {
-    return {
-      lane: 1,
-      x: 180,
-      y: 0,
-      w: 50,
-      h: 110,
-      state: "idle",
-      punchTimer: 0,
-      punchType: null,
-      hitFrame: 0,
-      didHit: false,
-      slipCooldown: 0,
-      slipBuff: 0,
-      color: "#00ffff",
-      trails: [],
-      trailTimer: 0,
-      recoveryTimer: 0,
-      moveCancelReady: false,
-      jabStep: 0,
-      comboWindow: 0,
-      inputBuffer: null,
-      inputBufferTimer: 0,
-      movementBuffer: null,
-      movementBufferTimer: 0,
-      ghostStepTimer: 0,
-      ghostStepCooldown: 0,
-      ghostStepCharges: 1,
-      dangerLevel: 0,
-      hitStun: 0,
-      lastPunchLanded: null,
-      dempseyActive: false,
-      guardReadTimer: 0,
-      flowStreak: 0,
-      // v17
-      invuln: 0,
-      pivotTimer: 0,
-      charging: false,
-      crossCharge: 0,
-      crossLoaded: false,
-      bufferedCharge: 0,
-      dempseyAlternations: 0
-    };
-  }
-  var FW = CONSTANTS.FOOTWORK;
-  var FOOTWORK_MIN_X = FW.minX;
-  var FOOTWORK_MAX_X = FW.maxX;
-  var FOOTWORK_ADVANCE_SPD = FW.advanceSpd;
-  var FOOTWORK_RETREAT_SPD = FW.retreatSpd;
-  var FOOTWORK_HOME_PULL = FW.homePull;
-  function resetJabString() {
-    if (gameState.player) {
-      gameState.player.jabStep = 0;
-      gameState.player.comboWindow = 0;
-      gameState.player.lastPunchLanded = null;
-      gameState.player.dempseyActive = false;
-    }
-  }
-  function executeAttackInput(action, charge = 0) {
-    if (gameState.player.state === "guarding") {
-      if (action === "jab") startPunch("guard_jab");
-      if (action === "hook") startPunch("check_hook");
-      return;
-    }
-    if (action === "jab") {
-      if (gameState.player.jabStep === 0) startPunch("jab1");
-      else if (gameState.player.jabStep === 1) startPunch("jab2");
-      else if (gameState.player.jabStep === 2) startPunch("jab3");
-      else startPunch("jab1");
-    } else if (action === "cross") startPunch("cross", charge);
-    else if (action === "hook") startPunch("hook");
-  }
-  function ghostStep() {
-    const maxGhostCharges = gameState.progressionMods.blurStep ? 2 : 1;
-    if (gameState.player.ghostStepCharges === void 0) gameState.player.ghostStepCharges = maxGhostCharges;
-    if (gameState.player.ghostStepCharges <= 0) return;
-    gameState.player.ghostStepCharges--;
-    tmGhost(false);
-    gameState.player.state = "ghost_step";
-    gameState.player.ghostStepTimer = 18;
-    gameState.player.ghostPerfected = false;
-    gameState.player.charging = false;
-    if (gameState.player.ghostStepCharges <= 0) gameState.player.ghostStepCooldown = Math.max(10, Math.floor(60 * gameState.progressionMods.ghostStepCooldownMult));
-    resetJabString();
-    playSound("ghost_step");
-    for (let i = 0; i < 8; i++) {
-      gameState.particles.push({ x: gameState.player.x + Math.random() * 30, y: gameState.player.y - 30 - Math.random() * 60, vx: -10 - Math.random() * 15, vy: 0, life: 0.6, color: "#666666", type: "dash_line" });
-    }
-  }
-  function executeMovementInput(action) {
-    if (action === "guard") {
-      tmGuard();
-      gameState.player.state = "guarding";
-      gameState.player.charging = false;
-      gameState.combo = 0;
-      resetJabString();
-    } else if (action === "ghost") ghostStep();
-    else if (action === "up" || action === "down") {
-      const oldLane = gameState.player.lane;
-      if (action === "up") gameState.player.lane = Math.max(0, gameState.player.lane - 1);
-      if (action === "down") gameState.player.lane = Math.min(2, gameState.player.lane + 1);
-      if (oldLane !== gameState.player.lane) {
-        if (gameState.player.slipCooldown <= 0) {
-          checkPerfectSlip(oldLane);
-          gameState.player.slipCooldown = 12;
-          resetJabString();
-          if (gameState.progressionMods.pivotSlip) pivotForward();
-          resolveBodies(gameState.player);
-        } else {
-          gameState.player.lane = oldLane;
-        }
-      }
-    }
-  }
-  function pivotForward() {
-    const V = CONSTANTS.VERBS.pivotSlip, p = gameState.player;
-    const target = gameState.enemies.filter((e) => e.lane === p.lane && e.x > p.x).sort((a, b) => a.x - b.x)[0];
-    const want = target ? Math.min(target.x - 95, p.x + V.advance) : p.x;
-    if (want > p.x + 4) {
-      p.x = Math.min(FOOTWORK_MAX_X, want);
-      for (let i = 0; i < 6; i++) gameState.particles.push({ x: p.x - 20 - Math.random() * 30, y: p.y - 30 - Math.random() * 60, vx: -8 - Math.random() * 8, vy: 0, life: 0.5, color: buildColor(), type: "dash_line" });
-    }
-    p.pivotTimer = V.instantWindow;
-  }
-  function registerPerfectGhostStep(attacker) {
-    const p = gameState.player;
-    if (!p || p.ghostPerfected) return false;
-    p.ghostPerfected = true;
-    gameState.combo++;
-    if (gameState.combo > gameState.statMaxCombo) gameState.statMaxCombo = gameState.combo;
-    gameState.statGhostSteps = (gameState.statGhostSteps || 0) + 1;
-    tmGhost(true);
-    p.flowStreak = (p.flowStreak || 0) + 1;
-    addScore(CONSTANTS.SCORE.perfectGhostStep, p.x + 40, p.y - 120);
-    spawnFloatingText(p.x, p.y - 95, "PERFECT GHOST +1", "#e5e7eb");
-    const zoneReady = gameState.instinctMeter >= 100 && !gameState.isInstinct;
-    const flowMult = getFlowMultiplier(gameState);
-    if (!gameState.isInstinct) {
-      let gain = 20 * gameState.stats.techMult * (1 + gameState.progressionMods.perfectSlipRewardBonusMult) * flowMult;
-      gain *= CONSTANTS.affixMod(gameState.currentAffix, "instinctGainMult", 1);
-      gameState.instinctMeter = Math.min(100, gameState.instinctMeter + gain);
-    }
-    const heal = gameState.progressionMods.perfectSlipHeal + CONSTANTS.affixMod(gameState.currentAffix, "perfectSlipHeal", 0);
-    if (heal > 0) gameState.health = Math.min(gameState.maxHealth, gameState.health + heal);
-    gameState.exp += Math.floor(2 * (1 + gameState.progressionMods.expGainBonusMult) * flowMult);
-    if (zoneReady) activateInstinct(true);
-    if (gameState.progressionMods.phantomRiposte) spawnAfterimage(p.lane, p.x, 8);
-    return true;
-  }
-  function checkPerfectSlip(oldLane) {
-    let slipQuality = "none", bossSlipped = null;
-    gameState.enemies.forEach((en) => {
-      if (en.lane === oldLane && en.stun <= 0) {
-        let isThreat = false;
-        const { perfect: perfectThresh, good: goodThresh } = CONSTANTS.getSlipThresholds(en.type, gameState.progressionMods.perfectSlipWindowBonus);
-        if (en.type === "zoner") {
-          if (en.attackCooldown <= 40 && en.x > gameState.player.x - 20) isThreat = true;
-        } else if (Math.abs(en.x - gameState.player.x) < 130 && en.attackCooldown <= 22 && en.x > gameState.player.x - 20) {
-          isThreat = true;
-        }
-        if (isThreat) {
-          let oldCooldown = en.attackCooldown;
-          if (en.tutorialType === "slip") {
-            if (oldCooldown <= perfectThresh) {
-              slipQuality = "perfect";
-              en.hp = 0;
-            } else {
-              slipQuality = "good";
-              en.x = gameState.player.x + 200;
-              en.attackCooldown = en.maxCooldown;
-              en.justAttacked = 0;
-              spawnFloatingText(gameState.player.x, gameState.player.y - 50, "TOO EARLY!", "#ffaa00");
-              gameState.player.slipBuff = 0;
-            }
-          } else {
-            if (oldCooldown <= perfectThresh) {
-              slipQuality = "perfect";
-              if (en.isBoss) bossSlipped = en;
-              if (en.type === "zoner") {
-                en.attackCooldown = en.maxCooldown;
-              } else en.attackCooldown = Math.max(en.attackCooldown, 18);
-            } else if (oldCooldown <= goodThresh && slipQuality !== "perfect") {
-              slipQuality = "good";
-              if (en.type === "zoner") {
-                en.attackCooldown = en.maxCooldown;
-              } else en.attackCooldown = Math.max(en.attackCooldown, 18);
-            } else {
-              en.attackCooldown = Math.max(en.attackCooldown, 18);
-            }
-          }
-        }
-      }
-    });
-    if (slipQuality !== "none") triggerPerfectSlip(bossSlipped, slipQuality);
-    if (slipQuality === "perfect" && gameState.progressionMods.afterimageSlip) spawnAfterimage(oldLane, gameState.player.x);
-  }
-  function spawnAfterimage(lane, x, delayOverride) {
-    if (!gameState.afterimages) gameState.afterimages = [];
-    gameState.afterimages.push({ lane, x, y: gameState.height * CONSTANTS.LANE_Y[lane], timer: delayOverride !== void 0 ? delayOverride : CONSTANTS.VERBS.afterimage.delay, fade: 22, fired: false, color: buildColor() });
-  }
-  function fireAfterimage(ai) {
-    const V = CONSTANTS.VERBS.afterimage;
-    let hit = false;
-    for (const en of gameState.enemies) {
-      if (en.lane !== ai.lane || en.x < ai.x - 20 || en.x > ai.x + V.reach || en.hp <= 0) continue;
-      let dmg = Math.round(V.damage * gameState.stats.powerMult);
-      if (en.isBoss) dmg = gateBossDamage(en, dmg);
-      en.hp -= dmg;
-      en.stun = Math.max(en.stun, en.isBoss ? 6 : V.stun);
-      createImpact(en.x, en.y - 60, ai.color);
-      createShatter(en.x, en.y - 70, ai.color);
-      spawnFloatingText(en.x, en.y - 120, "ECHO!", ai.color);
-      hit = true;
-    }
-    if (hit) {
-      gameState.combo++;
-      if (gameState.combo > gameState.statMaxCombo) gameState.statMaxCombo = gameState.combo;
-      addScore(CONSTANTS.SCORE.hit.hook, ai.x + 80, ai.y - 110);
-      playSound("hit");
-      gameState.shake = Math.max(gameState.shake, 6);
-    }
-  }
-  function updateAfterimages() {
-    if (!gameState.afterimages || !gameState.afterimages.length) return;
-    for (const ai of gameState.afterimages) {
-      if (!ai.fired) {
-        if (--ai.timer <= 0) {
-          ai.fired = true;
-          fireAfterimage(ai);
-        }
-      } else ai.fade--;
-    }
-    gameState.afterimages = gameState.afterimages.filter((ai) => !ai.fired || ai.fade > 0);
-  }
-  function activateInstinct(zone = false) {
-    gameState.isInstinct = true;
-    gameState.instinctReadyTimer = 0;
-    if (HUD.instinctBanner) HUD.instinctBanner.style.display = "none";
-    if (HUD.barCont) HUD.barCont.classList.add("beast-active");
-    doFlash(0.5);
-    gameState.shake = 20;
-    gameState.hitstop = 10;
-    triggerShockwave(gameState.player.x, gameState.player.y - 50, "#ffffff");
-    playSound("perfect_slip");
-    if (zone) {
-      gameState.zoneTimer = CONSTANTS.ZONE.frames;
-      gameState.zoneHold = 0;
-      playSound("zone");
-      spawnFloatingText(gameState.player.x, gameState.player.y - 140, "THE ZONE", "#ffffff");
-    }
-  }
-  function triggerPerfectSlip(bossSlipped, slipQuality) {
-    tmSlip(slipQuality);
-    if (slipQuality === "perfect") {
-      const zoneReady = gameState.instinctMeter >= 100 && !gameState.isInstinct;
-      if (HUD.slipPopup) {
-        HUD.slipPopup.innerText = "PERFECT SLIP";
-        HUD.slipPopup.style.color = "#ffffff";
-        HUD.slipPopup.style.textShadow = "0 0 24px #00ffff";
-      }
-      gameState.player.flowStreak = (gameState.player.flowStreak || 0) + 1;
-      const flowMult = getFlowMultiplier(gameState);
-      if (gameState.progressionMods.flowState && (gameState.player.flowStreak === 10 || gameState.player.flowStreak === 25)) {
-        spawnFloatingText(gameState.player.x, gameState.player.y - 110, "FLOW STATE!", "#ff8ad8");
-      }
-      if (!gameState.isInstinct) {
-        let gain = 20 * gameState.stats.techMult * (1 + gameState.progressionMods.perfectSlipRewardBonusMult) * flowMult;
-        gain *= CONSTANTS.affixMod(gameState.currentAffix, "instinctGainMult", 1);
-        gameState.instinctMeter = Math.min(100, gameState.instinctMeter + gain);
-      }
-      const slipHeal = gameState.progressionMods.perfectSlipHeal + CONSTANTS.affixMod(gameState.currentAffix, "perfectSlipHeal", 0);
-      if (slipHeal > 0) gameState.health = Math.min(gameState.maxHealth, gameState.health + slipHeal);
-      gameState.shake = 10;
-      doFlash(0.2);
-      playSound("perfect_slip");
-      gameState.statTotalSlips++;
-      addScore(CONSTANTS.SCORE.perfectSlip, gameState.player.x + 40, gameState.player.y - 120);
-      gameState.exp += Math.floor(2 * (1 + gameState.progressionMods.expGainBonusMult) * flowMult);
-      gameState.player.slipBuff = gameState.orbCounts.technique >= 2 ? 2 : 1;
-      spawnFloatingText(gameState.player.x, gameState.player.y - 80, "COUNTER READY!", "#ffffff");
-      gameState.hitstop += 8;
-      if (gameState.orbCounts.speed >= 4) gameState.player.moveCancelReady = true;
-      if (bossSlipped && gameState.orbCounts.technique >= 4) {
-        bossSlipped.exposedTimer = 90 + gameState.progressionMods.bossExposeBonusFrames;
-        spawnFloatingText(bossSlipped.x, bossSlipped.y - 140, "EXPOSED!", "#00ffff");
-        playSound("feint_tell");
-      }
-      if (zoneReady) activateInstinct(true);
-    } else if (slipQuality === "good") {
-      if (HUD.slipPopup) {
-        HUD.slipPopup.innerText = "GOOD SLIP";
-        HUD.slipPopup.style.color = "#ff8ad8";
-        HUD.slipPopup.style.textShadow = "0 0 10px #ff00ff";
-      }
-      if (!gameState.isInstinct) {
-        gameState.instinctMeter = Math.min(100, gameState.instinctMeter + 5 * gameState.stats.techMult);
-      }
-      gameState.shake = 3;
-      playSound("slip");
-      addScore(CONSTANTS.SCORE.goodSlip, gameState.player.x + 40, gameState.player.y - 120);
-    }
-    if (HUD.slipPopup) {
-      HUD.slipPopup.style.opacity = 1;
-      setTimeout(() => {
-        if (HUD.slipPopup) HUD.slipPopup.style.opacity = 0;
-      }, 500);
-    }
-  }
-  function startPunch(t, charge = 0) {
-    if (gameState.player.state === "guarding") gameState.player.state = "idle";
-    tmAttack(t);
-    gameState.player.state = "punching";
-    gameState.player.punchType = t;
-    gameState.player.didHit = false;
-    gameState.player.moveCancelReady = false;
-    gameState.player.comboWindow = 0;
-    gameState.player.charging = false;
-    gameState.player.crossLoaded = t === "cross" && !!gameState.progressionMods.loadedCross && charge >= CONSTANTS.VERBS.loadedCross.chargeFrames;
-    let isJab1 = t === "jab1", isJab2 = t === "jab2", isJab3 = t === "jab3";
-    if (isJab1) gameState.player.jabStep = 1;
-    else if (isJab2) gameState.player.jabStep = 2;
-    else if (isJab3) gameState.player.jabStep = 3;
-    else gameState.player.jabStep = 0;
-    if (gameState.progressionMods.dempseyCircuit && gameState.player.lastPunchLanded) {
-      let lastWasJab = gameState.player.lastPunchLanded.startsWith("jab");
-      let thisIsHook = t === "hook";
-      let lastWasHook = gameState.player.lastPunchLanded === "hook";
-      let thisIsJab = t.startsWith("jab");
-      if (lastWasJab && thisIsHook || lastWasHook && thisIsJab) gameState.player.dempseyActive = true;
-      else gameState.player.dempseyActive = false;
-    } else {
-      gameState.player.dempseyActive = false;
-    }
-    let sF = Math.max(0.35, (gameState.isInstinct ? 0.6 : 1) * (1 / gameState.stats.speedMult));
-    let cF = Math.max(0.35, (gameState.isInstinct ? 0.6 : 1) * (1 / (1 + (gameState.stats.speedMult - 1) * 0.4)));
-    if (isJab1 || isJab2 || t === "guard_jab") {
-      gameState.player.punchTimer = Math.max(5, gameState.orbCounts.speed >= 2 ? Math.floor(5 * sF) : Math.floor(8 * sF));
-      gameState.player.hitFrame = Math.max(2, Math.floor(2 * sF));
-    } else if (isJab3) {
-      gameState.player.punchTimer = Math.max(6, gameState.orbCounts.speed >= 2 ? Math.floor(7 * sF) : Math.floor(12 * sF));
-      gameState.player.hitFrame = Math.max(2, Math.floor(3 * sF));
-    } else if (t === "cross") {
-      gameState.player.punchTimer = Math.max(12, Math.floor(22 * cF));
-      gameState.player.hitFrame = Math.max(4, Math.floor(8 * cF));
-    } else if (t === "hook" || t === "check_hook") {
-      gameState.player.punchTimer = Math.max(8, Math.floor(16 * sF));
-      gameState.player.hitFrame = Math.max(3, Math.floor(6 * sF));
-    }
-    if ((gameState.zoneTimer || 0) > 0 && t !== "guard_jab" && t !== "check_hook") {
-      const tgt = gameState.enemies.filter((e) => e.lane === gameState.player.lane && e.x > gameState.player.x && e.x - gameState.player.x < 320).sort((a, b) => a.x - b.x)[0];
-      if (tgt && tgt.x - gameState.player.x > 95) {
-        gameState.player.x = Math.min(tgt.x - 90, FOOTWORK_MAX_X + 120);
-        for (let i = 0; i < 6; i++) gameState.particles.push({ x: gameState.player.x - 20 - Math.random() * 40, y: gameState.player.y - 30 - Math.random() * 60, vx: -9, vy: 0, life: 0.5, color: "#ffffff", type: "dash_line" });
-      }
-    }
-    if (gameState.player.pivotTimer > 0 && t !== "guard_jab" && t !== "check_hook") {
-      gameState.player.hitFrame = 1;
-      gameState.player.pivotTimer = 0;
-    }
-    if (gameState.player.slipBuff > 0) {
-      playSound("vacuum");
-      createVacuum(gameState.player.x + 80, gameState.player.y - 40);
-    }
-  }
-  function takeDamage(amt, isHeavy, en, opts = {}) {
-    if ((gameState.player.invuln || 0) > 0) return;
-    const PH = CONSTANTS.PLAYER_HIT;
-    const guarding = gameState.player.state === "guarding";
-    gameState.player.flowStreak = 0;
-    gameState.player.charging = false;
-    let guardMult = 0.25;
-    let piercing = gameState.player.state === "guarding" && en && en.type === "assassin";
-    if (piercing) guardMult = 0.6;
-    amt = amt * CONSTANTS.affixMod(gameState.currentAffix, "playerDamageTakenMult", 1);
-    let actualDmg = gameState.player.state === "guarding" ? Math.floor(amt * guardMult) : Math.floor(amt);
-    if (piercing) spawnFloatingText(gameState.player.x, gameState.player.y - 60, "GUARD PIERCED!", "#aa00ff");
-    if (gameState.player.state === "guarding" && gameState.progressionMods.guardRead) gameState.player.guardReadTimer = 16;
-    gameState.health -= actualDmg;
-    tmDamage(opts.src || (en ? en.isBoss ? en.controller : en.type : "hazard"), actualDmg);
-    gameState.stageHitsTaken = (gameState.stageHitsTaken || 0) + 1;
-    gameState.player.hitStun = isHeavy ? PH.hitStun.heavy : PH.hitStun.light;
-    gameState.shake = isHeavy ? 30 : 15;
-    gameState.hitstop = Math.max(gameState.hitstop || 0, isHeavy ? PH.hitStop.heavy : PH.hitStop.light);
-    gameState.player.slideVx = -(isHeavy ? PH.slide.heavy : PH.slide.light) * gameState.progressionMods.incomingRecoilMult;
-    gameState.player.state = "hurt";
-    resetJabString();
-    gameState.player.charging = false;
-    if (opts.floor && !guarding) {
-      tmFloored(!!opts.counter);
-      gameState.player.state = "floored";
-      gameState.player.floorTimer = PH.floorFrames;
-      gameState.player.invuln = PH.floorFrames + PH.floorGrace;
-      gameState.player.slideVx *= 1.6;
-      spawnFloatingText(gameState.player.x + 10, gameState.player.y - 140, opts.counter ? "COUNTERED!" : "DOWN!", "#ff3355");
-      playSound("knockdown");
-    }
-    if (gameState.combo >= 2 && !gameState.isInstinct) spawnFloatingText(gameState.player.x, gameState.player.y - 50, "COMBO BROKEN", "#ff0055");
-    gameState.combo = 0;
-    if (!gameState.isInstinct) doFlash(isHeavy ? 0.4 : 0.2);
-    playSound("hit");
-    let sf = document.getElementById("screen-flash");
-    if (sf && flashScale() > 0.01) {
-      sf.style.background = "red";
-      sf.style.opacity = 0.4 * flashScale();
-      setTimeout(() => {
-        if (sf) {
-          sf.style.background = "white";
-          sf.style.opacity = 0;
-        }
-      }, 150);
-    }
-    if (HUD.health) {
-      HUD.health.classList.add("text-red-500", "scale-125");
-      setTimeout(() => HUD.health.classList.remove("text-red-500", "scale-125"), 200);
-    }
-    if (gameState.enemies.some((e) => e.isBoss && e.desperation)) gameState.statDespDamage++;
-  }
-  var BODY_GAP = 62;
-  var FRONT_GAP = 70;
-  function resolveBodies(p) {
-    for (const e of gameState.enemies) {
-      if (e.hp <= 0 || e.controller === "static_monk" || e.x > gameState.width) continue;
-      const gap = e.lane === p.lane ? BODY_GAP : FRONT_GAP;
-      if (e.x - p.x < gap && e.x > p.x - 200) p.x = Math.max(FOOTWORK_MIN_X, e.x - gap);
-    }
-  }
-  function isEngaged(p) {
-    if (p.comboWindow > 0 || p.state === "punching" || p.state === "recovery") return true;
-    return gameState.enemies.some((e) => e.hp > 0 && e.lane === p.lane && e.x > p.x - 30 && e.x - p.x < 160);
-  }
-  function readInput() {
-    if ((gameState.inputGrace || 0) > 0) {
-      gameState.inputGrace--;
-      return { up: false, down: false, ghost: false, jab: false, cross: false, hook: false, instinct: false, guard: false, holdLeft: false, holdRight: false, crossHeld: false };
-    }
-    const K2 = getBinds();
-    const jp = (code) => !!gameState.keys[code] && !gameState.lastKeys[code];
-    const pad = gameState.pad;
-    return {
-      up: pad.up || jp(K2.up),
-      down: pad.down || jp(K2.down),
-      ghost: pad.ghost || jp(K2.ghost),
-      jab: pad.jab || jp(K2.jab),
-      cross: pad.cross || jp(K2.cross),
-      hook: pad.hook || jp(K2.hook),
-      instinct: pad.instinct || jp(K2.instinct),
-      guard: !!(pad.guard || gameState.keys[K2.guard]),
-      holdLeft: !!(gameState.keys[K2.left] || pad.leftHeld),
-      holdRight: !!(gameState.keys[K2.right] || pad.rightHeld),
-      crossHeld: !!(gameState.keys[K2.cross] || pad.crossHeld)
-    };
-  }
-  function updatePlayer() {
-    const input = readInput();
-    const p = gameState.player;
-    gameState.scrollX += (gameState.isInstinct ? 20 : 8) * (gameState.stageSpeedMult || 1);
-    if (p.invuln > 0) p.invuln--;
-    if (p.pivotTimer > 0) p.pivotTimer--;
-    if (p.slipCooldown > 0) p.slipCooldown--;
-    if (p.ghostStepCooldown > 0) {
-      p.ghostStepCooldown--;
-      if (p.ghostStepCooldown <= 0) {
-        const maxGhostCharges = gameState.progressionMods.blurStep ? 2 : 1;
-        p.ghostStepCharges = Math.min(maxGhostCharges, (p.ghostStepCharges || 0) + 1);
-        if (p.ghostStepCharges < maxGhostCharges) p.ghostStepCooldown = Math.max(10, Math.floor(60 * gameState.progressionMods.ghostStepCooldownMult));
-      }
-    }
-    if (p.guardReadTimer > 0) p.guardReadTimer--;
-    updateAfterimages();
-    const targetY = gameState.height * CONSTANTS.LANE_Y[p.lane];
-    p.y += (targetY - p.y) * 0.25;
-    if (p.state !== "hurt" && p.state !== "punching") {
-      if (input.holdRight) p.x = Math.min(FOOTWORK_MAX_X, p.x + FOOTWORK_ADVANCE_SPD);
-      else if (input.holdLeft) p.x = Math.max(FOOTWORK_MIN_X, p.x - FOOTWORK_RETREAT_SPD);
-      else if (!FW.holdGroundWhenEngaged || !isEngaged(p)) p.x += (180 - p.x) * FOOTWORK_HOME_PULL;
-    }
-    resolveBodies(p);
-    if (input.instinct && gameState.instinctMeter >= 100 && !gameState.isInstinct) activateInstinct(false);
-    if (p.inputBufferTimer > 0) {
-      if (--p.inputBufferTimer <= 0) {
-        p.inputBuffer = null;
-        p.bufferedCharge = 0;
-      }
-    }
-    if (p.movementBufferTimer > 0) {
-      if (--p.movementBufferTimer <= 0) p.movementBuffer = null;
-    }
-    if (p.slideVx && Math.abs(p.slideVx) > 0.2) {
-      p.x = Math.max(FOOTWORK_MIN_X, p.x + p.slideVx);
-      p.slideVx *= 0.8;
-    } else p.slideVx = 0;
-    if (p.state === "floored") {
-      if (--p.floorTimer <= 0) {
-        p.state = "idle";
-        gameState.inputGrace = 6;
-      }
-      return;
-    }
-    if (p.state === "hurt") {
-      if (--p.hitStun <= 0) p.state = "idle";
-      return;
-    }
-    if (p.state === "recovery") {
-      if (--p.recoveryTimer <= 0) p.state = "idle";
-    } else if (p.state === "ghost_step") {
-      if (--p.ghostStepTimer <= 0) p.state = "idle";
-    }
-    let crossAttempt = input.cross, crossCharge = 0;
-    if (gameState.progressionMods.loadedCross) {
-      const LC = CONSTANTS.VERBS.loadedCross;
-      crossAttempt = false;
-      if (input.cross) {
-        p.charging = true;
-        p.crossCharge = 0;
-      }
-      if (p.charging) {
-        if (input.crossHeld) {
-          p.crossCharge = Math.min(LC.maxFrames, p.crossCharge + 1);
-          if (p.crossCharge === LC.chargeFrames) playSound("charge_ready");
-        } else {
-          crossAttempt = true;
-          crossCharge = p.crossCharge;
-          p.charging = false;
-        }
-      }
-    }
-    if (input.guard) {
-      if (p.state === "idle" && !p.charging) {
-        p.state = "guarding";
-        gameState.combo = 0;
-        resetJabString();
-      }
-    } else {
-      if (p.state === "guarding") {
-        p.state = "idle";
-        if (p.guardReadTimer > 0 && gameState.progressionMods.guardRead) {
-          p.guardReadTimer = 0;
-          p.slipBuff = Math.max(p.slipBuff, 1);
-          playSound("perfect_slip");
-          doFlash(0.15);
-          gameState.shake = Math.max(gameState.shake, 6);
-          spawnFloatingText(p.x, p.y - 80, "GUARD READ!", "#ffffff");
-        }
-      }
-    }
-    let canAct = p.state === "idle" || p.state === "guarding";
-    const moveAction = input.up ? "up" : input.down ? "down" : input.ghost ? "ghost" : null;
-    const attackAction = input.jab ? "jab" : crossAttempt ? "cross" : input.hook ? "hook" : null;
-    let attemptMovement = !!moveAction || input.guard;
-    if (!canAct && p.moveCancelReady && attemptMovement && p.state !== "ghost_step") {
-      canAct = true;
-      p.moveCancelReady = false;
-      p.state = "idle";
-      createImpact(p.x, p.y - 50, "#00ffff");
-      playSound("slip");
-    }
-    if (canAct) {
-      if (attackAction) {
-        if (p.charging && attackAction !== "cross") p.charging = false;
-        if (Math.abs(p.y - targetY) < 5) executeAttackInput(attackAction, crossCharge);
-        else {
-          p.inputBuffer = attackAction;
-          p.bufferedCharge = crossCharge;
-          p.inputBufferTimer = 12;
-        }
-      } else if (moveAction) {
-        if (p.state === "guarding") p.state = "idle";
-        if (moveAction === "ghost") p.charging = false;
-        executeMovementInput(moveAction);
-      } else if (input.guard && !p.charging) {
-        executeMovementInput("guard");
-      } else {
-        if (p.state === "guarding") p.state = "idle";
-      }
-    } else if (p.state === "punching" || p.state === "recovery") {
-      if (attackAction) {
-        p.inputBuffer = attackAction;
-        p.bufferedCharge = crossCharge;
-        p.inputBufferTimer = 12;
-      } else if (moveAction) {
-        p.movementBuffer = moveAction;
-        p.movementBufferTimer = 12;
-      }
-    }
-    if (p.state === "idle" || p.state === "guarding") {
-      if (p.comboWindow > 0) {
-        if (--p.comboWindow <= 0) resetJabString();
-      }
-      if (p.movementBuffer) {
-        let c = p.movementBuffer;
-        p.movementBuffer = null;
-        p.movementBufferTimer = 0;
-        executeMovementInput(c);
-      } else if (p.inputBuffer) {
-        if (Math.abs(p.y - targetY) < 5) {
-          let c = p.inputBuffer, ch = p.bufferedCharge || 0;
-          p.inputBuffer = null;
-          p.bufferedCharge = 0;
-          p.inputBufferTimer = 0;
-          executeAttackInput(c, ch);
-        }
-      }
-    }
-    if (p.state === "punching") {
-      p.punchTimer--;
-      if (p.hitFrame > 0) {
-        p.hitFrame--;
-        if (p.hitFrame === 0) {
-          p.didHit = checkHit(p.punchType);
-          if (p.didHit) tmLanded(p.punchType);
-        }
-      }
-      if (p.punchTimer <= 0) {
-        if (!p.didHit) {
-          p.state = "recovery";
-          let isJab = p.punchType && p.punchType.startsWith("jab"), iGP = p.punchType === "guard_jab" || p.punchType === "check_hook";
-          p.recoveryTimer = isJab || p.punchType === "guard_jab" ? 6 : p.punchType === "hook" || p.punchType === "check_hook" ? Math.floor(9 * gameState.progressionMods.hookRecoveryMult) : 13;
-          if (p.dempseyActive) p.recoveryTimer = Math.max(1, Math.floor(p.recoveryTimer * (1 - gameState.progressionMods.dempseyRecoveryBonus)));
-          const circuitSafe = gameState.progressionMods.infiniteCircuit && p.dempseyActive;
-          if (circuitSafe) {
-          } else if (isJab && !iGP) {
-            if (gameState.progressionMods.relentlessRhythm && (p.punchType === "jab1" || p.punchType === "jab2")) {
-              gameState.combo = Math.max(0, gameState.combo - 1);
-            } else if (gameState.orbCounts.speed < 2) {
-              gameState.combo = Math.max(0, gameState.combo - 1);
-            } else {
-              gameState.combo = 0;
-            }
-          } else if (!iGP) gameState.combo = 0;
-          resetJabString();
-          let cD = gameState.enemies.find((e) => e.tutorialType === "counter");
-          if (cD) {
-            spawnFloatingText(p.x, p.y - 50, "MISSED! TRY AGAIN!", "#ffaa00");
-            cD.x = p.x + 250;
-            cD.attackCooldown = cD.maxCooldown;
-            cD.justAttacked = 0;
-            p.slipBuff = 1;
-          }
-        } else {
-          p.state = "idle";
-          p.comboWindow = p.dempseyActive ? 35 : 25;
-          if (gameState.progressionMods.infiniteCircuit && p.dempseyActive) {
-            p.dempseyAlternations = (p.dempseyAlternations || 0) + 1;
-            if (p.dempseyAlternations % 4 === 0) {
-              p.slipBuff = Math.max(p.slipBuff, 1);
-              spawnFloatingText(p.x, p.y - 100, "CIRCUIT CHARGED", CONSTANTS.FUSION_COLORS.evo_infinite_circuit);
-            }
-          }
-          p.lastPunchLanded = p.punchType;
-        }
-        p.crossLoaded = false;
-      }
-    }
   }
 
   // src/entities/enemies.js
@@ -5606,848 +6830,6 @@
     }
   }
 
-  // src/systems/waves.js
-  function applyFormations(defs, arcIndex) {
-    const out = defs.map((e) => ({ ...e }));
-    let added = 0;
-    const cap = CONSTANTS.FORMATION_RULES.maxAddsPerPacket || 2;
-    const coveredInFront = (lane, d) => out.some((e) => (e.t === "shield" || e.t === "bruiser") && e.l === lane && e.d < d);
-    const pBarricade = CONSTANTS.formationChance("barricade", arcIndex);
-    const pScreen = CONSTANTS.formationChance("screen", arcIndex);
-    for (const e of defs) {
-      if (added >= cap) break;
-      if (e.t === "zoner") {
-        if (random() < pBarricade && !coveredInFront(e.l, e.d)) {
-          out.push({ t: "shield", l: e.l, d: Math.max(0, (e.d || 0) - 30) });
-          added++;
-        }
-      }
-    }
-    for (const e of defs) {
-      if (added >= cap) break;
-      if (e.t === "assassin") {
-        if (random() < pScreen && !coveredInFront(e.l, e.d)) {
-          out.push({ t: "shield", l: e.l, d: Math.max(0, (e.d || 0) - 25) });
-          added++;
-        }
-      }
-    }
-    return out;
-  }
-  var ARC_BASE_LEVELS = {
-    1: {
-      // SHATTERED CATHEDRAL (Fundamentals)
-      speedMult: 1,
-      packets: [
-        [{ t: "grunt", l: 1, d: 0 }, { t: "grunt", l: 0, d: 50 }, { t: "grunt", l: 2, d: 100 }, { b: 60, th: 1 }],
-        [{ t: "grunt", l: 0, d: 0 }, { t: "grunt", l: 2, d: 45 }, { t: "grunt", l: 1, d: 90 }, { t: "grunt", l: 1, d: 135 }, { b: 60, th: 1 }],
-        [{ t: "shield", l: 1, d: 0 }, { t: "grunt", l: 0, d: 60 }, { t: "grunt", l: 2, d: 120 }, { t: "grunt", l: 1, d: 180 }, { b: 70, th: 1 }],
-        [{ t: "grunt", l: 0, d: 0 }, { t: "grunt", l: 2, d: 50 }, { t: "shield", l: 1, d: 100 }, { t: "grunt", l: 1, d: 150 }, { b: 90, th: 0 }]
-      ]
-    },
-    2: {
-      // GLASS RELIQUARY (Lane Awareness)
-      speedMult: 1.05,
-      packets: [
-        [{ t: "assassin", l: 1, d: 0 }, { t: "grunt", l: 0, d: 45 }, { t: "grunt", l: 2, d: 90 }, { b: 60, th: 1 }],
-        [{ t: "grunt", l: 0, d: 0 }, { t: "assassin", l: 2, d: 40 }, { t: "grunt", l: 1, d: 80 }, { t: "assassin", l: 0, d: 120 }, { b: 60, th: 1 }],
-        [{ t: "shield", l: 1, d: 0 }, { t: "assassin", l: 0, d: 50 }, { t: "assassin", l: 2, d: 100 }, { t: "grunt", l: 1, d: 150 }, { b: 60, th: 1 }],
-        [{ t: "assassin", l: 1, d: 0 }, { t: "assassin", l: 0, d: 35 }, { t: "assassin", l: 2, d: 70 }, { t: "grunt", l: 1, d: 110 }, { t: "grunt", l: 0, d: 150 }, { b: 90, th: 0 }]
-      ]
-    },
-    3: {
-      // ASHEN CLOISTER (Target Prioritization)
-      speedMult: 1.1,
-      packets: [
-        [{ t: "shield", l: 1, d: 0 }, { t: "zoner", l: 1, d: 50 }, { t: "grunt", l: 0, d: 100 }, { t: "grunt", l: 2, d: 150 }, { b: 60, th: 1 }],
-        [{ t: "bruiser", l: 1, d: 0 }, { t: "grunt", l: 0, d: 50 }, { t: "grunt", l: 2, d: 100 }, { t: "assassin", l: 1, d: 150 }, { b: 60, th: 1 }],
-        [{ t: "zoner", l: 0, d: 0 }, { t: "zoner", l: 2, d: 30 }, { t: "assassin", l: 1, d: 70 }, { t: "grunt", l: 1, d: 110 }, { b: 50, th: 2 }],
-        [{ t: "shield", l: 0, d: 0 }, { t: "shield", l: 2, d: 40 }, { t: "zoner", l: 1, d: 80 }, { t: "bruiser", l: 1, d: 140 }, { b: 70, th: 1 }],
-        [{ t: "bruiser", l: 1, d: 0 }, { t: "zoner", l: 0, d: 50 }, { t: "zoner", l: 2, d: 90 }, { t: "assassin", l: 1, d: 130 }, { t: "assassin", l: 0, d: 170 }, { b: 90, th: 0 }]
-      ]
-    },
-    4: {
-      // MIDNIGHT CAUSEWAY (The Flowing River)
-      speedMult: 1.15,
-      packets: [
-        [{ t: "assassin", l: 1, d: 0 }, { t: "assassin", l: 0, d: 40 }, { t: "assassin", l: 2, d: 40 }, { t: "grunt", l: 1, d: 100 }, { b: 40, th: 2 }],
-        [{ t: "assassin", l: 0, d: 0 }, { t: "assassin", l: 2, d: 30 }, { t: "grunt", l: 1, d: 80 }, { t: "assassin", l: 1, d: 120 }, { t: "grunt", l: 0, d: 160 }, { b: 50, th: 2 }],
-        [{ t: "grunt", l: 0, d: 0 }, { t: "grunt", l: 1, d: 30 }, { t: "grunt", l: 2, d: 60 }, { t: "assassin", l: 1, d: 100 }, { t: "assassin", l: 0, d: 140 }, { t: "assassin", l: 2, d: 140 }, { b: 60, th: 2 }],
-        [{ t: "shield", l: 1, d: 0 }, { t: "assassin", l: 0, d: 40 }, { t: "assassin", l: 2, d: 40 }, { t: "bruiser", l: 1, d: 100 }, { b: 60, th: 1 }],
-        [{ t: "assassin", l: 1, d: 0 }, { t: "grunt", l: 0, d: 40 }, { t: "assassin", l: 2, d: 80 }, { t: "grunt", l: 1, d: 120 }, { t: "assassin", l: 0, d: 160 }, { t: "grunt", l: 2, d: 200 }, { b: 90, th: 0 }]
-      ]
-    },
-    5: {
-      // ABYSS RAIL (Crack the Formation)
-      speedMult: 1.2,
-      packets: [
-        [{ t: "shield", l: 1, d: 0 }, { t: "zoner", l: 1, d: 40 }, { t: "grunt", l: 0, d: 80 }, { t: "grunt", l: 2, d: 80 }, { t: "assassin", l: 1, d: 140 }, { b: 60, th: 2 }],
-        [{ t: "zoner", l: 0, d: 0 }, { t: "zoner", l: 2, d: 0 }, { t: "shield", l: 1, d: 40 }, { t: "grunt", l: 0, d: 90 }, { t: "grunt", l: 2, d: 90 }, { b: 60, th: 2 }],
-        [{ t: "shield", l: 0, d: 0 }, { t: "shield", l: 2, d: 0 }, { t: "zoner", l: 0, d: 60 }, { t: "zoner", l: 2, d: 60 }, { t: "assassin", l: 1, d: 120 }, { b: 60, th: 1 }],
-        [{ t: "bruiser", l: 1, d: 0 }, { t: "zoner", l: 0, d: 40 }, { t: "zoner", l: 2, d: 40 }, { t: "grunt", l: 1, d: 100 }, { t: "assassin", l: 0, d: 140 }, { b: 70, th: 1 }],
-        [{ t: "shield", l: 0, d: 0 }, { t: "shield", l: 1, d: 0 }, { t: "shield", l: 2, d: 0 }, { t: "zoner", l: 1, d: 60 }, { t: "bruiser", l: 1, d: 150 }, { b: 90, th: 0 }]
-      ]
-    },
-    6: {
-      // THRONE OF STATIC (The Composure Exam)
-      speedMult: 1.25,
-      packets: [
-        [{ t: "assassin", l: 1, d: 0 }, { t: "shield", l: 0, d: 40 }, { t: "shield", l: 2, d: 40 }, { t: "grunt", l: 1, d: 100 }, { t: "zoner", l: 0, d: 140 }, { b: 50, th: 2 }],
-        [{ t: "shield", l: 1, d: 0 }, { t: "zoner", l: 1, d: 40 }, { t: "assassin", l: 0, d: 80 }, { t: "assassin", l: 2, d: 80 }, { t: "bruiser", l: 1, d: 140 }, { b: 50, th: 2 }],
-        [{ t: "grunt", l: 0, d: 0 }, { t: "grunt", l: 2, d: 0 }, { t: "assassin", l: 1, d: 40 }, { t: "zoner", l: 0, d: 100 }, { t: "zoner", l: 2, d: 100 }, { t: "shield", l: 1, d: 160 }, { b: 60, th: 1 }],
-        [{ t: "bruiser", l: 1, d: 0 }, { t: "shield", l: 0, d: 40 }, { t: "shield", l: 2, d: 40 }, { t: "zoner", l: 0, d: 100 }, { t: "zoner", l: 2, d: 100 }, { b: 60, th: 1 }],
-        [{ t: "assassin", l: 0, d: 0 }, { t: "assassin", l: 2, d: 30 }, { t: "shield", l: 1, d: 80 }, { t: "grunt", l: 0, d: 130 }, { t: "grunt", l: 2, d: 130 }, { t: "assassin", l: 1, d: 180 }, { b: 60, th: 1 }],
-        [{ t: "shield", l: 0, d: 0 }, { t: "shield", l: 1, d: 0 }, { t: "shield", l: 2, d: 0 }, { t: "zoner", l: 0, d: 80 }, { t: "zoner", l: 2, d: 80 }, { t: "bruiser", l: 1, d: 140 }, { b: 90, th: 0 }]
-      ]
-    }
-  };
-  function cloneEnemyDefs(packet) {
-    return packet.filter((e) => e.t).map((e) => ({ ...e }));
-  }
-  function markerOf(packet) {
-    return packet.find((e) => !e.t) || { b: 75, th: 1 };
-  }
-  function ruleEcho(enemies) {
-    if (!enemies.length) return enemies;
-    const last = enemies[enemies.length - 1];
-    const echoLane = (last.l + 1) % 3;
-    return [...enemies, { t: last.t === "zoner" ? "grunt" : last.t, l: echoLane, d: last.d + 55 }];
-  }
-  function rulePincerAndBruiser(enemies) {
-    let out = enemies.map((e) => ({ ...e }));
-    if (out.length >= 2 && out[0].l === out[1].l) out[1] = { ...out[1], l: (out[1].l + 1) % 3 };
-    if (!out.some((e) => e.t === "bruiser")) {
-      const midDelay = Math.round(out.reduce((s, e) => s + e.d, 0) / Math.max(1, out.length));
-      out.push({ t: "bruiser", l: 1, d: midDelay });
-    }
-    return out;
-  }
-  function ruleReadOverGuard(enemies) {
-    let assassinToggle = false;
-    return enemies.map((e) => {
-      if (e.t === "grunt") {
-        assassinToggle = !assassinToggle;
-        return assassinToggle ? { ...e, t: "assassin" } : e;
-      }
-      if (e.t === "zoner") return { ...e, d: Math.max(0, e.d - 20) };
-      return e;
-    });
-  }
-  function deriveArc(baseLevels, transforms, breatherCut, speedBump) {
-    const out = {};
-    for (const key of Object.keys(baseLevels)) {
-      const base = baseLevels[key];
-      const packets = base.packets.map((pkt) => {
-        var _a;
-        let enemies = cloneEnemyDefs(pkt);
-        for (const t of transforms) enemies = t(enemies);
-        const marker = markerOf(pkt);
-        const newB = Math.max(20, (marker.b || 75) - breatherCut);
-        const newTh = Math.max(0, ((_a = marker.th) != null ? _a : 1) - (breatherCut >= 20 ? 1 : 0));
-        return [...enemies, { b: newB, th: newTh }];
-      });
-      out[key] = { speedMult: +(base.speedMult * speedBump).toFixed(3), packets };
-    }
-    return out;
-  }
-  var ARC2_LEVELS = deriveArc(ARC_BASE_LEVELS, [ruleEcho], 12, 1.03);
-  var ARC3_LEVELS = deriveArc(ARC_BASE_LEVELS, [rulePincerAndBruiser], 16, 1.05);
-  var ARC4_LEVELS = deriveArc(ARC_BASE_LEVELS, [ruleReadOverGuard], 20, 1.04);
-  var ARC5_LEVELS = deriveArc(ARC_BASE_LEVELS, [ruleEcho, rulePincerAndBruiser, ruleReadOverGuard], 24, 1.08);
-  function compressLevel(level, keep, breather = 45) {
-    const packets = keep.map((pi, i) => {
-      var _a;
-      const pkt = level.packets[pi];
-      const enemies = cloneEnemyDefs(pkt);
-      const marker = markerOf(pkt);
-      const last = i === keep.length - 1;
-      return [...enemies, { b: last ? marker.b : Math.min(marker.b, breather), th: (_a = marker.th) != null ? _a : 1 }];
-    });
-    return { speedMult: level.speedMult, packets };
-  }
-  var ARC1_LEVELS = {
-    ...ARC_BASE_LEVELS,
-    1: compressLevel(ARC_BASE_LEVELS[1], [0, 2, 3]),
-    // grunts -> first armor -> mixed
-    2: compressLevel(ARC_BASE_LEVELS[2], [0, 2, 3]),
-    // assassin lead -> screened -> finale
-    3: compressLevel(ARC_BASE_LEVELS[3], [0, 1, 4]),
-    // zoner -> bruiser -> finale
-    6: compressLevel(ARC_BASE_LEVELS[6], [0, 1, 3, 5])
-    // the composure exam, trimmed
-  };
-  var ARC_WAVE_TABLES = { 1: ARC1_LEVELS, 2: ARC2_LEVELS, 3: ARC3_LEVELS, 4: ARC4_LEVELS, 5: ARC5_LEVELS };
-  function spawnEnemy() {
-    if (gameState.stageClearing || gameState.bossActive || gameState.bossIntroTimer > 0 || gameState.screen !== "playing" || gameState.purifyTimer > 0) return;
-    if (CONSTANTS.isBossStage(gameState.currentStage)) {
-      if (!gameState.bossActive && !gameState.stageClearing) {
-        gameState.stageClearing = true;
-        gameState.purifyTimer = 90;
-      }
-      return;
-    }
-    if (gameState.currentStage === 1 && gameState.tutorialEnabled) {
-      if (gameState.spawnTotal < 5) {
-        if (gameState.enemies.length > 0 || gameState.tutorialDelay > 0) return;
-        if (gameState.spawnTotal === 0) spawnTutorialEnemy("slip");
-        else if (gameState.spawnTotal === 1) spawnTutorialEnemy("counter");
-        else if (gameState.spawnTotal === 2) spawnTutorialEnemy("shield");
-        else if (gameState.spawnTotal === 3) spawnTutorialEnemy("guard");
-        else if (gameState.spawnTotal === 4) spawnTutorialEnemy("ghost_step");
-        return;
-      }
-      if (gameState.enemies.some((e) => e.tutorialType)) return;
-    }
-    if (gameState.pendingUpgrades > 0 && gameState.enemies.length === 0) return;
-    if (gameState.waveThreshold === void 0 || gameState.wavesCleared === 0) gameState.waveThreshold = 0;
-    if (gameState.enemies.length <= gameState.waveThreshold && gameState.tutorialDelay <= 0) {
-      if (gameState.waveTimer > 0) {
-        gameState.waveTimer--;
-        return;
-      }
-      const rawArcIndex = CONSTANTS.getArcIndex(gameState.currentStage);
-      const law = CONSTANTS.ARC_LAWS[Math.min(rawArcIndex, 5)] || CONSTANTS.ARC_LAWS[5];
-      const gm = law.globalMods;
-      let packetIndex = CONSTANTS.getLevelInArc(gameState.currentStage);
-      let levelData = ARC_WAVE_TABLES[Math.min(rawArcIndex, 5)][packetIndex];
-      if (gameState.wavesCleared >= levelData.packets.length) {
-        if (gameState.enemies.length === 0) {
-          gameState.stageClearing = true;
-          gameState.purifyTimer = 60;
-        }
-        return;
-      }
-      const affix = gameState.currentAffix;
-      const affixDelayMult = CONSTANTS.affixMod(affix, "packetDelayMult", 1);
-      const affixSubType = CONSTANTS.affixMod(affix, "gruntSub", null);
-      const affixSubEvery = CONSTANTS.affixMod(affix, "gruntSubEvery", 0);
-      let gruntSubCounter = 0;
-      gameState.stageSpeedMult = levelData.speedMult * gm.railSpeedMult * CONSTANTS.affixMod(affix, "speedMult", 1);
-      let packet = levelData.packets[gameState.wavesCleared];
-      gameState.wavesCleared++;
-      let nextBreather = Math.max(20, 75 - gm.maxBreatherCut);
-      let nextThreshold = 0;
-      const marker = packet.find((d) => !d.t);
-      if (marker) {
-        if (marker.b !== void 0) nextBreather = marker.b;
-        if (marker.th !== void 0) nextThreshold = marker.th;
-      }
-      const enemyDefs = applyFormations(packet.filter((d) => d.t), Math.min(rawArcIndex, 5));
-      enemyDefs.forEach((enemyDef) => {
-        gameState.spawnTotal++;
-        let type = enemyDef.t;
-        if (type === "grunt" && affixSubType && affixSubEvery > 0) {
-          if (gruntSubCounter % affixSubEvery === 0) type = affixSubType;
-          gruntSubCounter++;
-        }
-        let lane = enemyDef.l;
-        let delayFrames = (enemyDef.d || 0) * gm.packetDelayMult * affixDelayMult;
-        let color = "#ff0055";
-        let hp = 45;
-        let speed = 3;
-        let cooldown = 60;
-        let weight = 1;
-        if (type === "bruiser") {
-          color = "#cc0000";
-          hp = 150;
-          speed = 1.8;
-          cooldown = 80;
-          weight = 2;
-        } else if (type === "shield") {
-          color = "#ffaa00";
-          hp = 80;
-          speed = 2.4;
-          weight = 1.5;
-        } else if (type === "zoner") {
-          color = "#00ff00";
-          hp = 40;
-          speed = 1.5;
-          cooldown = 100;
-        } else if (type === "assassin") {
-          color = "#aa00ff";
-          hp = 30;
-          speed = 4.5;
-          cooldown = 35;
-        }
-        hp = Math.floor(hp * (1 + (CONSTANTS.difficultyStage(gameState.currentStage) - 1) * 0.1) * gm.packetDensityMult);
-        if (type === "shield" || type === "bruiser") cooldown = Math.max(20, Math.round(cooldown * gm.enemyRecoveryMult));
-        speed *= gameState.stageSpeedMult;
-        if (gameState.laneTempo && gameState.laneTempo[lane] !== void 0) speed *= gameState.laneTempo[lane];
-        let spawnX = gameState.width + 50 + delayFrames * speed;
-        const PS = CONSTANTS.PUNCH_STRINGS, arcI = Math.min(rawArcIndex, 5);
-        let stringLen = 1;
-        if (PS.types.includes(type) && (PS.chanceByArc[arcI] || 0) > 0 && random() < PS.chanceByArc[arcI]) stringLen = PS.lenByArc[arcI] || 2;
-        gameState.enemies.push({
-          stringLen,
-          stringIdx: 0,
-          x: spawnX,
-          lane,
-          y: gameState.height * CONSTANTS.LANE_Y[lane],
-          w: type === "bruiser" ? 70 : 50,
-          h: type === "bruiser" ? 130 : 110,
-          hp,
-          maxHp: hp,
-          speed,
-          baseSpeed: speed,
-          color,
-          type,
-          weight,
-          stun: 0,
-          stunResist: 0,
-          attackCooldown: cooldown,
-          maxCooldown: cooldown,
-          isBoss: false,
-          justAttacked: 0,
-          trails: [],
-          trailTimer: 0,
-          vx: 0,
-          pressure: 0,
-          pressureDecay: 0,
-          menace: 0,
-          menaceLevel: 0
-        });
-      });
-      gameState.waveTimer = nextBreather;
-      gameState.waveThreshold = nextThreshold;
-    }
-  }
-
-  // src/entities/bosses.js
-  var BOSS_ROSTER = [
-    {
-      name: "NEON ENFORCER",
-      color: "#ffaa00",
-      controller: "neon_enforcer",
-      type: "shield",
-      weight: 2,
-      speed: 1.2,
-      cooldown: 60,
-      baseHpMult: 1,
-      startMove: "jab"
-    },
-    {
-      name: "PHANTOM BOXER",
-      color: "#aa00ff",
-      controller: "phantom_boxer",
-      type: "assassin",
-      weight: 1.5,
-      speed: 2.5,
-      cooldown: 40,
-      baseHpMult: 0.75,
-      startMove: "feint"
-    },
-    {
-      name: "STATIC MONK",
-      color: "#00ff00",
-      controller: "static_monk",
-      type: "zoner",
-      weight: 1.2,
-      speed: 1,
-      cooldown: 120,
-      baseHpMult: 0.85,
-      startMove: "laser"
-    },
-    // v17: the rotation no longer repeats inside Arcs 1-5.
-    {
-      name: "LIVE WIRE",
-      color: "#ffe14d",
-      controller: "live_wire",
-      type: "bruiser",
-      weight: 2.2,
-      speed: 1.7,
-      cooldown: 50,
-      baseHpMult: 1.05,
-      startMove: "string"
-    },
-    {
-      name: "NEGATIVE",
-      color: "#ff0000",
-      // replaced at spawn with the inverse of the Striker's colour
-      controller: "negative",
-      type: "grunt",
-      weight: 1.3,
-      speed: 2.2,
-      cooldown: 44,
-      baseHpMult: 1.2,
-      startMove: "jab"
-    }
-  ];
-  var BOSS_ROSTER_IDS = BOSS_ROSTER.map((b) => b.controller);
-  function spawnMonkAdd() {
-    let hp = Math.floor(45 * (1 + (CONSTANTS.difficultyStage(gameState.currentStage) - 1) * 0.1));
-    let lane = Math.floor(random() * 3);
-    gameState.enemies.push({
-      x: gameState.width + 60,
-      lane,
-      y: gameState.height * CONSTANTS.LANE_Y[lane],
-      w: 50,
-      h: 110,
-      hp,
-      maxHp: hp,
-      speed: 3 * (gameState.stageSpeedMult || 1),
-      color: "#ff0055",
-      type: "grunt",
-      weight: 1,
-      stun: 0,
-      stunResist: 0,
-      attackCooldown: 60,
-      maxCooldown: 60,
-      isBoss: false,
-      justAttacked: 0,
-      trails: [],
-      trailTimer: 0,
-      vx: 0,
-      pressure: 0,
-      pressureDecay: 0
-    });
-    spawnFloatingText(gameState.width - 120, gameState.height * 0.2, "SUPPORT INBOUND", "#00ff00");
-  }
-  function spawnBoss() {
-    gameState.bossActive = true;
-    gameState.bossIntroTimer = 180;
-    gameState.posterConfirmed = false;
-    gameState.shake = 15;
-    playSound("bash_tell");
-    setMusicIntensity(1);
-    let baseHp = 300 + CONSTANTS.difficultyStage(gameState.currentStage) * 100;
-    const rawArcIndex = CONSTANTS.getArcIndex(gameState.currentStage);
-    const bossIndex = (rawArcIndex - 1) % BOSS_ROSTER.length;
-    const template = { ...BOSS_ROSTER[bossIndex] };
-    if (template.controller === "negative") template.color = invertHex(gameState.strikerColor || "#00ffff");
-    gameState.bossThemeColor = template.color;
-    gameState.bossIntroText = template.name;
-    const arcData = CONSTANTS.ARC_STAGE_TABLES[Math.min(rawArcIndex, 5)] || {};
-    gameState.bossPoster = {
-      name: template.name,
-      controller: template.controller,
-      color: template.color,
-      arc: rawArcIndex,
-      tagline: (CONSTANTS.BOSS_BILLING[template.controller] || {}).tagline || "",
-      venue: arcData[7] && arcData[7].stageName || "Boss Chamber",
-      round: gameState.currentStage
-    };
-    playSound("bell");
-    const arcMods = CONSTANTS.getBossArcMods(template.controller, rawArcIndex);
-    gameState.enemies.push({
-      name: template.name,
-      controller: template.controller,
-      x: gameState.width - 150,
-      lane: 1,
-      y: gameState.height * CONSTANTS.LANE_Y[1],
-      w: template.type === "shield" ? 60 : 50,
-      h: template.type === "shield" ? 140 : 130,
-      hp: baseHp * template.baseHpMult,
-      maxHp: baseHp * template.baseHpMult,
-      speed: template.speed,
-      color: template.color,
-      type: template.type,
-      weight: template.weight,
-      phase: 1,
-      currentMove: template.startMove,
-      lastMove: null,
-      stun: 0,
-      stunResist: 0,
-      attackCooldown: template.cooldown,
-      maxCooldown: template.cooldown,
-      isBoss: true,
-      pressure: 0,
-      pressureDecay: 0,
-      justAttacked: 0,
-      trails: [],
-      trailTimer: 0,
-      bossMashCount: 0,
-      mashDecay: 0,
-      hitstunScaling: 0,
-      stunDecay: 0,
-      shiftWarning: 0,
-      shiftCooldown: 0,
-      vx: 0,
-      exposedTimer: 0,
-      desperation: false,
-      enraged: false,
-      targetLanes: [],
-      decoyTimer: 0,
-      decoyLane: -1,
-      decoyRolledThisCycle: false,
-      // v16 offense audit + finisher bookkeeping
-      telegraphed: false,
-      recoverTimer: 0,
-      recoverMax: 0,
-      punishShown: false,
-      feintSwitched: false,
-      finisherStage: 0,
-      pendingFinisher: null,
-      koDone: false,
-      stringIdx: 0,
-      stringsThrown: 0,
-      shockTimer: 0,
-      slipCooldown: 0,
-      arcMods
-      // Assigned directly to the entity!
-    });
-  }
-  function resolveBossStrike(en, rawDmg, isHeavy) {
-    if (en.lane !== gameState.player.lane) return;
-    if (Math.abs(en.x - gameState.player.x) > 100) return;
-    if (gameState.player.state === "ghost_step") {
-      spawnFloatingText(gameState.player.x, gameState.player.y - 50, "GHOST STEP", "#888888");
-      registerPerfectGhostStep();
-      if (gameState.progressionMods.ghostCounter && gameState.player.slipBuff === 0) {
-        gameState.player.slipBuff = 1;
-        playSound("perfect_slip");
-        spawnFloatingText(gameState.player.x, gameState.player.y - 80, "GHOST COUNTER!", "#ffffff");
-      }
-      return;
-    }
-    let dmg = gameState.isInstinct ? Math.floor(rawDmg * 0.5) : rawDmg;
-    const counter = gameState.player.state === "punching" || gameState.player.state === "recovery";
-    if (counter) dmg = Math.round(dmg * CONSTANTS.PLAYER_HIT.counterHitMult);
-    takeDamage(dmg, isHeavy || counter, en, { floor: isHeavy || counter, counter });
-  }
-  function nextCycle(en, frames) {
-    const mult = en.desperation ? CONSTANTS.BOSS_OFFENSE.desperationCooldownMult : 1;
-    return clampCycle(frames * mult);
-  }
-  function meleeTelegraph(en, inRange, onTell) {
-    const lead = telegraphLead(en);
-    if (!inRange) {
-      if (en.attackCooldown <= lead) {
-        en.attackCooldown = lead + 6;
-        en.telegraphed = false;
-      }
-      return;
-    }
-    if (!en.telegraphed && en.attackCooldown <= lead) {
-      en.telegraphed = true;
-      en.telegraphAt = en.attackCooldown;
-      onTell();
-    }
-  }
-  function handleNeonEnforcer(en) {
-    if (en.recoverTimer > 0) {
-      en.recoverTimer--;
-      return;
-    }
-    en.attackCooldown--;
-    if (en.currentMove !== "bash" && en.x > gameState.player.x + 100) {
-      en.x -= en.speed * 0.5 * en.arcMods.walkDownMult;
-    }
-    const inRange = Math.abs(en.x - gameState.player.x) < 140 && en.stun <= 0;
-    meleeTelegraph(en, inRange, () => {
-      playSound(en.currentMove === "bash" ? "bash_tell" : "jab_tell");
-      if (en.currentMove === "bash") createImpact(en.x, en.y - 60, "#ffaa00");
-    });
-    if (inRange && en.attackCooldown <= 0) {
-      en.justAttacked = 5;
-      const struck = en.currentMove;
-      resolveBossStrike(en, struck === "bash" ? 30 : 12, struck === "bash");
-      if (en.enraged) {
-        en.currentMove = "bash";
-        en.enraged = false;
-        en.maxCooldown = nextCycle(en, 55);
-      } else {
-        let roll = random();
-        if (en.phase === 1) {
-          en.currentMove = roll > 0.6 ? "bash" : "jab";
-          en.maxCooldown = nextCycle(en, en.currentMove === "bash" ? 70 : 45);
-        } else {
-          en.currentMove = roll > 0.5 ? "bash" : "jab";
-          en.maxCooldown = nextCycle(en, en.currentMove === "bash" ? 55 : 35);
-        }
-      }
-      en.attackCooldown = en.maxCooldown;
-      beginPunishWindow(en, struck);
-    }
-  }
-  function handlePhantomBoxer(en) {
-    if (en.recoverTimer > 0) {
-      en.recoverTimer--;
-      return;
-    }
-    en.attackCooldown--;
-    if (en.x > gameState.player.x + 100) {
-      en.x -= en.speed;
-    }
-    if (en.arcMods.fakeLaneFlash && !en.decoyRolledThisCycle && Math.abs(en.x - gameState.player.x) < 140 && en.attackCooldown <= Math.floor(28 * en.arcMods.punishWindowMult)) {
-      en.decoyRolledThisCycle = true;
-      if (random() < 0.45) {
-        const otherLanes = [0, 1, 2].filter((l) => l !== en.lane);
-        en.decoyLane = otherLanes[Math.floor(random() * otherLanes.length)];
-        en.decoyTimer = 16;
-      }
-    }
-    if (en.decoyTimer > 0) {
-      en.decoyTimer--;
-      gameState.laneFlash[en.decoyLane] = Math.max(gameState.laneFlash[en.decoyLane], en.decoyTimer < 6 ? 2 : 1);
-    }
-    if (en.arcMods.afterimageThreat && en.trails && en.trails.length > 0 && en.attackCooldown > 20) {
-      const ghost = en.trails[0];
-      if (ghost && ghost.lane !== void 0 && ghost.lane !== en.lane) {
-        gameState.laneFlash[ghost.lane] = Math.max(gameState.laneFlash[ghost.lane], 1);
-      }
-    }
-    const inRange = Math.abs(en.x - gameState.player.x) < 140 && en.stun <= 0;
-    meleeTelegraph(en, inRange, () => {
-      playSound(en.currentMove === "feint" ? "feint_tell" : "jab_tell");
-    });
-    if (inRange) {
-      if (en.currentMove === "feint" && !en.feintSwitched && en.attackCooldown <= Math.max(14, Math.floor(16 * en.arcMods.punishWindowMult))) {
-        en.feintSwitched = true;
-        en.lane = gameState.player.lane;
-        en.y = gameState.height * CONSTANTS.LANE_Y[en.lane];
-        createImpact(en.x, en.y - 60, "#aa00ff");
-      }
-      if (en.attackCooldown <= 0) {
-        en.justAttacked = 5;
-        const struck = en.currentMove;
-        resolveBossStrike(en, 15, false);
-        en.decoyRolledThisCycle = false;
-        en.decoyTimer = 0;
-        en.feintSwitched = false;
-        let roll = random();
-        if (en.phase === 1) {
-          en.currentMove = roll > 0.5 ? "feint" : "jab";
-          en.maxCooldown = nextCycle(en, en.currentMove === "feint" ? 45 : 30);
-        } else {
-          if (en.lastMove === "feint") en.currentMove = "jab";
-          else en.currentMove = roll > 0.2 ? "feint" : "jab";
-          en.maxCooldown = nextCycle(en, en.currentMove === "feint" ? 35 : 26);
-        }
-        en.lastMove = en.currentMove;
-        en.attackCooldown = en.maxCooldown;
-        beginPunishWindow(en, struck === "feint" ? "feint" : "jab");
-      }
-    }
-  }
-  function handleStaticMonk(en) {
-    en.attackCooldown--;
-    if (en.currentMove === "recharge") {
-      en.x = gameState.player.x + 100;
-      if (en.attackCooldown <= 0) {
-        en.currentMove = "laser";
-        en.x = gameState.width - 150;
-        en.attackCooldown = nextCycle(en, 100);
-        en.telegraphed = false;
-        playSound("ghost_step");
-        createShatter(en.x, en.y - 60, "#00ff00");
-      }
-    } else {
-      en.x = gameState.width - 150 + Math.sin(Date.now() * 2e-3) * 50;
-      if (!en.telegraphed && en.attackCooldown <= 80) {
-        en.telegraphed = true;
-        en.telegraphAt = en.attackCooldown;
-        playSound("zoner_tell");
-        en.targetLanes = [gameState.player.lane];
-        let adjacentLane = gameState.player.lane === 1 ? random() > 0.5 ? 0 : 2 : 1;
-        en.targetLanes.push(adjacentLane);
-      }
-      if (en.attackCooldown > 0 && en.targetLanes.length > 0) {
-        en.targetLanes.forEach((laneIndex) => {
-          gameState.laneFlash[laneIndex] = en.attackCooldown <= 15 ? 2 : 1;
-          if (gameState.player.lane === laneIndex) {
-            gameState.player.dangerLevel = Math.max(gameState.player.dangerLevel, en.attackCooldown <= 15 ? 2 : 1);
-          }
-        });
-        if (en.arcMods.deceptiveOrder && en.attackCooldown > 45) {
-          const safeLane = [0, 1, 2].find((l) => !en.targetLanes.includes(l));
-          if (safeLane !== void 0) gameState.laneFlash[safeLane] = Math.max(gameState.laneFlash[safeLane], 1);
-        }
-      }
-      if (en.attackCooldown <= 0) {
-        playSound("laser");
-        en.justAttacked = 10;
-        gameState.shake = 15;
-        if (en.targetLanes.length > 0) {
-          en.targetLanes.forEach((laneIndex) => {
-            for (let i = 0; i < 6; i++) {
-              createImpact(en.x - i * 150, gameState.height * CONSTANTS.LANE_Y[laneIndex], "#00ff00");
-            }
-            if (gameState.player.lane === laneIndex) {
-              if (gameState.player.state === "ghost_step") {
-                spawnFloatingText(gameState.player.x, gameState.player.y - 50, "EVADED", "#888888");
-                registerPerfectGhostStep();
-              } else takeDamage(gameState.isInstinct ? 15 : 30, true, en);
-            }
-          });
-        }
-        en.targetLanes = [];
-        en.telegraphed = false;
-        en.bossMashCount++;
-        const volleysPerBurst = 1 + (en.arcMods.patternChainLength || 1);
-        if (en.bossMashCount >= volleysPerBurst) {
-          en.currentMove = "recharge";
-          en.attackCooldown = Math.floor(180 / en.arcMods.teleportRateMult);
-          en.bossMashCount = 0;
-          en.lane = gameState.player.lane;
-          en.y = gameState.height * CONSTANTS.LANE_Y[en.lane];
-          en.x = gameState.player.x + 100;
-          en.punishShown = false;
-          playSound("ghost_step");
-          createImpact(en.x, en.y - 60, "#00ff00");
-          spawnFloatingText(en.x, en.y - 120, "RECHARGING \u2014 OPEN!", "#00ff00");
-          if (en.arcMods.summonSupportPressure && gameState.enemies.filter((e) => !e.isBoss).length < 1) {
-            spawnMonkAdd();
-          }
-        } else {
-          en.attackCooldown = en.arcMods.followupPattern ? 88 : 100;
-          let otherLanes = [0, 1, 2].filter((l) => l !== en.lane);
-          en.lane = otherLanes[Math.floor(random() * otherLanes.length)];
-          en.y = gameState.height * CONSTANTS.LANE_Y[en.lane];
-        }
-      }
-    }
-  }
-  function updateLiveLanes() {
-    if (!gameState.liveLanes || !gameState.liveLanes.length) return;
-    const L = CONSTANTS.LIVE_LANE, p = gameState.player;
-    for (const z of gameState.liveLanes) {
-      z.timer--;
-      if (z.phase === "warn") {
-        if (z.timer <= 0) {
-          z.phase = "live";
-          z.timer = L.liveFrames;
-          z.tick = 0;
-          playSound("shock");
-        }
-      } else {
-        if (p.lane === z.lane && !(p.invuln > 0) && p.state !== "ghost_step" && z.tick++ % L.tickEvery === 0) {
-          takeDamage(L.damage, false, null, { src: "live_lane" });
-          playSound("shock");
-          createImpact(p.x + 20, p.y - 70, "#fff36b");
-          spawnFloatingText(p.x + 10, p.y - 130, "SHOCKED!", "#fff36b");
-        }
-      }
-    }
-    gameState.liveLanes = gameState.liveLanes.filter((z) => z.phase === "warn" || z.timer > 0);
-  }
-  function electrifyLane(lane) {
-    if (!gameState.liveLanes) gameState.liveLanes = [];
-    if (gameState.liveLanes.some((z) => z.lane === lane)) return;
-    gameState.liveLanes.push({ lane, phase: "warn", timer: CONSTANTS.LIVE_LANE.warnFrames, tick: 0 });
-    spawnFloatingText(gameState.width * 0.5, gameState.height * CONSTANTS.LANE_Y[lane] - 50, "LIVE LANE", "#fff36b");
-  }
-  function handleLiveWire(en) {
-    if (en.recoverTimer > 0) {
-      en.recoverTimer--;
-      return;
-    }
-    en.attackCooldown--;
-    const p = gameState.player;
-    if (en.x > p.x + 100) en.x -= en.speed * 0.6 * (en.arcMods.walkDownMult || 1);
-    const K2 = getBinds();
-    const holding = gameState.keys[K2.right] || gameState.pad.rightHeld;
-    if (Math.abs(en.x - p.x) < 112 && !holding && p.state !== "punching") p.x = Math.max(CONSTANTS.FOOTWORK.minX, p.x - 0.7);
-    const inRange = Math.abs(en.x - p.x) < 140 && en.stun <= 0;
-    meleeTelegraph(en, inRange, () => {
-      playSound(en.currentMove === "shove" ? "bash_tell" : "jab_tell");
-      if (en.currentMove === "shove") createImpact(en.x, en.y - 60, "#ffe14d");
-    });
-    if (!(inRange && en.attackCooldown <= 0)) return;
-    en.justAttacked = 5;
-    if (en.currentMove === "string") {
-      resolveBossStrike(en, 10, false);
-      const len = en.arcMods.stringLength || 2;
-      en.stringIdx = (en.stringIdx || 0) + 1;
-      if (en.stringIdx < len) {
-        if (Math.abs(en.lane - p.lane) === 1) {
-          en.lane = p.lane;
-          en.y = gameState.height * CONSTANTS.LANE_Y[en.lane];
-        }
-        en.attackCooldown = telegraphLead(en) + 4;
-        en.telegraphed = false;
-        return;
-      }
-      en.stringIdx = 0;
-      en.stringsThrown = (en.stringsThrown || 0) + 1;
-      electrifyLane(en.lane);
-      const shoveNext = en.stringsThrown % (en.arcMods.shoveEvery || 3) === 0;
-      en.currentMove = shoveNext ? "shove" : "string";
-      en.maxCooldown = nextCycle(en, shoveNext ? 60 : 44);
-      en.attackCooldown = en.maxCooldown;
-      beginPunishWindow(en, "jab");
-    } else {
-      const connected = en.lane === p.lane && Math.abs(en.x - p.x) <= 100 && p.state !== "ghost_step";
-      resolveBossStrike(en, 14, true);
-      if (connected) {
-        p.x = Math.max(CONSTANTS.FOOTWORK.minX, p.x - 60);
-        spawnFloatingText(p.x, p.y - 120, "WALKED BACK", "#ffe14d");
-      }
-      en.currentMove = "string";
-      en.maxCooldown = nextCycle(en, 44);
-      en.attackCooldown = en.maxCooldown;
-      beginPunishWindow(en, "bash");
-    }
-  }
-  function updateEnemyEchoes() {
-    if (!gameState.enemyEchoes || !gameState.enemyEchoes.length) return;
-    const p = gameState.player;
-    for (const e of gameState.enemyEchoes) {
-      if (!e.fired) {
-        if (e.timer <= 12) gameState.laneFlash[e.lane] = Math.max(gameState.laneFlash[e.lane], e.timer <= 6 ? 2 : 1);
-        if (--e.timer <= 0) {
-          e.fired = true;
-          if (p.lane === e.lane && Math.abs(e.x - p.x) < 150) {
-            if (p.state === "ghost_step") {
-              spawnFloatingText(p.x, p.y - 50, "GHOST STEP", "#888888");
-              registerPerfectGhostStep();
-            } else takeDamage(gameState.isInstinct ? 6 : 12, false, null, { src: "negative_echo" });
-          }
-          createImpact(e.x - 40, e.y - 60, e.color);
-        }
-      } else e.fade--;
-    }
-    gameState.enemyEchoes = gameState.enemyEchoes.filter((e) => !e.fired || e.fade > 0);
-  }
-  function handleNegative(en) {
-    if (en.slipCooldown > 0) en.slipCooldown--;
-    if (en.phase === 1 && en.hp < en.maxHp * 0.5) {
-      en.phase = 2;
-      gameState.shake = 40;
-      doFlash(0.6);
-      triggerShockwave(en.x, en.y - 60, en.color);
-      spawnFloatingText(en.x + 20, en.y - 160, "THE MIRROR CRACKS", en.color);
-      playSound("hit");
-    }
-    if (en.recoverTimer > 0) {
-      en.recoverTimer--;
-      return;
-    }
-    en.attackCooldown--;
-    const p = gameState.player;
-    if (en.x > p.x + 100) en.x -= en.speed * 0.6;
-    const inRange = Math.abs(en.x - p.x) < 140 && en.stun <= 0;
-    meleeTelegraph(en, inRange, () => playSound(en.currentMove === "cross" ? "bash_tell" : "jab_tell"));
-    if (!(inRange && en.attackCooldown <= 0)) return;
-    en.justAttacked = 5;
-    const struck = en.currentMove;
-    resolveBossStrike(en, struck === "cross" ? 18 : 12, struck === "cross");
-    const roll = random();
-    en.currentMove = en.phase === 2 ? roll > 0.45 ? "cross" : "jab" : roll > 0.65 ? "cross" : "jab";
-    en.maxCooldown = nextCycle(en, en.currentMove === "cross" ? 48 : 34);
-    en.attackCooldown = en.maxCooldown;
-    beginPunishWindow(en, struck === "cross" ? "bash" : "jab");
-  }
-  function updateBosses() {
-    updateEnemyEchoes();
-    if (!gameState.finisher) updateLiveLanes();
-    for (const en of gameState.enemies) {
-      if (!en.isBoss) continue;
-      checkBossThresholds(en);
-      if (en.pendingFinisher && !gameState.finisher) {
-        const kind = en.pendingFinisher;
-        en.pendingFinisher = null;
-        startFinisher(en, kind);
-        return;
-      }
-      if (en.stun > 0 || gameState.bossIntroTimer > 0) continue;
-      if (en.controller === "neon_enforcer") handleNeonEnforcer(en);
-      else if (en.controller === "phantom_boxer") handlePhantomBoxer(en);
-      else if (en.controller === "static_monk") handleStaticMonk(en);
-      else if (en.controller === "live_wire") handleLiveWire(en);
-      else if (en.controller === "negative") handleNegative(en);
-    }
-  }
-
   // src/systems/hazards.js
   function spawnHazard(laneOverride) {
     const H = CONSTANTS.HAZARDS;
@@ -6540,6 +6922,9 @@
     return {
       totalRuns: m.totalRuns || 0,
       bestBossStreak: m.bestBossStreak || 0,
+      // v20: furthest round reached (Practice / Heat unlocks). Saves from before
+      // v20 don't have it — backfill from the local leaderboard.
+      bestStage: m.bestStage || (safeGet3(LB_KEY) || []).reduce((n, e) => Math.max(n, e && e.stage || 0), 0),
       unlocked: Array.isArray(m.unlocked) && m.unlocked.length ? m.unlocked : ["cyan"],
       selectedSkin: m.selectedSkin || "cyan",
       alias: typeof m.alias === "string" && m.alias.length ? m.alias : "STRIKER",
@@ -6607,10 +6992,17 @@
     const meta = loadMeta();
     meta.totalRuns += 1;
     meta.bestBossStreak = Math.max(meta.bestBossStreak, run2.bossKills || 0);
+    meta.bestStage = Math.max(meta.bestStage || 0, run2.stage || 0);
     const newly = unlocksForRun(run2, meta.unlocked);
     if (newly.length) meta.unlocked = [...meta.unlocked, ...newly];
     saveMeta(meta);
     return { rank, newUnlocks: newly, bestBossStreak: meta.bestBossStreak, totalRuns: meta.totalRuns, leaderboard: list };
+  }
+  function practiceUnlocked(m = loadMeta()) {
+    return (m.bestStage || 0) >= 5 || (m.bestBossStreak || 0) >= 1;
+  }
+  function heatUnlocked(m = loadMeta()) {
+    return (m.bestBossStreak || 0) >= 1;
   }
   function selectSkin(id) {
     const m = loadMeta();
@@ -7133,7 +7525,24 @@
         ctx.strokeStyle = "#1a1a1a";
         ctx.lineWidth = 4;
       }
+      const shapes = (state === 1 || state === 2) && getSettings().tellShapes;
+      if (shapes && state === 1) ctx.setLineDash([18, 14]);
       dl(0, gameState.height * yPct, gameState.width, gameState.height * yPct);
+      ctx.setLineDash([]);
+      if (shapes && state === 2) {
+        const y = gameState.height * yPct;
+        ctx.fillStyle = "#ffffff";
+        for (let x = 30; x < gameState.width; x += 56) {
+          for (const oy of [-14, 14]) {
+            ctx.beginPath();
+            ctx.moveTo(x, y + oy);
+            ctx.lineTo(x + 12, y + oy - 7);
+            ctx.lineTo(x + 12, y + oy + 7);
+            ctx.closePath();
+            ctx.fill();
+          }
+        }
+      }
     });
     if (gameState.hazards) gameState.hazards.forEach((hz) => {
       const y = gameState.height * CONSTANTS.LANE_Y[hz.lane];
@@ -7178,8 +7587,17 @@
         ctx.fillRect(p.x - p.vx, p.y - p.vy, 2, 2);
       } else if (p.type === "dash_line") {
         ctx.fillRect(p.x, p.y, 20, 2);
+      } else if (p.type === "ring") {
+        const k = 1 - p.life / 0.5;
+        ctx.globalAlpha = Math.max(0, p.life * 2);
+        ctx.strokeStyle = p.color;
+        ctx.lineWidth = Math.max(1, 6 * (1 - k));
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r0 + (p.r1 - p.r0) * k, 0, Math.PI * 2);
+        ctx.stroke();
       } else {
-        ctx.fillRect(p.x, p.y, 4, 4);
+        const s = p.size || 4;
+        ctx.fillRect(p.x, p.y, s, s);
       }
     });
     ctx.globalAlpha = 1;
@@ -7331,15 +7749,122 @@
     });
     ctx.globalAlpha = 1;
     drawKoFx(ctx);
+    drawSlipWindows(ctx);
     drawScorePops(ctx);
     ctx.restore();
     if (gameState.screen !== "start") drawBossHud(ctx);
+    drawThreatPips(ctx);
     drawFinisherUI(ctx);
     drawKnockdownUI(ctx);
     drawBossPoster(ctx);
     if (gameState.onboardingMock) drawOnboardingMock(ctx);
     SequenceManager.draw(ctx, gameState.width, gameState.height);
     drawVignette(ctx);
+  }
+
+  // src/systems/recap.js
+  var RECAP = { w: 250, h: 150, every: 2, slots: 84, slowTail: 30 };
+  var slots = [];
+  var head = 0;
+  var count = 0;
+  var tick2 = 0;
+  var play = null;
+  function ensureSlots() {
+    if (slots.length) return true;
+    try {
+      for (let i = 0; i < RECAP.slots; i++) {
+        const c = document.createElement("canvas");
+        if (!c || typeof c.getContext !== "function") return false;
+        c.width = RECAP.w;
+        c.height = RECAP.h;
+        slots.push(c);
+      }
+      return true;
+    } catch (e) {
+      slots = [];
+      return false;
+    }
+  }
+  function resetRecap() {
+    head = 0;
+    count = 0;
+    tick2 = 0;
+    play = null;
+  }
+  function captureRecap(src) {
+    if (!src || gameState.screen !== "playing" || gameState.practice) return;
+    if (++tick2 % RECAP.every) return;
+    if (!ensureSlots()) return;
+    try {
+      const c = slots[head].getContext("2d");
+      c.drawImage(src, 0, 0, RECAP.w, RECAP.h);
+      head = (head + 1) % RECAP.slots;
+      count = Math.min(RECAP.slots, count + 1);
+    } catch (e) {
+    }
+  }
+  var TIPS = {
+    grunt: "Slip on the WHITE flash, not the red \u2014 an early slip is only Good.",
+    assassin: "Assassins bite through Guard. Read the quick white flash and slip.",
+    bruiser: "Bruisers wind up long and hit hard \u2014 wait out the red, then Cross to stagger.",
+    zoner: "Zoners shoot from range. Watch the edge chevrons, slip their lane or press in.",
+    shield: "Gold Armor eats Jabs \u2014 open with a Cross.",
+    hazard: "Amber pulsing lane = rail hazard. Step out before the white strike.",
+    live_lane: "A crackling lane is live \u2014 never stand in it when it fires.",
+    negative_echo: "The Negative replays your own moves \u2014 change your pattern.",
+    boss: "Bosses open up (cyan OPEN) after their combos. Punish then, slip otherwise \u2014 mashing gets countered.",
+    unknown: "Red = winding up, white = slip now."
+  };
+  var BOSSES = ["neon_enforcer", "phantom_boxer", "static_monk", "live_wire", "negative"];
+  function tipFor(src) {
+    return TIPS[src] || (BOSSES.includes(src) ? TIPS.boss : TIPS.unknown);
+  }
+  function topDamage(run2) {
+    const tot = {};
+    for (const s of run2 && run2.stages || []) for (const [k, v] of Object.entries(s.dmg || {})) tot[k] = (tot[k] || 0) + v;
+    const top = Object.entries(tot).sort((a, b) => b[1] - a[1])[0];
+    return top ? { src: top[0], dmg: top[1] } : null;
+  }
+  function startRecapPlayback() {
+    if (count < 10) return false;
+    const order = [];
+    for (let i = 0; i < count; i++) order.push(slots[(head - count + i + RECAP.slots) % RECAP.slots]);
+    play = { order, i: 0, sub: 0, hold: 0 };
+    return true;
+  }
+  function recapPlaying() {
+    return !!play;
+  }
+  function stopRecap() {
+    play = null;
+  }
+  function updateRecap(target) {
+    if (!play || !target) return false;
+    const n = play.order.length, slowFrom = n - Math.floor(RECAP.slowTail / 1);
+    const slow = play.i >= slowFrom;
+    try {
+      const c = target.getContext("2d");
+      c.imageSmoothingEnabled = true;
+      c.drawImage(play.order[Math.min(play.i, n - 1)], 0, 0, target.width, target.height);
+      if (slow) {
+        c.fillStyle = "rgba(255,0,85,0.10)";
+        c.fillRect(0, 0, target.width, target.height);
+      }
+    } catch (e) {
+    }
+    if (play.i >= n - 1) {
+      if (++play.hold > 75) {
+        play.i = 0;
+        play.hold = 0;
+      }
+      return true;
+    }
+    play.sub++;
+    if (play.sub >= (slow ? RECAP.every * 2 : RECAP.every)) {
+      play.sub = 0;
+      play.i++;
+    }
+    return true;
   }
 
   // src/main.js
@@ -7399,12 +7924,15 @@
       draftOptions.forEach((option, index) => {
         const rarity = upgradeRarity(option);
         const color = upgradeColor(option);
+        const fh = fusionHint(option, gameState, UPGRADE_POOL);
+        const fusionLine = fh ? `<div class="card-fusion">${fh.missing === 0 ? `UNLOCKS ${fh.evolved ? "PERFECTED FUSION" : "FUSION"}` : `${fh.missing} MORE \u2192`} <b>${fh.name.toUpperCase()}</b></div>` : "";
         const btnHTML = `
                 <div class="draft-card card-${rarity}" style="--card-color:${color}; animation-delay:${index * 90 + (rarity === "fusion" || rarity === "evolved" || rarity === "apex" ? 220 : 0)}ms" onmouseenter="window.engineFocusDraft(${index})" onclick="window.engineApplyUpgradeState('${escapeAttr(option.id)}')">
                     <div class="card-inner">
                         <div class="card-badge">${evolutionBadge(option, rarity)}</div>
                         <div class="card-name">${option.name}</div>
                         <div class="card-desc">${option.desc}</div>
+                        ${fusionLine}
                         <div class="card-key">${inputDevice() === "keyboard" ? `<span class="glyph">${index + 1}</span>` : ""}</div>
                     </div>
                 </div>
@@ -7422,6 +7950,9 @@
   window.engineTriggerUpgradeDraft = triggerUpgradeDraft;
   window.enginePlayUpgradeVignette = playUpgradeVignette;
   function resetGame() {
+    gameState.practice = null;
+    gameState.heat = [];
+    gameState.hpCeil = void 0;
     gameState.health = 100;
     gameState.combo = 0;
     gameState.instinctMeter = 0;
@@ -7567,16 +8098,102 @@
     seedRng(runSeed);
     resetGame();
     gameState.screen = "playing";
-    tmStartRun({ seed: runSeed, daily: !!daily });
-    ["start-screen", "gameover-screen", "pause-screen", "wager-screen", "upgrade-screen"].forEach(hideOverlay);
+    if (opts.practice) {
+      beginPractice(opts.practice, opts.windows);
+      gameState.tutorialEnabled = false;
+    } else {
+      gameState.heat = !daily && heatUnlocked() ? loadHeat() : [];
+      tmStartRun({ seed: runSeed, daily: !!daily });
+    }
+    resetRecap();
+    arcParStart();
+    ["start-screen", "gameover-screen", "pause-screen", "wager-screen", "upgrade-screen", "practice-screen", "heat-screen"].forEach(hideOverlay);
     duckMusic(false);
     startMusic();
-    SequenceManager.playDynamic([
+    SequenceManager.playDynamic(gameState.practice ? [
+      { type: "walkin", duration: 40 },
+      { type: "text", title: "PRACTICE", subtitle: `${gameState.practice.target.label} \xB7 QUIT FROM THE PAUSE MENU`, duration: 90 },
+      { type: "call", fn: refreshStageHud },
+      { type: "resume" }
+    ] : [
       { type: "walkin", duration: 50 },
       { type: "billing", duration: 130, card: roundCard(1, openingSubtitle()) },
       { type: "resume" }
     ]);
   }
+  var practiceWindows = true;
+  function renderStartExtras() {
+    const m = loadMeta();
+    const pb = document.getElementById("practice-btn"), hb = document.getElementById("heat-btn");
+    if (pb) {
+      const ok = practiceUnlocked(m);
+      pb.classList.toggle("locked", !ok);
+      pb.querySelector(".sub").innerText = ok ? "Drill any enemy or boss" : "Reach the Arc 1 title fight";
+    }
+    if (hb) {
+      const ok = heatUnlocked(m);
+      hb.classList.toggle("locked", !ok);
+      const h = loadHeat();
+      hb.querySelector(".sub").innerText = !ok ? "Beat the Arc 1 boss" : h.length ? `HEAT ${h.length} \xB7 SCORE \xD7${heatMultFor(h).toFixed(2)}` : "Off \u2014 add modifiers";
+    }
+  }
+  function openSubmenu(screen) {
+    initAudio();
+    const unlocked = screen === "practice" ? practiceUnlocked() : heatUnlocked();
+    if (!unlocked) {
+      showToast(screen === "practice" ? "REACH THE ARC 1 TITLE FIGHT TO UNLOCK" : "BEAT THE ARC 1 BOSS TO UNLOCK", "#9ca3af");
+      playSound("bounce");
+      return;
+    }
+    gameState.screen = screen;
+    hideOverlay("start-screen");
+    const el = document.getElementById(`${screen}-screen`);
+    if (el) el.style.display = "flex";
+    if (screen === "practice") renderPracticeMenu();
+    else renderHeatMenu();
+  }
+  function closeSubmenu() {
+    ["practice-screen", "heat-screen"].forEach(hideOverlay);
+    gameState.screen = "start";
+    const s = document.getElementById("start-screen");
+    if (s) s.style.display = "flex";
+    renderStartExtras();
+  }
+  function renderPracticeMenu() {
+    const el = document.getElementById("practice-list");
+    if (!el) return;
+    const best = loadMeta().bestStage || 0;
+    el.innerHTML = practiceTargets().map((t) => {
+      const ok = practiceTargetUnlocked(t, best);
+      return `<div class="orb-btn sm${ok ? "" : " locked"}${t.boss ? " boss" : ""}" onclick="window.enginePractice('${t.id}')"><div class="font-bold">${ok ? t.label : "???"}</div><div class="sub">${ok ? t.boss ? `ARC ${t.boss} BOSS` : t.stringLen ? "3-HIT STRINGS" : "ENEMY" : `REACH ROUND ${t.need}`}</div></div>`;
+    }).join("") + `<div class="orb-btn sm wide" onclick="window.enginePracticeWindows()"><div class="font-bold">SLIP WINDOWS: ${practiceWindows ? "ON" : "OFF"}</div><div class="sub">Show each attack's GOOD / PERFECT window</div></div><div class="orb-btn sm wide back" onclick="window.engineCloseSubmenu()"><div class="font-bold">BACK [ESC] / [B]</div></div>`;
+  }
+  window.enginePractice = (id) => {
+    const t = practiceTargets().find((x) => x.id === id);
+    if (!t || !practiceTargetUnlocked(t, loadMeta().bestStage || 0)) {
+      playSound("bounce");
+      return;
+    }
+    startGame({ practice: t, windows: practiceWindows, tutorial: false });
+  };
+  window.enginePracticeWindows = () => {
+    practiceWindows = !practiceWindows;
+    renderPracticeMenu();
+  };
+  function renderHeatMenu() {
+    const el = document.getElementById("heat-list");
+    if (!el) return;
+    const on = loadHeat();
+    el.innerHTML = CONSTANTS.HEAT.mods.map((h) => `<div class="orb-btn sm wide heat-row${on.includes(h.id) ? " on" : ""}" onclick="window.engineToggleHeat('${h.id}')"><div class="font-bold">${on.includes(h.id) ? "\u25A0" : "\u25A1"} ${h.name} <span class="heat-bonus">+${Math.round(h.bonus * 100)}%</span></div><div class="sub">${h.desc}</div></div>`).join("") + `<div class="heat-total">HEAT ${heatLevel(on)} \xB7 SCORE \xD7${heatMultFor(on).toFixed(2)} <span>normal runs only \xB7 not the Daily</span></div><div class="orb-btn sm wide back" onclick="window.engineCloseSubmenu()"><div class="font-bold">BACK [ESC] / [B]</div></div>`;
+  }
+  window.engineToggleHeat = (id) => {
+    toggleHeat(id);
+    playSound("slip");
+    renderHeatMenu();
+  };
+  window.engineOpenPractice = () => openSubmenu("practice");
+  window.engineOpenHeat = () => openSubmenu("heat");
+  window.engineCloseSubmenu = closeSubmenu;
   function startDailyChallenge() {
     startGame(true);
   }
@@ -7593,6 +8210,12 @@
       if (howTo) howTo.style.display = "flex";
     }
   }
+  function showRecap(on) {
+    const ov = document.getElementById("recap-overlay");
+    if (ov && ov.style) ov.style.display = on ? "flex" : "none";
+    if (!on) stopRecap();
+  }
+  window.engineSkipRecap = () => showRecap(false);
   function returnToMenu() {
     gameState.dailyMode = false;
     gameState.dailyDateKey = null;
@@ -7600,7 +8223,8 @@
     gameState.screen = "start";
     const startScreen = document.getElementById("start-screen");
     if (startScreen) startScreen.style.display = "flex";
-    ["pause-screen", "gameover-screen", "wager-screen", "upgrade-screen"].forEach(hideOverlay);
+    ["pause-screen", "gameover-screen", "wager-screen", "upgrade-screen", "practice-screen", "heat-screen"].forEach(hideOverlay);
+    renderStartExtras();
     SequenceManager.active = false;
     SequenceManager.waiting = false;
     stopMusic();
@@ -7618,7 +8242,8 @@
     { key: "screenShake", label: "Screen Shake", type: "range" },
     { key: "flashIntensity", label: "Flash Intensity", type: "range" },
     { key: "hitStop", label: "Hit-Stop", type: "toggle" },
-    { key: "reducedMotion", label: "Reduced Motion", type: "toggle" }
+    { key: "reducedMotion", label: "Reduced Motion", type: "toggle" },
+    { key: "tellShapes", label: "Colour-Blind Tells (shapes)", type: "toggle" }
   ];
   var pauseTab = "resume";
   var settingsFocus = 0;
@@ -7927,8 +8552,15 @@
         if (jp(14) || stickLeft) moveDraftFocus(-1);
         else if (jp(15) || stickRight) moveDraftFocus(1);
         else if (jp(0)) confirmDraftFocus();
+      } else if (gameState.screen === "practice" || gameState.screen === "heat") {
+        if (navUp) moveMenu(-1);
+        else if (navDown) moveMenu(1);
+        else if (jp(0)) activateMenu();
+        else if (jp(1)) closeSubmenu();
       } else if (gameState.screen === "records" || gameState.screen === "howto") {
         if (jp(0) || jp(1)) activateMenu(true);
+      } else if (gameState.screen === "gameover" && recapPlaying()) {
+        if (jp(0) || jp(1) || jp(9)) showRecap(false);
       } else if (gameState.screen === "gameover") {
         if (navUp) moveMenu(-1);
         else if (navDown) moveMenu(1);
@@ -7961,6 +8593,17 @@
     if (gameState.inputDevice !== "keyboard") {
       setInputDevice("keyboard");
       onDeviceChanged();
+    }
+    if (gameState.screen === "gameover" && recapPlaying()) {
+      if (!e.repeat) showRecap(false);
+      return;
+    }
+    if (gameState.screen === "practice" || gameState.screen === "heat") {
+      if (e.code === "ArrowUp") moveMenu(-1);
+      else if (e.code === "ArrowDown") moveMenu(1);
+      else if (e.code === "Enter" || e.code === "Space") activateMenu();
+      else if (e.code === "Escape" || e.code === "KeyB") closeSubmenu();
+      return;
     }
     if (gameState.screen === "records") {
       if (e.code === "Escape" || e.code === "KeyH" || e.code === "Enter") toggleRecords();
@@ -8066,6 +8709,7 @@
   function update() {
     if (gameState.screen !== "playing") return;
     tmTick();
+    arcParTick();
     if (gameState.finisher) {
       if (gameState.shake > 0) gameState.shake *= 0.9;
       const f = gameState.finisher;
@@ -8159,6 +8803,15 @@
         return;
       }
     }
+    if (gameState.practice) {
+      updatePractice();
+      if (posterWaiting() && gameState.practice.posterSeen) confirmPoster();
+      if (gameState.bossActive && gameState.bossIntroTimer <= 0) gameState.practice.posterSeen = true;
+    }
+    if (gameState.heat && gameState.heat.includes("no_mercy")) {
+      if (gameState.hpCeil === void 0 || gameState.health < gameState.hpCeil) gameState.hpCeil = gameState.health;
+      else if (gameState.health > gameState.hpCeil) gameState.health = gameState.hpCeil;
+    }
     if (gameState.health <= 0) {
       if (canBeKnockedDown()) {
         startKnockdown();
@@ -8219,6 +8872,17 @@
     const rec17 = tmEndRun({ stage: gameState.currentStage, score, grade });
     const rt = document.getElementById("run-time-ui");
     if (rt && rec17) rt.innerText = `RUN TIME ${fmtTime(rec17.frames)} \xB7 ROUND ${gameState.currentStage}${endedBy ? " \xB7 ENDED BY " + prettySource(endedBy) : ""}`;
+    const top = topDamage(rec17);
+    const tip = tipFor(endedBy || top && top.src || "unknown");
+    const setT = (id, v) => {
+      const el = document.getElementById(id);
+      if (el) el.innerHTML = v;
+    };
+    setT("recap-ended", endedBy ? `ENDED BY <b>${prettySource(endedBy)}</b>` : "RUN OVER");
+    setT("recap-most", top ? `HURT MOST BY <b>${prettySource(top.src)}</b> \xB7 ${top.dmg} DMG THIS RUN` : "");
+    setT("recap-tip", `TIP \xB7 ${tip}`);
+    setT("run-tip", `TIP \xB7 ${tip}`);
+    showRecap(startRecapPlayback());
     const rec = commitRunRecord({ score, grade, stage: gameState.currentStage, daily: gameState.dailyMode, bossKills: gameState.statBossKills });
     const submittable = { name: getAlias(), score, grade, stage: gameState.currentStage, daily: gameState.dailyMode, dateKey: gameState.dailyDateKey };
     if (getOnlineOptIn() && isSubmittableRun(submittable)) submitScore(submittable);
@@ -8308,18 +8972,26 @@
   function prettySource(s) {
     return SOURCE_NAMES[s] || String(s).toUpperCase();
   }
+  function medalsHTML() {
+    const best = loadMedals();
+    return `<div class="rd-sub">ARC MEDALS \xB7 beat par time AND score for GOLD</div><div class="rd-chips">` + [1, 2, 3, 4, 5].map((a) => {
+      const m = best[a] && MEDALS[best[a]];
+      const p = ARC_PAR[a];
+      return `<span class="rd-chip" style="${m ? `border-color:${m.color};color:${m.color}` : "opacity:.5"}">ARC ${a} ${m ? m.label : "\u2014"} <small>(${fmtSecs(p.time)} \xB7 ${fmtK(p.score)})</small></span>`;
+    }).join("") + `</div>`;
+  }
   function renderRunData() {
     const el = document.getElementById("run-data");
     if (!el) return;
     const sum = summarizeTelemetry(loadTelemetry());
     if (!sum.runs) {
-      el.innerHTML = '<div class="opacity-60 text-xs py-2">No recorded runs yet.</div>';
+      el.innerHTML = medalsHTML() + '<div class="opacity-60 text-xs py-2">No recorded runs yet.</div>';
       return;
     }
     const stages = Object.keys(sum.reached).map(Number).sort((a, b) => a - b);
     const rows = stages.map((s) => `<div class="rd-row"><span>R${s}</span><span>${sum.reached[s]} reached</span><span class="${sum.ends[s] ? "rd-end" : ""}">${sum.ends[s] || 0} ended</span><span>${fmtTime(sum.avgTime[s])} avg</span></div>`).join("");
     const hurt = sum.topHurt.slice(0, 5).map(([k, v]) => `<span class="rd-chip">${prettySource(k)} ${v}</span>`).join("");
-    el.innerHTML = `<div class="rd-sub">LAST ${sum.runs} RUNS \xB7 WHAT HITS YOU (total damage)</div><div class="rd-chips">${hurt}</div>
+    el.innerHTML = medalsHTML() + `<div class="rd-sub">LAST ${sum.runs} RUNS \xB7 WHAT HITS YOU (total damage)</div><div class="rd-chips">${hurt}</div>
         <div class="rd-sub">WHERE RUNS END</div><div class="rd-table">${rows}</div>`;
   }
   window.engineExportRunData = function() {
@@ -8488,7 +9160,7 @@
     if (gameState.screen === "wager") renderWagerPrompts();
     renderInstructions();
   }
-  var MENU_ROOTS = { start: "start-screen", gameover: "gameover-screen", records: "records-screen", howto: "howto-screen" };
+  var MENU_ROOTS = { start: "start-screen", gameover: "gameover-screen", records: "records-screen", howto: "howto-screen", practice: "practice-screen", heat: "heat-screen" };
   var menuFocus = 0;
   var menuFor = null;
   function menuButtons() {
@@ -8537,6 +9209,8 @@
     if (gameState.screen === "vignette") updateVignette();
     update();
     draw();
+    captureRecap(canvas2);
+    if (gameState.screen === "gameover" && recapPlaying()) updateRecap(document.getElementById("recap-canvas"));
     gameState.lastKeys = { ...gameState.keys };
     requestAnimationFrame(loop);
   }
@@ -8554,6 +9228,7 @@
     fitViewport();
     renderBest();
     applyStrikerColor();
+    renderStartExtras();
     loop();
   }
   init();

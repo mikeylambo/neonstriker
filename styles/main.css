@@ -661,3 +661,42 @@ body.cine-zone.cine-zone-soft #gameCanvas { filter: grayscale(.7) contrast(1.2);
 .rd-table { display: flex; flex-direction: column; gap: 2px; }
 .rd-row { display: grid; grid-template-columns: 50px 1fr 1fr 1fr; font-size: .62rem; color: #9ca3af; letter-spacing: 1px; }
 .rd-end { color: #f87171; font-weight: 900; }
+
+/* v20 arc par readout (under the stage name) */
+.hud-par { margin-top: 3px; font-size: .55rem; font-weight: 700; letter-spacing: 1px; color: #9ca3af; font-variant-numeric: tabular-nums; }
+/* v20 fusion preview on draft cards */
+.card-fusion { margin-top: 8px; font-size: .6rem; font-weight: 800; letter-spacing: 1px; color: #fbbf24; text-shadow: 0 0 8px rgba(251,191,36,.45); }
+.card-fusion b { color: #fff; }
+/* v20 death recap */
+.recap-overlay { position: absolute; inset: 0; z-index: 30; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; background: #05050b; cursor: pointer; }
+.recap-title { font-weight: 900; letter-spacing: 6px; color: #ff2bd6; font-size: 1.1rem; }
+#recap-canvas { width: min(560px, 90vw); aspect-ratio: 5 / 3; border: 2px solid rgba(255,43,214,.6); box-shadow: 0 0 30px rgba(255,43,214,.25); background: #000; }
+.recap-line { font-size: .75rem; letter-spacing: 2px; color: #e5e7eb; }
+.recap-line b { color: #ff5a7a; }
+.recap-dim { color: #9ca3af; }
+.recap-tip { max-width: 560px; text-align: center; font-size: .75rem; letter-spacing: 1px; color: #22d3ee; margin-top: 4px; }
+.recap-skip { margin-top: 8px; font-size: .6rem; letter-spacing: 3px; color: #6b7280; animation: pulse 1.6s infinite; }
+.run-tip { font-size: 10px; letter-spacing: 1px; color: #22d3ee; margin-bottom: 4px; max-width: 520px; text-align: center; }
+/* v20 start-screen extras, Practice + Heat menus */
+.orb-btn.sm { padding: 10px 16px; min-width: 0; }
+.orb-btn .sub { font-size: .6rem; opacity: .7; margin-top: 2px; text-transform: uppercase; letter-spacing: 1px; }
+.orb-btn.locked { opacity: .4; filter: grayscale(.8); }
+.menu-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: min(420px, 90vw); }
+.menu-pair .orb-btn { margin: 0; }
+.submenu-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; width: min(720px, 92vw); }
+.submenu-grid .orb-btn, .submenu-list .orb-btn { margin: 0; }
+.submenu-grid .orb-btn.boss { border-color: #ff2bd6; }
+.submenu-grid .orb-btn.wide { grid-column: span 3; }
+.submenu-list { display: flex; flex-direction: column; gap: 6px; width: min(560px, 92vw); }
+.heat-row { text-align: left; }
+.heat-row.on { border-color: #fb923c; background: rgba(251,146,60,.12); }
+.heat-bonus { color: #fb923c; font-size: .7rem; margin-left: 6px; }
+.heat-total { text-align: center; font-weight: 900; letter-spacing: 2px; color: #fb923c; margin: 6px 0; }
+.heat-total span { display: block; font-size: .55rem; color: #6b7280; font-weight: 700; }
+.start-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; width: min(640px, 92vw); margin-top: 4px; }
+.start-grid .orb-btn { margin: 0; }
+.start-grid .span2 { grid-column: span 2; }
+.orb-btn.start-main { margin-bottom: 10px; }
+.start-grid .orb-btn, .submenu-grid .orb-btn, .submenu-list .orb-btn, .menu-pair .orb-btn { width: auto; }
+.start-grid .orb-btn.menu-focus::before, .submenu-grid .orb-btn.menu-focus::before, .submenu-list .orb-btn.menu-focus::before { left: 6px; }
+.submenu-list .orb-btn.sm { padding: 7px 14px; }

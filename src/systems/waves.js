@@ -2,6 +2,7 @@ import { gameState as st } from '../state.js';
 import { CONSTANTS } from '../constants.js';
 import { spawnTutorialEnemy } from './tutorial.js';
 import { random } from './rng.js';
+import { heatOn } from './heat.js';
 
 // ==========================================
 // FORMATIONS (systemic "squads")
@@ -48,7 +49,7 @@ export function applyFormations(defs, arcIndex) {
 // BASE WAVE CHOREOGRAPHY (BOXING & SPACING) — the hand-authored source of truth.
 // Arcs 2-5 are DERIVED from this table (see deriveArc below). Arc 1 plays a
 // compressed cut of it (ARC1_LEVELS further down).
-// FIXED: Vastly increased delay timings (d) in Levels 1-3 to fan out the enemies. 
+// FIXED: Vastly increased delay timings (d) in Levels 1-3 to fan out the enemies.
 // Provides enough space to successfully combat all 3 individually without forced evasion early on.
 // ==========================================
 const ARC_BASE_LEVELS = {
@@ -227,19 +228,20 @@ const ARC1_LEVELS = {
 export const ARC_WAVE_TABLES = { 1: ARC1_LEVELS, 2: ARC2_LEVELS, 3: ARC3_LEVELS, 4: ARC4_LEVELS, 5: ARC5_LEVELS };
 
 export function spawnEnemy() {
-    if (st.stageClearing || st.bossActive || st.bossIntroTimer > 0 || st.screen !== 'playing' || st.purifyTimer > 0) return; 
+    if (st.practice) return; // v20: Practice runs its own spawner (systems/practice.js)
+    if (st.stageClearing || st.bossActive || st.bossIntroTimer > 0 || st.screen !== 'playing' || st.purifyTimer > 0) return;
 
     if (CONSTANTS.isBossStage(st.currentStage)) {
         if (!st.bossActive && !st.stageClearing) {
             st.stageClearing = true;
-            st.purifyTimer = 90; 
+            st.purifyTimer = 90;
         }
         return;
     }
 
     if (st.currentStage === 1 && st.tutorialEnabled) {
         if (st.spawnTotal < 5) {
-            if (st.enemies.length > 0 || st.tutorialDelay > 0) return; 
+            if (st.enemies.length > 0 || st.tutorialDelay > 0) return;
             if (st.spawnTotal === 0) spawnTutorialEnemy('slip');
             else if (st.spawnTotal === 1) spawnTutorialEnemy('counter');
             else if (st.spawnTotal === 2) spawnTutorialEnemy('shield');
@@ -251,7 +253,7 @@ export function spawnEnemy() {
             // onboarding in actual play despite the manual describing it as an
             // "emergency evade."
             else if (st.spawnTotal === 4) spawnTutorialEnemy('ghost_step');
-            return; 
+            return;
         }
         if (st.enemies.some(e => e.tutorialType)) return;
     }
@@ -328,42 +330,55 @@ export function spawnEnemy() {
                     if (gruntSubCounter % affixSubEvery === 0) type = affixSubType;
                     gruntSubCounter++;
                 }
-                let lane = enemyDef.l;
-                let delayFrames = (enemyDef.d || 0) * gm.packetDelayMult * affixDelayMult;
-
-                let color = '#ff0055'; let hp = 45; let speed = 3.0; let cooldown = 60; let weight = 1;
-
-                if (type === 'bruiser') { color = '#cc0000'; hp = 150; speed = 1.8; cooldown = 80; weight = 2; }
-                else if (type === 'shield') { color = '#ffaa00'; hp = 80; speed = 2.4; weight = 1.5; }
-                else if (type === 'zoner') { color = '#00ff00'; hp = 40; speed = 1.5; cooldown = 100; }
-                else if (type === 'assassin') { color = '#aa00ff'; hp = 30; speed = 4.5; cooldown = 35; }
-
-                hp = Math.floor(hp * (1 + (CONSTANTS.difficultyStage(st.currentStage) - 1) * 0.10) * gm.packetDensityMult);
-                if (type === 'shield' || type === 'bruiser') cooldown = Math.max(20, Math.round(cooldown * gm.enemyRecoveryMult));
-                speed *= st.stageSpeedMult;
-                // LANE TEMPO: a hot lane closes the approach faster (telegraph untouched).
-                if (st.laneTempo && st.laneTempo[lane] !== undefined) speed *= st.laneTempo[lane];
-
-                let spawnX = st.width + 50 + (delayFrames * speed);
-
-                // v17 PUNCH STRINGS (seeded -> Daily-identical): some Grunts/Assassins
-                // throw 2-3 hit strings. Never in Arc 1 (chance 0 there).
-                const PS = CONSTANTS.PUNCH_STRINGS, arcI = Math.min(rawArcIndex, 5);
-                let stringLen = 1;
-                if (PS.types.includes(type) && (PS.chanceByArc[arcI] || 0) > 0 && random() < PS.chanceByArc[arcI]) stringLen = PS.lenByArc[arcI] || 2;
-
-                st.enemies.push({
-                    stringLen, stringIdx: 0,
-                    x: spawnX, lane, y: st.height * CONSTANTS.LANE_Y[lane],
-                    w: type === 'bruiser' ? 70 : 50, h: type === 'bruiser' ? 130 : 110,
-                    hp, maxHp: hp, speed, baseSpeed: speed, color, type, weight, stun: 0, stunResist: 0,
-                    attackCooldown: cooldown, maxCooldown: cooldown, isBoss: false,
-                    justAttacked: 0, trails: [], trailTimer: 0, vx: 0,
-                    pressure: 0, pressureDecay: 0, menace: 0, menaceLevel: 0
-                });
+                st.enemies.push(makeEnemy(type, enemyDef.l, (enemyDef.d || 0) * gm.packetDelayMult * affixDelayMult));
         });
+        // v20 HEAT (CROWDED): an extra Grunt joins most packets.
+        if (heatOn('crowded') && enemyDefs.length && random() < 0.6) {
+            st.spawnTotal++;
+            st.enemies.push(makeEnemy('grunt', Math.floor(random() * 3), 45 + (enemyDefs.length * 20)));
+        }
 
         st.waveTimer = nextBreather;
         st.waveThreshold = nextThreshold;
     }
+}
+
+// v20: one place that builds a wave enemy (waves, Heat's extra Grunts, Practice).
+// opts.stringLen forces a punch string (Practice); otherwise it's rolled as before.
+export function makeEnemy(type, lane, delayFrames = 0, opts = {}) {
+    const rawArcIndex = CONSTANTS.getArcIndex(st.currentStage);
+    const gm = (CONSTANTS.ARC_LAWS[Math.min(rawArcIndex, 5)] || CONSTANTS.ARC_LAWS[5]).globalMods;
+    let color = '#ff0055'; let hp = 45; let speed = 3.0; let cooldown = 60; let weight = 1;
+
+    if (type === 'bruiser') { color = '#cc0000'; hp = 150; speed = 1.8; cooldown = 80; weight = 2; }
+    else if (type === 'shield') { color = '#ffaa00'; hp = 80; speed = 2.4; weight = 1.5; }
+    else if (type === 'zoner') { color = '#00ff00'; hp = 40; speed = 1.5; cooldown = 100; }
+    else if (type === 'assassin') { color = '#aa00ff'; hp = 30; speed = 4.5; cooldown = 35; }
+
+    hp = Math.floor(hp * CONSTANTS.enemyHpMult(st.currentStage) * gm.packetDensityMult);
+    if (type === 'shield' || type === 'bruiser') cooldown = Math.max(20, Math.round(cooldown * gm.enemyRecoveryMult));
+    speed *= st.stageSpeedMult;
+    // LANE TEMPO: a hot lane closes the approach faster (telegraph untouched).
+    if (st.laneTempo && st.laneTempo[lane] !== undefined) speed *= st.laneTempo[lane];
+
+    let spawnX = st.width + 50 + (delayFrames * speed);
+
+    // v17 PUNCH STRINGS (seeded -> Daily-identical): some Grunts/Assassins
+    // throw 2-3 hit strings. Never in Arc 1 (chance 0 there).
+    const PS = CONSTANTS.PUNCH_STRINGS, arcI = Math.min(rawArcIndex, 5);
+    let stringLen = 1;
+    if (opts.stringLen) stringLen = opts.stringLen;
+    else if (PS.types.includes(type) && (PS.chanceByArc[arcI] || 0) > 0 && random() < PS.chanceByArc[arcI]) stringLen = PS.lenByArc[arcI] || 2;
+    // v20 HEAT (RELENTLESS): everyone recovers faster between attacks.
+    if (heatOn('relentless')) cooldown = Math.max(20, Math.round(cooldown * CONSTANTS.HEAT.relentlessCooldownMult));
+
+    return {
+        stringLen, stringIdx: 0,
+        x: spawnX, lane, y: st.height * CONSTANTS.LANE_Y[lane],
+        w: type === 'bruiser' ? 70 : 50, h: type === 'bruiser' ? 130 : 110,
+        hp, maxHp: hp, speed, baseSpeed: speed, color, type, weight, stun: 0, stunResist: 0,
+        attackCooldown: cooldown, maxCooldown: cooldown, isBoss: false,
+        justAttacked: 0, trails: [], trailTimer: 0, vx: 0,
+        pressure: 0, pressureDecay: 0, menace: 0, menaceLevel: 0
+    };
 }

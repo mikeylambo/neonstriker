@@ -80,6 +80,11 @@ export function playSound(type) {
         else if (type === 'laser') { sq = 'sawtooth'; f1 = 800; f2 = 100; t = 0.3; }
         else if (type === 'shatter') { f1 = 8000; f2 = 100; t = 0.25; v1 = 0.3; }
         else if (type === 'hit') { f1 = 200; f2 = 50; v1 = 0.3; }
+        // v20 punch weight: a jab ticks, a hook thumps, a cross booms, a counter cracks.
+        else if (type === 'hit_jab') { f1 = 320; f2 = 120; t = 0.07; v1 = 0.18; }
+        else if (type === 'hit_hook') { tone('square', 180, 45, 0.16, 0.28, 0.01); tone('triangle', 900, 300, 0.05, 0.06, 0.001); return; }
+        else if (type === 'hit_cross') { tone('square', 140, 32, 0.24, 0.34, 0.01); tone('sine', 70, 30, 0.3, 0.3, 0.01); return; }
+        else if (type === 'counter_hit') { tone('sawtooth', 3200, 400, 0.12, 0.16, 0.001); tone('square', 110, 28, 0.4, 0.38, 0.01); tone('sine', 55, 25, 0.5, 0.35, 0.01); return; }
         else if (type === 'beat_tick') { sq = 'sine'; f1 = 1760; f2 = 1500; t = 0.04; v1 = 0.07; }
         else if (type === 'finisher_hit') { tone('square', 90, 30, 0.28, 0.35, 0.01); tone('sawtooth', 2400, 200, 0.18, 0.12, 0.001); return; }
         else if (type === 'finisher_miss') { sq = 'triangle'; f1 = 300; f2 = 90; t = 0.3; v1 = 0.12; }

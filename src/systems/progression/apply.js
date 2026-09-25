@@ -8,7 +8,8 @@ import { rollWagerOffer, clearWager } from '../wagers.js';
 import { addScore } from '../score.js';
 import { reducedMotion, profileFlag, setProfileFlag } from '../settings.js';
 import { playSound } from '../../vfx_audio/audio.js';
-import { tmEvolution, tmStage } from '../telemetry.js';
+import { tmEvolution, tmStage, tmArc } from '../telemetry.js';
+import { judgeArc, arcParStart, MEDALS, fmtSecs, fmtK } from '../arc_par.js';
 
 function applyEffect(st, effect) {
     switch (effect.op) {
@@ -130,6 +131,7 @@ export function stageHudText(stage) {
 }
 
 export function refreshStageHud() {
+    if (st.practice) { st.lastHUD.practice = null; return; } // v20: Practice owns the stage line (ui.js)
     const stageUI = document.getElementById('stage-ui');
     const affixUI = document.getElementById('affix-ui');
     const hud = stageHudText(st.currentStage);
@@ -260,8 +262,21 @@ export function advanceStage() {
     const isNewArc = CONSTANTS.locateStage(st.currentStage).ordinal === 1 && st.currentStage > 1;
     // v17 TEN-COUNT: the once-per-arc knockdown refreshes with each new arc.
     if (isNewArc) st.knockdownsThisArc = 0;
+    // v20 ARC PAR: judge the Arc that just ended, pay its medal, restart the clock.
+    let medalSteps = [];
+    if (isNewArc) {
+        const r = judgeArc(CONSTANTS.getArcIndex(prevStage));
+        const M = MEDALS[r.medal];
+        addScore(M.bonus * r.arc, undefined, undefined, { noCombo: true });
+        tmArc(r);
+        st.lastArcResult = r;
+        medalSteps = [{ type: 'text', title: `ARC ${r.arc} · ${M.label}${r.isBest ? ' ★' : ''}`,
+            subtitle: `TIME ${fmtSecs(r.secs)} / PAR ${fmtSecs(r.par.time)}  ·  SCORE ${fmtK(r.score)} / PAR ${fmtK(r.par.score)}  ·  +${(M.bonus * r.arc).toLocaleString()}`, duration: 150 }];
+        arcParStart();
+    }
     const chapterCardSteps = isNewArc ? [
         { type: 'tint', color: 'rgba(0, 0, 0, 0.82)', duration: 20 },
+        ...medalSteps,
         { type: 'text', title: `ARC ${safeArcIndex}`, subtitle: law.name.toUpperCase(), duration: 85 },
         { type: 'tint', color: ARC_TINTS[safeArcIndex] || 'rgba(236, 72, 153, 0.18)', duration: 10 },
         { type: 'text', title: law.name.toUpperCase(), subtitle: law.theme, duration: 160 },

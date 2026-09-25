@@ -9,6 +9,7 @@
 import { gameState as st } from '../state.js';
 import { CONSTANTS } from '../constants.js';
 import { spawnScorePop } from '../vfx_audio/effects.js';
+import { heatMult } from './heat.js';
 
 const SC = CONSTANTS.SCORE;
 
@@ -27,7 +28,7 @@ export function currentMultiplier() { return comboMultiplier(st.combo) * wagerMu
 export function addScore(base, x, y, opts = {}) {
     if (!base || base <= 0) return 0;
     const mult = opts.noCombo ? wagerMultiplier() : currentMultiplier();
-    const pts = Math.round(base * mult);
+    const pts = Math.round(base * mult * heatMult()); // v20: Heat multiplies everything
     st.score = (st.score || 0) + pts;
     if (x !== undefined && y !== undefined && !opts.silent) spawnScorePop(x, y, pts, !!opts.big);
     return pts;
