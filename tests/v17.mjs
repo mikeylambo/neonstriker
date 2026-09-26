@@ -206,15 +206,16 @@ const frames = (n, fn) => { for (let i = 0; i < n; i++) fn(i); };
 
 // ======================= 5. INSTINCT ZONE =======================
 {
+    // v21: the Zone is earned INSIDE Instinct (a full meter no longer auto-fires)
     freshArena(20);
-    st.instinctMeter = 100;
+    st.instinctMeter = 100; st.isInstinct = true;
     st.enemies = [grunt({ lane: 1, x: st.player.x + 60, attackCooldown: 5 })];
     st.keys = { ArrowUp: true }; player.updatePlayer(); st.lastKeys = { ...st.keys }; st.keys = {};
-    ok('Zone: a perfect slip on a FULL meter drops you into the Zone', st.isInstinct && st.zoneTimer === CONSTANTS.ZONE.frames);
-    freshArena(20); st.instinctMeter = 60;
+    ok('Zone: a perfect slip DURING Instinct drops you into the Zone', st.isInstinct && st.zoneTimer === CONSTANTS.ZONE.frames);
+    freshArena(20); st.instinctMeter = 100; st.isInstinct = false;
     st.enemies = [grunt({ lane: 1, x: st.player.x + 60, attackCooldown: 5 })];
     st.keys = { ArrowUp: true }; player.updatePlayer(); st.keys = {};
-    ok('Zone: not on a partial meter', !st.zoneTimer);
+    ok('Zone: a full meter stays banked (no auto-fire on a perfect slip)', !st.zoneTimer && !st.isInstinct && st.instinctMeter === 100);
     // world at half speed while in the zone (real loop)
     T.startGame({ tutorial: false, seed: 5 }); SequenceManager.active = false; st.screen = 'playing'; st.seenTutorials.footwork_tip = true; st.seenTutorials.instinct = true;
     st.player.x = 180; // (startGame leaves the Striker mid walk-in, off-screen)
@@ -422,7 +423,7 @@ const frames = (n, fn) => { for (let i = 0; i < n; i++) fn(i); };
         }
     }
     eq('strings: never in Arc 1', arc1, 0);
-    ok('strings: selected enemies throw them from Arc 2+', arc3 > 0 && arc3 < n3, `${arc3}/${n3}`);
+    eq('strings: v21 — switched off in every Arc', arc3, 0);
     // a string re-targets your lane and every hit gets a full red->white tell
     freshArena(CONSTANTS.firstStageOfArc(4));
     const s3 = grunt({ x: st.player.x + 70, attackCooldown: 30, stringLen: 3 });

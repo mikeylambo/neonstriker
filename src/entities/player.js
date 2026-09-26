@@ -105,7 +105,7 @@ export function registerPerfectGhostStep(attacker) {
     // v19 PARITY: a perfect Ghost Step pays like a Perfect Slip — Instinct, the
     // slip-heal perks (Vantage Point, ADRENALINE), EXP, and it can open the Zone.
     // (The Counter charge stays the Ghost Counter fusion's signature.)
-    const zoneReady = st.instinctMeter >= 100 && !st.isInstinct;
+    const toZone = zoneReady();
     const flowMult = getFlowMultiplier(st);
     if (!st.isInstinct) {
         let gain = 20 * st.stats.techMult * (1 + st.progressionMods.perfectSlipRewardBonusMult) * flowMult;
@@ -115,14 +115,14 @@ export function registerPerfectGhostStep(attacker) {
     const heal = st.progressionMods.perfectSlipHeal + CONSTANTS.affixMod(st.currentAffix, 'perfectSlipHeal', 0);
     if (heal > 0) st.health = Math.min(st.maxHealth, st.health + heal);
     st.exp += Math.floor(2 * (1 + st.progressionMods.expGainBonusMult) * flowMult);
-    if (zoneReady) activateInstinct(true);
+    if (toZone) enterZone();
     // EVOLVED FUSION (Phantom Riposte): the dash leaves an afterimage that echoes back.
     if (st.progressionMods.phantomRiposte) spawnAfterimage(p.lane, p.x, 8);
     return true;
 }
 
 export function checkPerfectSlip(oldLane) {
-    let slipQuality = 'none', bossSlipped = null;
+    let slipQuality = 'none', bossSlipped = null, slipSrc = null;
     st.enemies.forEach(en => {
         if (en.lane === oldLane && en.stun <= 0) {
             let isThreat = false;
@@ -141,14 +141,14 @@ export function checkPerfectSlip(oldLane) {
                     else { slipQuality = 'good'; en.x = st.player.x + 200; en.attackCooldown = en.maxCooldown; en.justAttacked = 0; spawnFloatingText(st.player.x, st.player.y - 50, "TOO EARLY!", "#ffaa00"); st.player.slipBuff = 0; }
                 } else {
                     if (oldCooldown <= perfectThresh) {
-                        slipQuality = 'perfect';
+                        slipQuality = 'perfect'; slipSrc = en;
                         if (en.isBoss) bossSlipped = en;
 
                         if (en.type === 'zoner') { en.attackCooldown = en.maxCooldown; /* evaded — no attack pose, it never fired */ }
                         else en.attackCooldown = Math.max(en.attackCooldown, 18);
                     }
                     else if (oldCooldown <= goodThresh && slipQuality !== 'perfect') {
-                        slipQuality = 'good';
+                        slipQuality = 'good'; slipSrc = en;
 
                         if (en.type === 'zoner') { en.attackCooldown = en.maxCooldown; /* evaded — no attack pose, it never fired */ }
                         else en.attackCooldown = Math.max(en.attackCooldown, 18);
@@ -159,7 +159,7 @@ export function checkPerfectSlip(oldLane) {
             }
         }
     });
-    if (slipQuality !== 'none') triggerPerfectSlip(bossSlipped, slipQuality);
+    if (slipQuality !== 'none') triggerPerfectSlip(bossSlipped, slipQuality, slipSrc);
     // v17 TECHNIQUE R3 — AFTERIMAGE SLIP: a perfect slip leaves a neon copy in the
     // lane you left, which throws a delayed echo punch at whatever swung at you.
     if (slipQuality === 'perfect' && st.progressionMods.afterimageSlip) spawnAfterimage(oldLane, st.player.x);
@@ -200,6 +200,17 @@ function updateAfterimages() {
 }
 
 // Instinct activation, shared by the [Instinct] button and the v17 ZONE trigger.
+// v21 THE ZONE is now earned INSIDE Instinct: a Perfect Slip / Perfect Ghost
+// Step while Instinct is running drops you in. (It used to fire on a Perfect Slip
+// with a full meter — which spent the meter automatically, often with nothing
+// on screen to use it on.) A full meter now just stays banked until you press it.
+export function zoneReady() { return st.isInstinct && !(st.zoneTimer > 0); }
+export function enterZone() {
+    st.zoneTimer = CONSTANTS.ZONE.frames; st.zoneHold = 0;
+    doFlash(0.4); st.hitstop = Math.max(st.hitstop || 0, 10); triggerShockwave(st.player.x, st.player.y - 50, '#ffffff');
+    playSound('zone');
+    spawnFloatingText(st.player.x, st.player.y - 140, 'THE ZONE', '#ffffff');
+}
 export function activateInstinct(zone = false) {
     st.isInstinct = true; st.instinctReadyTimer = 0; if (HUD.instinctBanner) HUD.instinctBanner.style.display = 'none';
     if (HUD.barCont) HUD.barCont.classList.add('beast-active'); doFlash(0.5); st.shake = 20; st.hitstop = 10; triggerShockwave(st.player.x, st.player.y - 50, '#ffffff'); playSound('perfect_slip');
@@ -211,11 +222,15 @@ export function activateInstinct(zone = false) {
     }
 }
 
-export function triggerPerfectSlip(bossSlipped, slipQuality) {
+export function triggerPerfectSlip(bossSlipped, slipQuality, src = null) {
     tmSlip(slipQuality);
+    // v21 ANTI-FARM: a regular enemy only pays slip SCORE + EXP for its first few
+    // attacks — standing in a Zoner's lane slipping forever used to farm points
+    // while the stage never ended. Bosses always pay (that's the fight).
+    const pays = !src || src.isBoss || ((src.slipsPaid = (src.slipsPaid || 0) + 1) <= CONSTANTS.SCORE.slipPayCap);
     if (slipQuality === 'perfect') {
-        // v17: a Perfect Slip on a FULL meter drops you into the Zone.
-        const zoneReady = st.instinctMeter >= 100 && !st.isInstinct;
+        // v21: a Perfect Slip DURING Instinct drops you into the Zone.
+        const toZone = zoneReady();
         if (HUD.slipPopup) { HUD.slipPopup.innerText = "PERFECT SLIP"; HUD.slipPopup.style.color = "#ffffff"; HUD.slipPopup.style.textShadow = "0 0 24px #00ffff"; }
         // APEX (Flow State): perfect slips build the streak same as clean hits do.
         st.player.flowStreak = (st.player.flowStreak || 0) + 1;
@@ -233,19 +248,21 @@ export function triggerPerfectSlip(bossSlipped, slipQuality) {
         if (slipHeal > 0) st.health = Math.min(st.maxHealth, st.health + slipHeal);
 
         st.shake = 10; doFlash(0.2); playSound('perfect_slip'); st.statTotalSlips++;
-        addScore(CONSTANTS.SCORE.perfectSlip, st.player.x + 40, st.player.y - 120);
-        st.exp += Math.floor(2 * (1 + st.progressionMods.expGainBonusMult) * flowMult); // reads are the core loop; pay them
+        if (pays) {
+            addScore(CONSTANTS.SCORE.perfectSlip, st.player.x + 40, st.player.y - 120);
+            st.exp += Math.floor(2 * (1 + st.progressionMods.expGainBonusMult) * flowMult); // reads are the core loop; pay them
+        }
         st.player.slipBuff = (st.orbCounts.technique >= 2) ? 2 : 1;
         spawnFloatingText(st.player.x, st.player.y - 80, "COUNTER READY!", "#ffffff");
         st.hitstop += 8;
         if (st.orbCounts.speed >= 4) st.player.moveCancelReady = true;
         if (bossSlipped && st.orbCounts.technique >= 4) { bossSlipped.exposedTimer = 90 + st.progressionMods.bossExposeBonusFrames; spawnFloatingText(bossSlipped.x, bossSlipped.y - 140, "EXPOSED!", "#00ffff"); playSound('feint_tell'); }
-        if (zoneReady) activateInstinct(true);
+        if (toZone) enterZone();
     } else if (slipQuality === 'good') {
         if (HUD.slipPopup) { HUD.slipPopup.innerText = "GOOD SLIP"; HUD.slipPopup.style.color = "#ff8ad8"; HUD.slipPopup.style.textShadow = "0 0 10px #ff00ff"; }
         if (!st.isInstinct) { st.instinctMeter = Math.min(100, st.instinctMeter + (5 * st.stats.techMult)); }
         st.shake = 3; playSound('slip');
-        addScore(CONSTANTS.SCORE.goodSlip, st.player.x + 40, st.player.y - 120);
+        if (pays) addScore(CONSTANTS.SCORE.goodSlip, st.player.x + 40, st.player.y - 120);
     }
     if (HUD.slipPopup) { HUD.slipPopup.style.opacity = 1; setTimeout(() => { if (HUD.slipPopup) HUD.slipPopup.style.opacity = 0; }, 500); }
 }
@@ -365,16 +382,16 @@ export function takeDamage(amt, isHeavy, en, opts = {}) {
     if (st.enemies.some(e => e.isBoss && e.desperation)) st.statDespDamage++;
 }
 
-// v19 BODY BLOCKING: fighters are solid. You can't walk through anyone in your
-// lane, and you can't press past the front line in ANY lane (so nobody ends up
-// behind you, where you could back into them or never reach them). A slip onto
-// an occupied spot sets you down just in front of that enemy.
-const BODY_GAP = 62, FRONT_GAP = 70;
+// v19 BODY BLOCKING: fighters in your lane are solid — you can't walk through
+// them, and a slip onto an occupied spot sets you down just in front of them.
+const BODY_GAP = 62;
+// v21: only your own lane is solid. Enemies in other lanes now walk the rail past
+// you (RAIL_LOOP), so they no longer shove you back as they go by; anyone who has
+// already passed (behind you) is ignored.
 export function resolveBodies(p) {
     for (const e of st.enemies) {
-        if (e.hp <= 0 || e.controller === 'static_monk' || e.x > st.width) continue;
-        const gap = e.lane === p.lane ? BODY_GAP : FRONT_GAP;
-        if (e.x - p.x < gap && e.x > p.x - 200) p.x = Math.max(FOOTWORK_MIN_X, e.x - gap);
+        if (e.hp <= 0 || e.controller === 'static_monk' || e.x > st.width || e.lane !== p.lane) continue;
+        if (e.x - p.x < BODY_GAP && e.x > p.x - 10) p.x = Math.max(FOOTWORK_MIN_X, e.x - BODY_GAP);
     }
 }
 

@@ -303,6 +303,7 @@ export const CONSTANTS = {
         bossKo: 3000,            // x arc index
         stageClear: 500,         // ALL CLEAR: flat, NOT combo-multiplied (wager still applies)
         flawless: 1000,          // v19: cleared the stage without taking a hit
+        slipPayCap: 4,           // v21: slip score/EXP per regular enemy (anti-farm)
         // Letter rank thresholds (score). Calibrated against the headless bot sim
         // (tests/v16.mjs "SCORE CALIBRATION"): a stage-4 death lands ~8-12k (C), a
         // clean Arc 1 clear ~45k (B), deep Arc 2-3 runs 150k+ (S). S also needs reads.
@@ -367,7 +368,19 @@ export const CONSTANTS = {
     // lane instead of walking past him and off-screen (playtest: "is it possible to
     // end all enemies on each map? right now it doesn't"). Every enemy can now be
     // KO'd — a stage only clears when they all are. Zoners hold back at range.
-    HOLD_LINE: { melee: 90, zoner: 200, reach: 105 }, // zoners keep range — press forward to reach them
+    HOLD_LINE: { melee: 90, zoner: 200, reach: 105 },
+    // v21 ENEMY KNOCKDOWNS + IMPACT DAMAGE. A blow whose knockback impulse (after
+    // weight, Power, counter and Instinct multipliers) reaches `threshold` floors
+    // a non-boss enemy: slam damage, can't act for `frames`, follow-ups deal
+    // `groundMult`. A hook needs Power R1+; any counter / Loaded Cross / Instinct
+    // hook floors a Grunt. Separately, an enemy knocked back hard into another one
+    // hurts both (any build; Iron Frame still bowls through).
+    ENEMY_KD: { threshold: 40, frames: 48, slamMult: 0.4, groundMult: 1.25, impactMinVx: 6, impactDmg: 1.2, impactSelf: 0.5, impactCooldown: 20 },
+    // v21 RAIL LOOP: melee enemies in OTHER lanes don't park and wait any more —
+    // they walk past the Striker, off the left edge, and come back in from the
+    // right (half the time in your lane) until they're KO'd. Zoners still hold
+    // range (they're turrets). Nobody attacks from behind.
+    RAIL_LOOP: { exitX: -60, reentryDelay: [30, 100], toPlayerLaneChance: 0.5 }, // zoners keep range — press forward to reach them
 
     // --- v19 PLAYER HIT FEEL: taking a hit now has weight — hit-stop on the
     // Striker, a knockback slide, longer hitstun, and heavy boss blows (or a boss
@@ -386,7 +399,10 @@ export const CONSTANTS = {
     // truth), so a string is a sequence of reads, not one read and a surprise.
     PUNCH_STRINGS: {
         types: ['grunt', 'assassin'],
-        chanceByArc: { 1: 0, 2: 0.3, 3: 0.4, 4: 0.5, 5: 0.6 },
+        // v21: OFF. Playtest — "sometimes I swap lanes and the enemy stays, sometimes
+        // he follows": the follow rule read as random. Restore the old values
+        // ({ 1: 0, 2: 0.3, 3: 0.4, 4: 0.5, 5: 0.6 }) to bring strings back.
+        chanceByArc: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
         lenByArc: { 1: 2, 2: 2, 3: 2, 4: 3, 5: 3 },
         gap: 28                  // frames between string hits (> red telegraph lead)
     },

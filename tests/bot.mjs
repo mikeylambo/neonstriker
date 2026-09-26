@@ -47,7 +47,7 @@ export function makeBot({ st, T, SequenceManager, fin, knock, rules, vig, settin
             if (dummy.lane === p.lane && Math.abs(dummy.x - p.x) < 130 && cd > 0 && cd <= perfect && p.slipCooldown <= 0) keys[p.lane > 0 ? 'ArrowUp' : 'ArrowDown'] = true;
             return keys;
         }
-        const inLane = st.enemies.filter(e => e.lane === p.lane && e.x > p.x - 20 && e.x - p.x < 125).sort((a, b) => a.x - b.x)[0];
+        const inLane = st.enemies.filter(e => e.lane === p.lane && e.x > p.x - 20 && e.x - p.x < 112).sort((a, b) => a.x - b.x)[0];
         if (inLane) {
             if (tick % 3 === 0) {
                 if (inLane.type === 'shield' || inLane.tutorialType === 'shield') keys.KeyS = true;
@@ -56,7 +56,7 @@ export function makeBot({ st, T, SequenceManager, fin, knock, rules, vig, settin
             return keys;
         }
         // v19: enemies hold a line (zoners at range) — press forward to reach them
-        const ahead = st.enemies.filter(e => e.lane === p.lane && e.x > p.x && e.x - p.x >= 125 && e.x - p.x < 520 && e.hp > 0).sort((a, b) => a.x - b.x)[0];
+        const ahead = st.enemies.filter(e => e.lane === p.lane && e.x > p.x && e.x - p.x >= 112 && e.x - p.x < 520 && e.hp > 0).sort((a, b) => a.x - b.x)[0];
         if (ahead && !laneThreat(p.lane)) keys.ArrowRight = true;
         const target = st.enemies.filter(e => e.x > p.x - 20).sort((a, b) => a.x - b.x)[0];
         if (target && target.lane !== p.lane && p.slipCooldown <= 0 && tick % 6 === 0 && !laneThreat(target.lane < p.lane ? p.lane - 1 : p.lane + 1)) {

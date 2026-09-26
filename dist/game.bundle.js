@@ -317,6 +317,8 @@
       // ALL CLEAR: flat, NOT combo-multiplied (wager still applies)
       flawless: 1e3,
       // v19: cleared the stage without taking a hit
+      slipPayCap: 4,
+      // v21: slip score/EXP per regular enemy (anti-farm)
       // Letter rank thresholds (score). Calibrated against the headless bot sim
       // (tests/v16.mjs "SCORE CALIBRATION"): a stage-4 death lands ~8-12k (C), a
       // clean Arc 1 clear ~45k (B), deep Arc 2-3 runs 150k+ (S). S also needs reads.
@@ -390,6 +392,18 @@
     // end all enemies on each map? right now it doesn't"). Every enemy can now be
     // KO'd — a stage only clears when they all are. Zoners hold back at range.
     HOLD_LINE: { melee: 90, zoner: 200, reach: 105 },
+    // v21 ENEMY KNOCKDOWNS + IMPACT DAMAGE. A blow whose knockback impulse (after
+    // weight, Power, counter and Instinct multipliers) reaches `threshold` floors
+    // a non-boss enemy: slam damage, can't act for `frames`, follow-ups deal
+    // `groundMult`. A hook needs Power R1+; any counter / Loaded Cross / Instinct
+    // hook floors a Grunt. Separately, an enemy knocked back hard into another one
+    // hurts both (any build; Iron Frame still bowls through).
+    ENEMY_KD: { threshold: 40, frames: 48, slamMult: 0.4, groundMult: 1.25, impactMinVx: 6, impactDmg: 1.2, impactSelf: 0.5, impactCooldown: 20 },
+    // v21 RAIL LOOP: melee enemies in OTHER lanes don't park and wait any more —
+    // they walk past the Striker, off the left edge, and come back in from the
+    // right (half the time in your lane) until they're KO'd. Zoners still hold
+    // range (they're turrets). Nobody attacks from behind.
+    RAIL_LOOP: { exitX: -60, reentryDelay: [30, 100], toPlayerLaneChance: 0.5 },
     // zoners keep range — press forward to reach them
     // --- v19 PLAYER HIT FEEL: taking a hit now has weight — hit-stop on the
     // Striker, a knockback slide, longer hitstun, and heavy boss blows (or a boss
@@ -408,7 +422,10 @@
     // truth), so a string is a sequence of reads, not one read and a surprise.
     PUNCH_STRINGS: {
       types: ["grunt", "assassin"],
-      chanceByArc: { 1: 0, 2: 0.3, 3: 0.4, 4: 0.5, 5: 0.6 },
+      // v21: OFF. Playtest — "sometimes I swap lanes and the enemy stays, sometimes
+      // he follows": the follow rule read as random. Restore the old values
+      // ({ 1: 0, 2: 0.3, 3: 0.4, 4: 0.5, 5: 0.6 }) to bring strings back.
+      chanceByArc: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
       lenByArc: { 1: 2, 2: 2, 3: 2, 4: 3, 5: 3 },
       gap: 28
       // frames between string hits (> red telegraph lead)
@@ -2591,6 +2608,7 @@
         }
         if (buffActive) dmg *= 2;
         if (loaded) dmg = Math.round(dmg * 1.3);
+        if (en.floored > 0) dmg = Math.round(dmg * CONSTANTS.ENEMY_KD.groundMult);
         if (gameState.progressionMods.shatterNova && buffActive && type === "cross") {
           if (en.isBoss) dmg += Math.round(en.maxHp * 0.08);
           else novaLanes.push(en.lane);
@@ -2751,6 +2769,17 @@
           baseKB = Math.floor(baseKB / (en.weight || 1));
         }
         en.vx += baseKB * powerFactor;
+        const KD = CONSTANTS.ENEMY_KD, impulse = baseKB * powerFactor;
+        if (!en.isBoss && !en.tutorialType && en.hp > 0 && !(en.floored > 0) && impulse >= KD.threshold) {
+          const slam = Math.round(impulse * KD.slamMult);
+          en.hp -= slam;
+          en.floored = KD.frames;
+          en.stun = Math.max(en.stun, KD.frames);
+          en.attackCooldown = en.maxCooldown;
+          spawnFloatingText(en.x + jX(), en.y - 120 + jY(), "KNOCKDOWN!", "#ffffff");
+          gameState.shake += 6;
+          gameState.statEnemyKnockdowns = (gameState.statEnemyKnockdowns || 0) + 1;
+        }
         if (type === "cross" || type === "hook" || type === "check_hook" || buffActive || trueReadActive || isJab) {
           let canStun = true;
           let stunAmount = 0;
@@ -2991,7 +3020,7 @@
     p.flowStreak = (p.flowStreak || 0) + 1;
     addScore(CONSTANTS.SCORE.perfectGhostStep, p.x + 40, p.y - 120);
     spawnFloatingText(p.x, p.y - 95, "PERFECT GHOST +1", "#e5e7eb");
-    const zoneReady = gameState.instinctMeter >= 100 && !gameState.isInstinct;
+    const toZone = zoneReady();
     const flowMult = getFlowMultiplier(gameState);
     if (!gameState.isInstinct) {
       let gain = 20 * gameState.stats.techMult * (1 + gameState.progressionMods.perfectSlipRewardBonusMult) * flowMult;
@@ -3001,12 +3030,12 @@
     const heal = gameState.progressionMods.perfectSlipHeal + CONSTANTS.affixMod(gameState.currentAffix, "perfectSlipHeal", 0);
     if (heal > 0) gameState.health = Math.min(gameState.maxHealth, gameState.health + heal);
     gameState.exp += Math.floor(2 * (1 + gameState.progressionMods.expGainBonusMult) * flowMult);
-    if (zoneReady) activateInstinct(true);
+    if (toZone) enterZone();
     if (gameState.progressionMods.phantomRiposte) spawnAfterimage(p.lane, p.x, 8);
     return true;
   }
   function checkPerfectSlip(oldLane) {
-    let slipQuality = "none", bossSlipped = null;
+    let slipQuality = "none", bossSlipped = null, slipSrc = null;
     gameState.enemies.forEach((en) => {
       if (en.lane === oldLane && en.stun <= 0) {
         let isThreat = false;
@@ -3033,12 +3062,14 @@
           } else {
             if (oldCooldown <= perfectThresh) {
               slipQuality = "perfect";
+              slipSrc = en;
               if (en.isBoss) bossSlipped = en;
               if (en.type === "zoner") {
                 en.attackCooldown = en.maxCooldown;
               } else en.attackCooldown = Math.max(en.attackCooldown, 18);
             } else if (oldCooldown <= goodThresh && slipQuality !== "perfect") {
               slipQuality = "good";
+              slipSrc = en;
               if (en.type === "zoner") {
                 en.attackCooldown = en.maxCooldown;
               } else en.attackCooldown = Math.max(en.attackCooldown, 18);
@@ -3049,7 +3080,7 @@
         }
       }
     });
-    if (slipQuality !== "none") triggerPerfectSlip(bossSlipped, slipQuality);
+    if (slipQuality !== "none") triggerPerfectSlip(bossSlipped, slipQuality, slipSrc);
     if (slipQuality === "perfect" && gameState.progressionMods.afterimageSlip) spawnAfterimage(oldLane, gameState.player.x);
   }
   function spawnAfterimage(lane, x, delayOverride) {
@@ -3090,6 +3121,18 @@
     }
     gameState.afterimages = gameState.afterimages.filter((ai) => !ai.fired || ai.fade > 0);
   }
+  function zoneReady() {
+    return gameState.isInstinct && !(gameState.zoneTimer > 0);
+  }
+  function enterZone() {
+    gameState.zoneTimer = CONSTANTS.ZONE.frames;
+    gameState.zoneHold = 0;
+    doFlash(0.4);
+    gameState.hitstop = Math.max(gameState.hitstop || 0, 10);
+    triggerShockwave(gameState.player.x, gameState.player.y - 50, "#ffffff");
+    playSound("zone");
+    spawnFloatingText(gameState.player.x, gameState.player.y - 140, "THE ZONE", "#ffffff");
+  }
   function activateInstinct(zone = false) {
     gameState.isInstinct = true;
     gameState.instinctReadyTimer = 0;
@@ -3107,10 +3150,11 @@
       spawnFloatingText(gameState.player.x, gameState.player.y - 140, "THE ZONE", "#ffffff");
     }
   }
-  function triggerPerfectSlip(bossSlipped, slipQuality) {
+  function triggerPerfectSlip(bossSlipped, slipQuality, src = null) {
     tmSlip(slipQuality);
+    const pays = !src || src.isBoss || (src.slipsPaid = (src.slipsPaid || 0) + 1) <= CONSTANTS.SCORE.slipPayCap;
     if (slipQuality === "perfect") {
-      const zoneReady = gameState.instinctMeter >= 100 && !gameState.isInstinct;
+      const toZone = zoneReady();
       if (HUD.slipPopup) {
         HUD.slipPopup.innerText = "PERFECT SLIP";
         HUD.slipPopup.style.color = "#ffffff";
@@ -3132,8 +3176,10 @@
       doFlash(0.2);
       playSound("perfect_slip");
       gameState.statTotalSlips++;
-      addScore(CONSTANTS.SCORE.perfectSlip, gameState.player.x + 40, gameState.player.y - 120);
-      gameState.exp += Math.floor(2 * (1 + gameState.progressionMods.expGainBonusMult) * flowMult);
+      if (pays) {
+        addScore(CONSTANTS.SCORE.perfectSlip, gameState.player.x + 40, gameState.player.y - 120);
+        gameState.exp += Math.floor(2 * (1 + gameState.progressionMods.expGainBonusMult) * flowMult);
+      }
       gameState.player.slipBuff = gameState.orbCounts.technique >= 2 ? 2 : 1;
       spawnFloatingText(gameState.player.x, gameState.player.y - 80, "COUNTER READY!", "#ffffff");
       gameState.hitstop += 8;
@@ -3143,7 +3189,7 @@
         spawnFloatingText(bossSlipped.x, bossSlipped.y - 140, "EXPOSED!", "#00ffff");
         playSound("feint_tell");
       }
-      if (zoneReady) activateInstinct(true);
+      if (toZone) enterZone();
     } else if (slipQuality === "good") {
       if (HUD.slipPopup) {
         HUD.slipPopup.innerText = "GOOD SLIP";
@@ -3155,7 +3201,7 @@
       }
       gameState.shake = 3;
       playSound("slip");
-      addScore(CONSTANTS.SCORE.goodSlip, gameState.player.x + 40, gameState.player.y - 120);
+      if (pays) addScore(CONSTANTS.SCORE.goodSlip, gameState.player.x + 40, gameState.player.y - 120);
     }
     if (HUD.slipPopup) {
       HUD.slipPopup.style.opacity = 1;
@@ -3275,12 +3321,10 @@
     if (gameState.enemies.some((e) => e.isBoss && e.desperation)) gameState.statDespDamage++;
   }
   var BODY_GAP = 62;
-  var FRONT_GAP = 70;
   function resolveBodies(p) {
     for (const e of gameState.enemies) {
-      if (e.hp <= 0 || e.controller === "static_monk" || e.x > gameState.width) continue;
-      const gap = e.lane === p.lane ? BODY_GAP : FRONT_GAP;
-      if (e.x - p.x < gap && e.x > p.x - 200) p.x = Math.max(FOOTWORK_MIN_X, e.x - gap);
+      if (e.hp <= 0 || e.controller === "static_monk" || e.x > gameState.width || e.lane !== p.lane) continue;
+      if (e.x - p.x < BODY_GAP && e.x > p.x - 10) p.x = Math.max(FOOTWORK_MIN_X, e.x - BODY_GAP);
     }
   }
   function isEngaged(p) {
@@ -4051,14 +4095,12 @@
   // src/systems/practice.js
   var BOSS_NAMES = ["NEON ENFORCER", "PHANTOM BOXER", "STATIC MONK", "LIVE WIRE", "NEGATIVE"];
   function practiceTargets() {
-    const a2 = CONSTANTS.firstStageOfArc(2);
     const list = [
       { id: "grunt", label: "GRUNT", type: "grunt", stage: 2, need: 0 },
       { id: "shield", label: "GOLD ARMOR", type: "shield", stage: 3, need: 0 },
       { id: "bruiser", label: "BRUISER", type: "bruiser", stage: 3, need: 0 },
       { id: "zoner", label: "ZONER", type: "zoner", stage: 4, need: 0 },
-      { id: "assassin", label: "ASSASSIN", type: "assassin", stage: 4, need: 0 },
-      { id: "string", label: "PUNCH STRING", type: "grunt", stringLen: 3, stage: a2 + 1, need: a2 }
+      { id: "assassin", label: "ASSASSIN", type: "assassin", stage: 4, need: 0 }
     ];
     for (let arc = 1; arc <= 5; arc++) {
       const bs = CONSTANTS.bossStageOfArc(arc);
@@ -6032,7 +6074,7 @@
     overclocks: [
       { id: "oc_vital_surge", kind: "overclock", draftRole: "fallback", tree: "general", tier: 4, repeatable: true, memoryPolicy: "soft", name: "Vital Surge", desc: "Restore +20 health.", weight: 20, reqs: {}, effects: [{ op: "heal", amount: 20 }, { op: "incOverclock", key: "vitality", amount: 1 }] },
       { id: "oc_quick_nerves", kind: "overclock", draftRole: "fallback", tree: "general", tier: 4, repeatable: true, memoryPolicy: "soft", name: "Quick Nerves", desc: "Tiny Ghost Step cooldown trim.", weight: 12, reqs: {}, effects: [{ op: "mulMod", key: "ghostStepCooldownMult", amount: 0.95 }, { op: "incOverclock", key: "nerves", amount: 1 }] },
-      { id: "oc_sharp_eye", kind: "overclock", draftRole: "fallback", tree: "general", tier: 4, repeatable: true, memoryPolicy: "soft", name: "Sharp Eye", desc: "Perfect Slips reward slightly more meter and value.", weight: 12, reqs: {}, effects: [{ op: "addMod", key: "perfectSlipRewardBonusMult", amount: 0.08 }, { op: "incOverclock", key: "focus", amount: 1 }] },
+      { id: "oc_sharp_eye", kind: "overclock", draftRole: "fallback", tree: "general", tier: 4, repeatable: true, memoryPolicy: "soft", name: "Keen Read", desc: "Perfect Slips pay a little more Instinct and score.", weight: 12, reqs: {}, effects: [{ op: "addMod", key: "perfectSlipRewardBonusMult", amount: 0.08 }, { op: "incOverclock", key: "focus", amount: 1 }] },
       { id: "oc_calm_engine", kind: "overclock", draftRole: "fallback", tree: "general", tier: 4, repeatable: true, memoryPolicy: "soft", name: "Calm Engine", desc: "Slightly improve Instinct gain for the rest of the run.", weight: 12, reqs: {}, effects: [{ op: "addMod", key: "instinctGainBonusMult", amount: 0.06 }, { op: "incOverclock", key: "instinct", amount: 1 }] },
       { id: "oc_clinch_breaker", kind: "overclock", draftRole: "fallback", tree: "general", tier: 4, repeatable: true, memoryPolicy: "soft", name: "Clinch Breaker", desc: "Reduce incoming recoil and hit pushback slightly.", weight: 10, reqs: {}, effects: [{ op: "mulMod", key: "incomingRecoilMult", amount: 0.94 }, { op: "incOverclock", key: "clinch", amount: 1 }] },
       { id: "oc_clean_finish", kind: "overclock", draftRole: "fallback", tree: "general", tier: 4, repeatable: true, memoryPolicy: "soft", name: "Clean Finish", desc: "Slightly improve EXP / score efficiency.", weight: 10, reqs: {}, effects: [{ op: "addMod", key: "expGainBonusMult", amount: 0.05 }, { op: "incOverclock", key: "finish", amount: 1 }] }
@@ -6275,6 +6317,7 @@
       addScore(M.bonus * r.arc, void 0, void 0, { noCombo: true });
       tmArc(r);
       gameState.lastArcResult = r;
+      if (r.medal === "gold") gameState.goldThisRun = true;
       medalSteps = [{
         type: "text",
         title: `ARC ${r.arc} \xB7 ${M.label}${r.isBest ? " \u2605" : ""}`,
@@ -6480,6 +6523,7 @@
   }
   function atHoldLine(en) {
     if (en.isBoss || en.tutorialType) return false;
+    if (en.type !== "zoner") return false;
     let line = gameState.player.x + (en.type === "zoner" ? CONSTANTS.HOLD_LINE.zoner : CONSTANTS.HOLD_LINE.melee);
     line = Math.min(line, CONSTANTS.FOOTWORK.maxX + CONSTANTS.HOLD_LINE.reach);
     return en.x <= line;
@@ -6576,6 +6620,8 @@
           return;
         }
       }
+      if (en.floored > 0) en.floored--;
+      if (en.bumpTimer > 0) en.bumpTimer--;
       if (en.stun > 0 || gameState.bossIntroTimer > 0) {
         if (en.vx > 0.1) applyKnockback(en);
         continue;
@@ -6668,6 +6714,16 @@
                   if (other.stun <= 0) other.stun = 5;
                 }
               }
+              const KD = CONSTANTS.ENEMY_KD;
+              if (en.vx > KD.impactMinVx && !(other.bumpTimer > 0) && !other.isBoss && !other.tutorialType) {
+                other.hp -= Math.round(en.vx * KD.impactDmg);
+                en.hp -= Math.round(en.vx * KD.impactSelf);
+                other.bumpTimer = KD.impactCooldown;
+                if (other.stun <= 0) other.stun = 12;
+                createImpact(other.x, other.y - 60, "#ffffff", 1.3);
+                gameState.shake += 3;
+                spawnFloatingText(other.x, other.y - 110, "IMPACT!", "#facc15");
+              }
             }
           });
         } else {
@@ -6684,7 +6740,7 @@
         if (en.lane !== gameState.player.lane && !en.tutorialType && Math.abs(en.x - gameState.player.x) < 130) {
           en.attackCooldown = Math.max(en.attackCooldown, CONSTANTS.getSlipThresholds(en.type).good + 12);
         }
-        if (Math.abs(en.x - gameState.player.x) < 130 && !isBlockedByEnemy && gameState.tutorialGrace <= 0 && (en.lane === gameState.player.lane || en.tutorialType)) {
+        if (Math.abs(en.x - gameState.player.x) < 130 && en.x > gameState.player.x - 20 && !isBlockedByEnemy && gameState.tutorialGrace <= 0 && (en.lane === gameState.player.lane || en.tutorialType)) {
           if (en.attackCooldown === 22 && en.isActiveThreat) {
             if (en.type === "bruiser") playSound("bash_tell");
             else playSound("jab_tell");
@@ -6824,6 +6880,16 @@
         if (en.tutorialType) gameState.tutorialDelay = 60;
         createKoShatter(en);
         gameState.enemies.splice(i, 1);
+      } else if (en.x < CONSTANTS.RAIL_LOOP.exitX && !en.isBoss && !en.tutorialType) {
+        const R = CONSTANTS.RAIL_LOOP;
+        const delay = R.reentryDelay[0] + Math.random() * (R.reentryDelay[1] - R.reentryDelay[0]);
+        en.lane = Math.random() < R.toPlayerLaneChance ? gameState.player.lane : Math.floor(Math.random() * 3);
+        en.x = gameState.width + 50 + delay * Math.max(1, en.speed);
+        en.vx = 0;
+        en.stun = 0;
+        en.attackCooldown = en.maxCooldown;
+        en.stringIdx = 0;
+        en.loops = (en.loops || 0) + 1;
       } else if (en.x < -100) {
         gameState.enemies.splice(i, 1);
       }
@@ -6896,7 +6962,7 @@
     { id: "ember", name: "Ember", color: "#ff5a3c", unlock: "grade:B", hint: "Finish a run at grade B+" },
     { id: "violet", name: "Violet Ghost", color: "#c084fc", unlock: "grade:A", hint: "Finish a run at grade A+" },
     { id: "gold", name: "Apex Gold", color: "#facc15", unlock: "grade:S", hint: "Finish a run at grade S" },
-    { id: "prism", name: "Prism", color: "#34d399", unlock: "daily", hint: "Beat a boss in a Daily Challenge" }
+    { id: "prism", name: "Prism", color: "#34d399", unlock: "gold", hint: "Earn a GOLD Arc medal" }
   ];
   var GRADE_RANK = { C: 0, B: 1, A: 2, S: 3 };
   function safeGet3(key) {
@@ -6974,8 +7040,8 @@
         out.push(s.id);
         continue;
       }
-      if (s.unlock === "daily") {
-        if (run2.daily && (run2.bossKills || 0) >= 1) out.push(s.id);
+      if (s.unlock === "gold") {
+        if (run2.goldMedal) out.push(s.id);
         continue;
       }
       if (s.unlock.startsWith("grade:")) {
@@ -7061,10 +7127,6 @@
   }
   function fetchTopAllTime(limit = 10) {
     return fetchScores(`select=name,score,grade,stage&game=eq.${GAME}&order=score.desc&limit=${limit}`);
-  }
-  function fetchTopDaily(dateKey, limit = 10) {
-    if (!dateKey) return Promise.resolve([]);
-    return fetchScores(`select=name,score,grade,stage&game=eq.${GAME}&daily=eq.true&date_key=eq.${encodeURIComponent(dateKey)}&order=score.desc&limit=${limit}`);
   }
 
   // src/render/atmosphere.js
@@ -7240,207 +7302,6 @@
     ctx.fillRect(x - 1, 0, 2, gameState.height);
   }
 
-  // src/render/onboarding_mock.js
-  var LESSONS = ["SLIP", "COUNTER", "ARMOR", "GUARD", "GHOST STEP"];
-  function keycap(ctx3, x, y, label, color = "#22d3ee", pulse = 0) {
-    ctx3.save();
-    ctx3.font = "900 13px Orbitron";
-    const w = Math.max(28, ctx3.measureText(label).width + 16), h = 26;
-    ctx3.fillStyle = "rgba(8,10,16,0.92)";
-    ctx3.strokeStyle = color;
-    ctx3.lineWidth = 2;
-    ctx3.shadowColor = color;
-    ctx3.shadowBlur = 8 + pulse * 10;
-    ctx3.beginPath();
-    ctx3.roundRect ? ctx3.roundRect(x - w / 2, y - h / 2, w, h, 5) : ctx3.rect(x - w / 2, y - h / 2, w, h);
-    ctx3.fill();
-    ctx3.stroke();
-    ctx3.shadowBlur = 0;
-    ctx3.fillStyle = color;
-    ctx3.textAlign = "center";
-    ctx3.textBaseline = "middle";
-    ctx3.fillText(label, x, y + 1);
-    ctx3.restore();
-    return w;
-  }
-  function callout(ctx3, x, y, ax, ay, color, title, lines, keys = []) {
-    ctx3.save();
-    ctx3.font = "900 13px Orbitron";
-    let keysW = 0;
-    keys.forEach((k) => {
-      keysW += Math.max(28, ctx3.measureText(k.label).width + 16) + 8;
-    });
-    ctx3.font = "bold 10px Orbitron";
-    keys.forEach((k) => {
-      if (k.after) keysW += ctx3.measureText(k.after).width + 14;
-    });
-    ctx3.font = "bold 11px Orbitron";
-    const w = Math.max(210, keysW + 28, ...lines.map((l) => ctx3.measureText(l).width + 28)), h = 34 + lines.length * 16 + (keys.length ? 34 : 0);
-    ctx3.strokeStyle = color;
-    ctx3.lineWidth = 1.5;
-    ctx3.setLineDash([4, 4]);
-    ctx3.beginPath();
-    ctx3.moveTo(ax, ay);
-    ctx3.lineTo(x + (ax < x ? 0 : w), y + h / 2);
-    ctx3.stroke();
-    ctx3.setLineDash([]);
-    ctx3.fillStyle = color;
-    ctx3.beginPath();
-    ctx3.arc(ax, ay, 4, 0, Math.PI * 2);
-    ctx3.fill();
-    ctx3.fillStyle = "rgba(6,8,14,0.9)";
-    ctx3.fillRect(x, y, w, h);
-    ctx3.fillStyle = color;
-    ctx3.fillRect(x, y, 4, h);
-    ctx3.strokeStyle = "rgba(255,255,255,0.12)";
-    ctx3.lineWidth = 1;
-    ctx3.strokeRect(x, y, w, h);
-    ctx3.textAlign = "left";
-    ctx3.fillStyle = color;
-    ctx3.font = "900 12px Orbitron";
-    ctx3.fillText(title, x + 14, y + 20);
-    ctx3.fillStyle = "#e5e7eb";
-    ctx3.font = "bold 11px Orbitron";
-    lines.forEach((l, i) => ctx3.fillText(l, x + 14, y + 38 + i * 16));
-    let kx = x + 14;
-    keys.forEach((k) => {
-      ctx3.font = "900 13px Orbitron";
-      const kw = Math.max(28, ctx3.measureText(k.label).width + 16);
-      keycap(ctx3, kx + kw / 2, y + h - 20, k.label, k.color || color, k.pulse || 0);
-      kx += kw + 8;
-      if (k.after) {
-        ctx3.fillStyle = "#9ca3af";
-        ctx3.font = "bold 10px Orbitron";
-        ctx3.textAlign = "left";
-        ctx3.fillText(k.after, kx, y + h - 16);
-        kx += ctx3.measureText(k.after).width + 14;
-      }
-    });
-    ctx3.restore();
-  }
-  function lessonRail(ctx3, current2) {
-    ctx3.save();
-    const x0 = 22, y = 100;
-    ctx3.font = "900 9px Orbitron";
-    ctx3.textAlign = "left";
-    ctx3.fillStyle = "rgba(255,255,255,0.55)";
-    ctx3.fillText("SPARRING", x0, y - 8);
-    let x = x0;
-    LESSONS.forEach((l, i) => {
-      const done = i < current2, cur = i === current2;
-      const label = (done ? "\u2713 " : "") + l;
-      const w = ctx3.measureText(label).width + 16;
-      ctx3.fillStyle = done ? "#22d3ee" : cur ? "rgba(34,211,238,0.18)" : "rgba(255,255,255,0.05)";
-      ctx3.fillRect(x, y, w, 16);
-      if (cur) {
-        ctx3.strokeStyle = "#22d3ee";
-        ctx3.lineWidth = 1.5;
-        ctx3.strokeRect(x, y, w, 16);
-      }
-      ctx3.fillStyle = done ? "#000" : cur ? "#22d3ee" : "#6b7280";
-      ctx3.fillText(label, x + 8, y + 11);
-      x += w + 4;
-    });
-    ctx3.restore();
-  }
-  function drawOnboardingMock(ctx3) {
-    const scene = gameState.onboardingMock;
-    if (!scene) return;
-    const K2 = getBinds(), L = (c) => keyLabel(c);
-    const p = gameState.player, t = Date.now(), pulse = 0.5 + 0.5 * Math.sin(t * 8e-3);
-    const en = gameState.enemies[0];
-    ctx3.save();
-    if (scene === "slip") {
-      lessonRail(ctx3, 0);
-      const ex = en ? en.x + 25 : p.x + 200, ey = en ? en.y - 140 : p.y - 140;
-      callout(
-        ctx3,
-        ex + 50,
-        ey - 60,
-        ex,
-        ey + 10,
-        "#ff3355",
-        "IT\u2019S WINDING UP",
-        ["The lane flashes RED while it winds up.", "When it flashes WHITE \u2014 slip out."],
-        []
-      );
-      keycap(ctx3, p.x + 25, p.y - 175, L(K2.up), "#ffffff", pulse);
-      keycap(ctx3, p.x + 25, p.y + 30, L(K2.down), "#ffffff", pulse);
-      ctx3.fillStyle = "rgba(255,255,255,0.85)";
-      ctx3.font = "900 10px Orbitron";
-      ctx3.textAlign = "center";
-      ctx3.fillText("SLIP ON WHITE", p.x + 25, p.y - 196);
-      ctx3.fillStyle = "#9ca3af";
-      ctx3.fillText("PERFECT SLIPS: 0 / 1", p.x + 25, p.y + 58);
-    } else if (scene === "counter") {
-      lessonRail(ctx3, 1);
-      callout(
-        ctx3,
-        p.x + 70,
-        p.y - 250,
-        p.x + 60,
-        p.y - 70,
-        "#ffffff",
-        "COUNTER CHARGED",
-        ["A Perfect Slip charged your next hit.", "It lands double, shatters posture."],
-        [{ label: L(K2.jab) }, { label: L(K2.cross) }, { label: L(K2.hook), after: "ANY PUNCH" }]
-      );
-    } else if (scene === "bruiser") {
-      const ex = en ? en.x + 35 : p.x + 220, ey = en ? en.y - 150 : p.y - 150;
-      callout(
-        ctx3,
-        Math.max(ex + 40, 650),
-        ey - 60,
-        ex,
-        ey + 10,
-        "#ff3030",
-        "NEW: BRUISER",
-        ["Jabs chip it but never stagger it.", "Only a Cross (or a Counter) stops it."],
-        [{ label: L(K2.cross), color: "#ff2bd6", after: "CROSS" }]
-      );
-      ctx3.fillStyle = "rgba(255,255,255,0.45)";
-      ctx3.font = "bold 9px Orbitron";
-      ctx3.textAlign = "center";
-      ctx3.fillText("world at 60% speed for a beat \xB7 fades on its own", gameState.width / 2, gameState.height - 110);
-    } else if (scene === "instinct") {
-      callout(
-        ctx3,
-        330,
-        70,
-        290,
-        52,
-        "#22d3ee",
-        "INSTINCT FULL",
-        ["Unleash it now \u2014 or keep it banked and", "Perfect Slip on a full meter for THE ZONE."],
-        [{ label: L(K2.instinct), after: "UNLEASH" }, { label: `${L(K2.up)}/${L(K2.down)}`, color: "#ffffff", after: "PERFECT SLIP = ZONE" }]
-      );
-    } else if (scene === "footwork") {
-      keycap(ctx3, p.x - 10, p.y + 34, L(K2.left), "#22d3ee", pulse);
-      keycap(ctx3, p.x + 60, p.y + 34, L(K2.right), "#22d3ee", pulse);
-      ctx3.fillStyle = "#9ca3af";
-      ctx3.font = "bold 9px Orbitron";
-      ctx3.textAlign = "center";
-      ctx3.fillText("HOLD", p.x + 25, p.y + 38);
-      const low = gameState.height * CONSTANTS.LANE_Y[2] + 20;
-      callout(
-        ctx3,
-        90,
-        low,
-        p.x + 25,
-        p.y + 50,
-        "#22d3ee",
-        "FOOTWORK",
-        ["Press forward to meet them early,", "give ground to buy a beat."],
-        []
-      );
-      keycap(ctx3, p.x + 25, p.y - 175, L(K2.ghost), "#c084fc", 0);
-      ctx3.fillStyle = "#c084fc";
-      ctx3.font = "900 9px Orbitron";
-      ctx3.fillText("GHOST STEP", p.x + 25, p.y - 196);
-    }
-    ctx3.restore();
-  }
-
   // src/render/draw.js
   var dl = (x1, y1, x2, y2) => {
     ctx.beginPath();
@@ -7611,7 +7472,15 @@
     gameState.enemies.forEach((en) => {
       let opacity = en.isActiveThreat ? 1 : 0.4;
       if (gameState.purifyTimer > 0) opacity *= 0.5;
-      drawBoxer(ctx, en, false, opacity);
+      if (en.floored > 0 && !en.isBoss) {
+        const T = CONSTANTS.ENEMY_KD.frames, t = en.floored, k = Math.min(1, (T - t) / 6, t / 8);
+        ctx.save();
+        ctx.translate(en.x + 25, en.y);
+        ctx.rotate(Math.PI / 2 * k);
+        ctx.translate(-(en.x + 25), -en.y);
+        drawBoxer(ctx, { ...en, state: "hurt" }, false, opacity);
+        ctx.restore();
+      } else drawBoxer(ctx, en, false, opacity);
       if (en.isActiveThreat) {
         const { perfect: perfectThresh, good: goodThresh } = CONSTANTS.getSlipThresholds(en.type, gameState.progressionMods.perfectSlipWindowBonus);
         if (en.type === "zoner" && en.attackCooldown < 40 && en.stun <= 0 && gameState.bossIntroTimer <= 0) {
@@ -7757,7 +7626,6 @@
     drawFinisherUI(ctx);
     drawKnockdownUI(ctx);
     drawBossPoster(ctx);
-    if (gameState.onboardingMock) drawOnboardingMock(ctx);
     SequenceManager.draw(ctx, gameState.width, gameState.height);
     drawVignette(ctx);
   }
@@ -7925,7 +7793,7 @@
         const rarity = upgradeRarity(option);
         const color = upgradeColor(option);
         const fh = fusionHint(option, gameState, UPGRADE_POOL);
-        const fusionLine = fh ? `<div class="card-fusion">${fh.missing === 0 ? `UNLOCKS ${fh.evolved ? "PERFECTED FUSION" : "FUSION"}` : `${fh.missing} MORE \u2192`} <b>${fh.name.toUpperCase()}</b></div>` : "";
+        const fusionLine = fh ? `<div class="card-fusion-hint">${fh.missing === 0 ? `UNLOCKS ${fh.evolved ? "PERFECTED FUSION" : "FUSION"}` : `${fh.missing} MORE \u2192`} <b>${fh.name.toUpperCase()}</b></div>` : "";
         const btnHTML = `
                 <div class="draft-card card-${rarity}" style="--card-color:${color}; animation-delay:${index * 90 + (rarity === "fusion" || rarity === "evolved" || rarity === "apex" ? 220 : 0)}ms" onmouseenter="window.engineFocusDraft(${index})" onclick="window.engineApplyUpgradeState('${escapeAttr(option.id)}')">
                     <div class="card-inner">
@@ -7953,6 +7821,7 @@
     gameState.practice = null;
     gameState.heat = [];
     gameState.hpCeil = void 0;
+    gameState.goldThisRun = false;
     gameState.health = 100;
     gameState.combo = 0;
     gameState.instinctMeter = 0;
@@ -8092,7 +7961,8 @@
     initAudio();
     const toggle = document.getElementById("tutorial-toggle-cb");
     gameState.tutorialEnabled = opts.tutorial !== void 0 ? !!opts.tutorial : toggle ? toggle.checked === true : true;
-    gameState.dailyMode = !!daily;
+    daily = false;
+    gameState.dailyMode = false;
     gameState.dailyDateKey = daily ? todayKey() : null;
     const runSeed = opts.seed !== void 0 ? opts.seed : daily ? dailySeedFromDate() : Math.random() * 4294967295 >>> 0;
     seedRng(runSeed);
@@ -8184,20 +8054,72 @@
     const el = document.getElementById("heat-list");
     if (!el) return;
     const on = loadHeat();
-    el.innerHTML = CONSTANTS.HEAT.mods.map((h) => `<div class="orb-btn sm wide heat-row${on.includes(h.id) ? " on" : ""}" onclick="window.engineToggleHeat('${h.id}')"><div class="font-bold">${on.includes(h.id) ? "\u25A0" : "\u25A1"} ${h.name} <span class="heat-bonus">+${Math.round(h.bonus * 100)}%</span></div><div class="sub">${h.desc}</div></div>`).join("") + `<div class="heat-total">HEAT ${heatLevel(on)} \xB7 SCORE \xD7${heatMultFor(on).toFixed(2)} <span>normal runs only \xB7 not the Daily</span></div><div class="orb-btn sm wide back" onclick="window.engineCloseSubmenu()"><div class="font-bold">BACK [ESC] / [B]</div></div>`;
+    el.innerHTML = CONSTANTS.HEAT.mods.map((h) => `<div class="orb-btn sm wide heat-row${on.includes(h.id) ? " on" : ""}" onclick="window.engineToggleHeat('${h.id}')"><div class="font-bold">${on.includes(h.id) ? "\u25A0" : "\u25A1"} ${h.name} <span class="heat-bonus">+${Math.round(h.bonus * 100)}%</span></div><div class="sub">${h.desc}</div></div>`).join("") + `<div class="heat-total">HEAT ${heatLevel(on)} \xB7 SCORE \xD7${heatMultFor(on).toFixed(2)} <span>applies to every Gauntlet run while on</span></div><div class="orb-btn sm wide back" onclick="window.engineCloseSubmenu()"><div class="font-bold">BACK [ESC] / [B]</div></div>`;
   }
   window.engineToggleHeat = (id) => {
     toggleHeat(id);
     playSound("slip");
     renderHeatMenu();
   };
+  var ANNOUNCE_KEY = "neon_strike_announced_v1";
+  var UNLOCK_NOTES = {
+    practice: { title: "PRACTICE ROOM UNLOCKED", color: "#a78bfa", text: "Pick any enemy you've met \u2014 or a boss you've reached \u2014 and drill it on a loop. You can't lose, nothing is scored, and the SLIP WINDOWS overlay shows exactly when to move.<br><br>Find it on the main menu." },
+    heat: { title: "HEAT UNLOCKED", color: "#fb923c", text: "Stack optional modifiers \u2014 faster enemies, no healing, no ten-count\u2026 \u2014 for a bigger score multiplier on every run.<br><br>Toggle them from HEAT on the main menu." }
+  };
+  function loadAnnounced() {
+    try {
+      const a = JSON.parse(localStorage.getItem(ANNOUNCE_KEY) || "[]");
+      return Array.isArray(a) ? a : [];
+    } catch (e) {
+      return [];
+    }
+  }
+  function pendingUnlocks(m = loadMeta()) {
+    const seen = loadAnnounced(), out = [];
+    if (practiceUnlocked(m) && !seen.includes("practice")) out.push("practice");
+    if (heatUnlocked(m) && !seen.includes("heat")) out.push("heat");
+    return out;
+  }
+  var unlockShowing = null;
+  function showNextUnlock() {
+    if (gameState.screen !== "start" && gameState.screen !== "unlock") return;
+    const next = pendingUnlocks()[0];
+    const el = document.getElementById("unlock-screen");
+    const startEl = document.getElementById("start-screen");
+    if (!next) {
+      unlockShowing = null;
+      if (el) el.style.display = "none";
+      if (gameState.screen === "unlock") {
+        gameState.screen = "start";
+        if (startEl) startEl.style.display = "flex";
+      }
+      return;
+    }
+    if (startEl) startEl.style.display = "none";
+    const n = UNLOCK_NOTES[next];
+    unlockShowing = next;
+    gameState.screen = "unlock";
+    const t = document.getElementById("unlock-title"), b = document.getElementById("unlock-text");
+    if (t) {
+      t.innerText = n.title;
+      t.style.color = n.color;
+    }
+    if (b) b.innerHTML = n.text;
+    if (el) el.style.display = "flex";
+    playSound("perfect_slip");
+  }
+  function dismissUnlock() {
+    if (!unlockShowing) return;
+    try {
+      localStorage.setItem(ANNOUNCE_KEY, JSON.stringify([...loadAnnounced(), unlockShowing]));
+    } catch (e) {
+    }
+    showNextUnlock();
+  }
+  window.engineDismissUnlock = dismissUnlock;
   window.engineOpenPractice = () => openSubmenu("practice");
   window.engineOpenHeat = () => openSubmenu("heat");
   window.engineCloseSubmenu = closeSubmenu;
-  function startDailyChallenge() {
-    startGame(true);
-  }
-  window.startDailyChallenge = startDailyChallenge;
   function toggleHowTo() {
     initAudio();
     const howTo = document.getElementById("howto-screen");
@@ -8225,6 +8147,7 @@
     if (startScreen) startScreen.style.display = "flex";
     ["pause-screen", "gameover-screen", "wager-screen", "upgrade-screen", "practice-screen", "heat-screen"].forEach(hideOverlay);
     renderStartExtras();
+    showNextUnlock();
     SequenceManager.active = false;
     SequenceManager.waiting = false;
     stopMusic();
@@ -8552,6 +8475,8 @@
         if (jp(14) || stickLeft) moveDraftFocus(-1);
         else if (jp(15) || stickRight) moveDraftFocus(1);
         else if (jp(0)) confirmDraftFocus();
+      } else if (gameState.screen === "unlock") {
+        if (jp(0) || jp(1) || jp(9)) dismissUnlock();
       } else if (gameState.screen === "practice" || gameState.screen === "heat") {
         if (navUp) moveMenu(-1);
         else if (navDown) moveMenu(1);
@@ -8596,6 +8521,10 @@
     }
     if (gameState.screen === "gameover" && recapPlaying()) {
       if (!e.repeat) showRecap(false);
+      return;
+    }
+    if (gameState.screen === "unlock") {
+      if (!e.repeat && (e.code === "Enter" || e.code === "Space" || e.code === "Escape" || e.code === "KeyA")) dismissUnlock();
       return;
     }
     if (gameState.screen === "practice" || gameState.screen === "heat") {
@@ -8760,7 +8689,7 @@
     let banner = document.getElementById("instinct-ready-banner");
     if (gameState.instinctMeter >= 100 && !gameState.isInstinct) {
       if (!gameState.seenTutorials.instinct) {
-        triggerTutorial("instinct", "INSTINCT MAXED", `Your meter is full!<br><br>Press <span class="text-cyan-400 font-bold">[${keyName("instinct")}] / pad A</span> to unleash Instinct &mdash; double knockback and massive hitstop.<br><br><b>Or hold it:</b> land a <span class="text-white font-bold">Perfect Slip</span> on a full meter and you drop into <span class="text-white font-bold">THE ZONE</span> &mdash; the world slows down around you.`);
+        triggerTutorial("instinct", "INSTINCT MAXED", `Your meter is full!<br><br>Press <span class="text-cyan-400 font-bold">[${keyName("instinct")}] / pad A</span> to unleash Instinct &mdash; double knockback and massive hitstop.<br><br>It stays banked until you use it &mdash; save it for a crowd.<br><br><b>Then go deeper:</b> land a <span class="text-white font-bold">Perfect Slip while Instinct is running</span> and you drop into <span class="text-white font-bold">THE ZONE</span> &mdash; the world slows down around you.`);
         return;
       } else if (banner) banner.style.display = "block";
     } else if (banner) banner.style.display = "none";
@@ -8883,7 +8812,13 @@
     setT("recap-tip", `TIP \xB7 ${tip}`);
     setT("run-tip", `TIP \xB7 ${tip}`);
     showRecap(startRecapPlayback());
-    const rec = commitRunRecord({ score, grade, stage: gameState.currentStage, daily: gameState.dailyMode, bossKills: gameState.statBossKills });
+    const rec = commitRunRecord({ score, grade, stage: gameState.currentStage, daily: false, bossKills: gameState.statBossKills, goldMedal: !!gameState.goldThisRun });
+    const newModes = pendingUnlocks().map((id) => UNLOCK_NOTES[id].title);
+    const um = document.getElementById("unlock-banner");
+    if (um) {
+      um.innerText = newModes.length ? `\u2605 ${newModes.join(" \xB7 ")} \u2014 SEE THE MAIN MENU` : "";
+      um.style.display = newModes.length ? "block" : "none";
+    }
     const submittable = { name: getAlias(), score, grade, stage: gameState.currentStage, daily: gameState.dailyMode, dateKey: gameState.dailyDateKey };
     if (getOnlineOptIn() && isSubmittableRun(submittable)) submitScore(submittable);
     const scStreak = document.getElementById("stat-streak");
@@ -9041,7 +8976,6 @@
     const optIn = document.getElementById("online-optin");
     if (optIn) optIn.checked = meta.onlineOptIn;
     renderGlobalBoard("global-alltime", onlineEnabled() ? fetchTopAllTime(10) : Promise.resolve(null), "No global runs yet. Be the first.");
-    renderGlobalBoard("global-daily", onlineEnabled() ? fetchTopDaily(todayKey(), 10) : Promise.resolve(null), "No daily runs yet today.");
     const list = document.getElementById("records-list");
     if (list) {
       if (!lb.length) {
@@ -9229,6 +9163,7 @@
     renderBest();
     applyStrikerColor();
     renderStartExtras();
+    showNextUnlock();
     loop();
   }
   init();
@@ -9250,14 +9185,8 @@
           gameState.pendingUpgrades += n;
           triggerUpgradeDraft();
         },
-        // Item-11 onboarding mockup: draws in-world teaching callouts over the
-        // live scene. null clears it. Never set outside ?debug.
         telemetry() {
           return { live: liveRun(), runs: loadTelemetry(), summary: summarizeTelemetry(loadTelemetry()) };
-        },
-        mockOnboarding(scene) {
-          gameState.onboardingMock = scene || null;
-          draw();
         },
         // Save the current frame (canvas + a painted stand-in for the DOM HUD
         // clusters) to a local receiver — used to export mockup images.

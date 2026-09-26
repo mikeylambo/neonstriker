@@ -192,8 +192,8 @@ eq('rankInsert below-cutoff -> rank -1', capped.rank, -1);
 eq('unlock: grade C unlocks nothing but default', JSON.stringify(records.unlocksForRun({ grade: 'C', daily: false, bossKills: 0 }, ['cyan'])), JSON.stringify([]));
 ok('unlock: grade B unlocks ember', records.unlocksForRun({ grade: 'B', daily: false, bossKills: 1 }, ['cyan']).includes('ember'));
 ok('unlock: grade S unlocks ember+violet+gold', ['ember', 'violet', 'gold'].every(x => records.unlocksForRun({ grade: 'S', daily: false, bossKills: 3 }, ['cyan']).includes(x)));
-ok('unlock: daily+boss unlocks prism', records.unlocksForRun({ grade: 'C', daily: true, bossKills: 1 }, ['cyan']).includes('prism'));
-ok('unlock: daily no-boss does NOT unlock prism', !records.unlocksForRun({ grade: 'C', daily: true, bossKills: 0 }, ['cyan']).includes('prism'));
+ok('unlock: a GOLD Arc medal unlocks prism (v21, Daily removed)', records.unlocksForRun({ grade: 'C', goldMedal: true }, ['cyan']).includes('prism'));
+ok('unlock: a daily boss no longer unlocks prism', !records.unlocksForRun({ grade: 'C', daily: true, bossKills: 1 }, ['cyan']).includes('prism'));
 
 // commit + persistence round-trip
 localStorage.clear();

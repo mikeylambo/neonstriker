@@ -15,14 +15,12 @@ const BOSS_NAMES = ['NEON ENFORCER', 'PHANTOM BOXER', 'STATIC MONK', 'LIVE WIRE'
 
 // Every target: which stage it's staged on (for arena + tuning) and what unlocks it.
 export function practiceTargets() {
-    const a2 = CONSTANTS.firstStageOfArc(2);
     const list = [
         { id: 'grunt', label: 'GRUNT', type: 'grunt', stage: 2, need: 0 },
         { id: 'shield', label: 'GOLD ARMOR', type: 'shield', stage: 3, need: 0 },
         { id: 'bruiser', label: 'BRUISER', type: 'bruiser', stage: 3, need: 0 },
         { id: 'zoner', label: 'ZONER', type: 'zoner', stage: 4, need: 0 },
-        { id: 'assassin', label: 'ASSASSIN', type: 'assassin', stage: 4, need: 0 },
-        { id: 'string', label: 'PUNCH STRING', type: 'grunt', stringLen: 3, stage: a2 + 1, need: a2 }
+        { id: 'assassin', label: 'ASSASSIN', type: 'assassin', stage: 4, need: 0 }
     ];
     for (let arc = 1; arc <= 5; arc++) {
         const bs = CONSTANTS.bossStageOfArc(arc);

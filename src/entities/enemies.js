@@ -22,6 +22,7 @@ export function applyKnockback(en) {
 // v19 HOLD THE LINE (see CONSTANTS.HOLD_LINE): nobody walks past the Striker.
 function atHoldLine(en) {
     if (en.isBoss || en.tutorialType) return false;
+    if (en.type !== 'zoner') return false; // v21: melee enemies loop the rail instead (see RAIL_LOOP)
     let line = st.player.x + (en.type === 'zoner' ? CONSTANTS.HOLD_LINE.zoner : CONSTANTS.HOLD_LINE.melee);
     // Never park out of reach: the line always sits within a jab of the
     // furthest point footwork can carry the Striker (else the stage soft-locks).
@@ -129,6 +130,8 @@ export function updateEnemies() {
             }
         }
 
+        if (en.floored > 0) en.floored--; // v21: enemy knockdown (drawn lying down)
+        if (en.bumpTimer > 0) en.bumpTimer--;
         if (en.stun > 0 || st.bossIntroTimer > 0) { if (en.vx > 0.1) applyKnockback(en); continue; }
 
 
@@ -207,6 +210,14 @@ export function updateEnemies() {
                     if (other !== en && other.lane === en.lane && other.x > en.x - 20 && other.x < en.x + 120) {
                         if (isBowling) { other.x += en.vx * 0.8; other.hp -= 25; if (other.stun <= 0) other.stun = 15; createImpact(other.x, other.y - 50, '#ff0055'); }
                         else { if (en.vx > 3) { other.x += en.vx * 0.5; if (other.stun <= 0) other.stun = 5; } }
+                        // v21 IMPACT DAMAGE: knocked hard into someone — both get hurt.
+                        const KD = CONSTANTS.ENEMY_KD;
+                        if (en.vx > KD.impactMinVx && !(other.bumpTimer > 0) && !other.isBoss && !other.tutorialType) {
+                            other.hp -= Math.round(en.vx * KD.impactDmg); en.hp -= Math.round(en.vx * KD.impactSelf);
+                            other.bumpTimer = KD.impactCooldown; if (other.stun <= 0) other.stun = 12;
+                            createImpact(other.x, other.y - 60, '#ffffff', 1.3); st.shake += 3;
+                            spawnFloatingText(other.x, other.y - 110, 'IMPACT!', '#facc15');
+                        }
                     }
                 });
             } else {
@@ -228,7 +239,7 @@ export function updateEnemies() {
             if (en.lane !== st.player.lane && !en.tutorialType && Math.abs(en.x - st.player.x) < 130) {
                 en.attackCooldown = Math.max(en.attackCooldown, CONSTANTS.getSlipThresholds(en.type).good + 12);
             }
-            if (Math.abs(en.x - st.player.x) < 130 && !isBlockedByEnemy && st.tutorialGrace <= 0 && (en.lane === st.player.lane || en.tutorialType)) {
+            if (Math.abs(en.x - st.player.x) < 130 && en.x > st.player.x - 20 && !isBlockedByEnemy && st.tutorialGrace <= 0 && (en.lane === st.player.lane || en.tutorialType)) {
 
                 if (en.attackCooldown === 22 && en.isActiveThreat) {
                     if (en.type === 'bruiser') playSound('bash_tell'); else playSound('jab_tell');
@@ -348,6 +359,14 @@ export function updateEnemies() {
             createKoShatter(en);
             st.enemies.splice(i, 1);
 
+        } else if (en.x < CONSTANTS.RAIL_LOOP.exitX && !en.isBoss && !en.tutorialType) {
+            // v21 RAIL LOOP: walked past you — it comes back round from the right.
+            const R = CONSTANTS.RAIL_LOOP;
+            const delay = R.reentryDelay[0] + Math.random() * (R.reentryDelay[1] - R.reentryDelay[0]);
+            en.lane = Math.random() < R.toPlayerLaneChance ? st.player.lane : Math.floor(Math.random() * 3);
+            en.x = st.width + 50 + delay * Math.max(1, en.speed);
+            en.vx = 0; en.stun = 0; en.attackCooldown = en.maxCooldown; en.stringIdx = 0;
+            en.loops = (en.loops || 0) + 1;
         } else if (en.x < -100) { st.enemies.splice(i, 1); }
     }
 }

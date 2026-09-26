@@ -270,6 +270,7 @@ export function advanceStage() {
         addScore(M.bonus * r.arc, undefined, undefined, { noCombo: true });
         tmArc(r);
         st.lastArcResult = r;
+        if (r.medal === 'gold') st.goldThisRun = true; // v21: unlocks the Prism Striker
         medalSteps = [{ type: 'text', title: `ARC ${r.arc} · ${M.label}${r.isBest ? ' ★' : ''}`,
             subtitle: `TIME ${fmtSecs(r.secs)} / PAR ${fmtSecs(r.par.time)}  ·  SCORE ${fmtK(r.score)} / PAR ${fmtK(r.par.score)}  ·  +${(M.bonus * r.arc).toLocaleString()}`, duration: 150 }];
         arcParStart();

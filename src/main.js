@@ -102,7 +102,7 @@ export function triggerUpgradeDraft() {
             const color = upgradeColor(option);
             // v20: tell the player which Fusion this pick builds toward.
             const fh = fusionHint(option, st, UPGRADE_POOL);
-            const fusionLine = fh ? `<div class="card-fusion">${fh.missing === 0 ? `UNLOCKS ${fh.evolved ? 'PERFECTED FUSION' : 'FUSION'}` : `${fh.missing} MORE →`} <b>${fh.name.toUpperCase()}</b></div>` : '';
+            const fusionLine = fh ? `<div class="card-fusion-hint">${fh.missing === 0 ? `UNLOCKS ${fh.evolved ? 'PERFECTED FUSION' : 'FUSION'}` : `${fh.missing} MORE →`} <b>${fh.name.toUpperCase()}</b></div>` : '';
             const btnHTML = `
                 <div class="draft-card card-${rarity}" style="--card-color:${color}; animation-delay:${index * 90 + (rarity === 'fusion' || rarity === 'evolved' || rarity === 'apex' ? 220 : 0)}ms" onmouseenter="window.engineFocusDraft(${index})" onclick="window.engineApplyUpgradeState('${escapeAttr(option.id)}')">
                     <div class="card-inner">
@@ -133,7 +133,7 @@ window.enginePlayUpgradeVignette = playUpgradeVignette;
 export { HUD, playSound, spawnFloatingText, showToast, triggerShockwave, doFlash, createImpact, createVacuum, createShatter, triggerTutorial, spawnTutorialEnemy, SequenceManager };
 
 export function resetGame() {
-    st.practice = null; st.heat = []; st.hpCeil = undefined; // v20
+    st.practice = null; st.heat = []; st.hpCeil = undefined; st.goldThisRun = false; // v20/v21
     st.health = 100; st.combo = 0; st.instinctMeter = 0; st.isInstinct = false;
     st.currentStage = 1; st.stageSpeedMult = 1.0;
     st.wavesCleared = 0; st.waveTimer = 0;
@@ -192,7 +192,8 @@ function startGame(daily = false, opts = {}) {
     st.runCount = (st.runCount || 0) + 1; initAudio();
     const toggle = document.getElementById('tutorial-toggle-cb');
     st.tutorialEnabled = opts.tutorial !== undefined ? !!opts.tutorial : (toggle ? toggle.checked === true : true);
-    st.dailyMode = !!daily;
+    daily = false; // v21: the Daily Challenge mode was removed (seeded runs remain for tests/debug)
+    st.dailyMode = false;
     st.dailyDateKey = daily ? todayKey() : null;
     const runSeed = opts.seed !== undefined ? opts.seed : (daily ? dailySeedFromDate() : ((Math.random() * 0xffffffff) >>> 0));
     seedRng(runSeed);
@@ -268,15 +269,53 @@ function renderHeatMenu() {
     const el = document.getElementById('heat-list'); if (!el) return;
     const on = loadHeat();
     el.innerHTML = CONSTANTS.HEAT.mods.map(h => `<div class="orb-btn sm wide heat-row${on.includes(h.id) ? ' on' : ''}" onclick="window.engineToggleHeat('${h.id}')"><div class="font-bold">${on.includes(h.id) ? '■' : '□'} ${h.name} <span class="heat-bonus">+${Math.round(h.bonus * 100)}%</span></div><div class="sub">${h.desc}</div></div>`).join('') +
-        `<div class="heat-total">HEAT ${heatLevel(on)} · SCORE ×${heatMultFor(on).toFixed(2)} <span>normal runs only · not the Daily</span></div>` +
+        `<div class="heat-total">HEAT ${heatLevel(on)} · SCORE ×${heatMultFor(on).toFixed(2)} <span>applies to every Gauntlet run while on</span></div>` +
         `<div class="orb-btn sm wide back" onclick="window.engineCloseSubmenu()"><div class="font-bold">BACK [ESC] / [B]</div></div>`;
 }
 window.engineToggleHeat = id => { toggleHeat(id); playSound('slip'); renderHeatMenu(); };
+// v21 UNLOCK ANNOUNCEMENTS: a new mode gets a proper pop-up (once) the next
+// time you're on the menu — playtest: "it was already unlocked… there needs to
+// be an unlock popup". Saves that unlocked it before v21 see it once too.
+const ANNOUNCE_KEY = 'neon_strike_announced_v1';
+const UNLOCK_NOTES = {
+    practice: { title: 'PRACTICE ROOM UNLOCKED', color: '#a78bfa', text: 'Pick any enemy you\'ve met — or a boss you\'ve reached — and drill it on a loop. You can\'t lose, nothing is scored, and the SLIP WINDOWS overlay shows exactly when to move.<br><br>Find it on the main menu.' },
+    heat: { title: 'HEAT UNLOCKED', color: '#fb923c', text: 'Stack optional modifiers — faster enemies, no healing, no ten-count… — for a bigger score multiplier on every run.<br><br>Toggle them from HEAT on the main menu.' }
+};
+function loadAnnounced() { try { const a = JSON.parse(localStorage.getItem(ANNOUNCE_KEY) || '[]'); return Array.isArray(a) ? a : []; } catch (e) { return []; } }
+export function pendingUnlocks(m = loadMeta()) {
+    const seen = loadAnnounced(), out = [];
+    if (practiceUnlocked(m) && !seen.includes('practice')) out.push('practice');
+    if (heatUnlocked(m) && !seen.includes('heat')) out.push('heat');
+    return out;
+}
+let unlockShowing = null;
+function showNextUnlock() {
+    if (st.screen !== 'start' && st.screen !== 'unlock') return;
+    const next = pendingUnlocks()[0];
+    const el = document.getElementById('unlock-screen');
+    const startEl = document.getElementById('start-screen');
+    if (!next) {
+        unlockShowing = null; if (el) el.style.display = 'none';
+        if (st.screen === 'unlock') { st.screen = 'start'; if (startEl) startEl.style.display = 'flex'; }
+        return;
+    }
+    if (startEl) startEl.style.display = 'none';
+    const n = UNLOCK_NOTES[next]; unlockShowing = next; st.screen = 'unlock';
+    const t = document.getElementById('unlock-title'), b = document.getElementById('unlock-text');
+    if (t) { t.innerText = n.title; t.style.color = n.color; }
+    if (b) b.innerHTML = n.text;
+    if (el) el.style.display = 'flex';
+    playSound('perfect_slip');
+}
+function dismissUnlock() {
+    if (!unlockShowing) return;
+    try { localStorage.setItem(ANNOUNCE_KEY, JSON.stringify([...loadAnnounced(), unlockShowing])); } catch (e) {}
+    showNextUnlock();
+}
+window.engineDismissUnlock = dismissUnlock;
 window.engineOpenPractice = () => openSubmenu('practice');
 window.engineOpenHeat = () => openSubmenu('heat');
 window.engineCloseSubmenu = closeSubmenu;
-function startDailyChallenge() { startGame(true); }
-window.startDailyChallenge = startDailyChallenge;
 
 function toggleHowTo() {
     initAudio(); const howTo = document.getElementById('howto-screen');
@@ -296,6 +335,7 @@ function returnToMenu() {
     const startScreen = document.getElementById('start-screen'); if(startScreen) startScreen.style.display = 'flex';
     ['pause-screen', 'gameover-screen', 'wager-screen', 'upgrade-screen', 'practice-screen', 'heat-screen'].forEach(hideOverlay);
     renderStartExtras();
+    showNextUnlock();
     SequenceManager.active = false; SequenceManager.waiting = false;
     stopMusic();
 }
@@ -599,6 +639,9 @@ function pollGamepad() {
             else if (jp(15) || stickRight) moveDraftFocus(1);
             else if (jp(0)) confirmDraftFocus();
         }
+        else if (st.screen === 'unlock') {
+            if (jp(0) || jp(1) || jp(9)) dismissUnlock();
+        }
         else if (st.screen === 'practice' || st.screen === 'heat') {
             if (navUp) moveMenu(-1); else if (navDown) moveMenu(1);
             else if (jp(0)) activateMenu();
@@ -636,6 +679,7 @@ window.addEventListener('keydown', e => {
     st.keys[e.code] = true;
     if (st.inputDevice !== 'keyboard') { setInputDevice('keyboard'); onDeviceChanged(); }
     if (st.screen === 'gameover' && recapPlaying()) { if (!e.repeat) showRecap(false); return; }
+    if (st.screen === 'unlock') { if (!e.repeat && (e.code === 'Enter' || e.code === 'Space' || e.code === 'Escape' || e.code === 'KeyA')) dismissUnlock(); return; }
     if (st.screen === 'practice' || st.screen === 'heat') {
         if (e.code === 'ArrowUp') moveMenu(-1);
         else if (e.code === 'ArrowDown') moveMenu(1);
@@ -761,7 +805,7 @@ export function update() {
     let banner = document.getElementById('instinct-ready-banner');
     if(st.instinctMeter >= 100 && !st.isInstinct) {
         if(!st.seenTutorials.instinct) {
-            triggerTutorial('instinct','INSTINCT MAXED',`Your meter is full!<br><br>Press <span class="text-cyan-400 font-bold">[${keyName('instinct')}] / pad A</span> to unleash Instinct &mdash; double knockback and massive hitstop.<br><br><b>Or hold it:</b> land a <span class="text-white font-bold">Perfect Slip</span> on a full meter and you drop into <span class="text-white font-bold">THE ZONE</span> &mdash; the world slows down around you.`);
+            triggerTutorial('instinct','INSTINCT MAXED',`Your meter is full!<br><br>Press <span class="text-cyan-400 font-bold">[${keyName('instinct')}] / pad A</span> to unleash Instinct &mdash; double knockback and massive hitstop.<br><br>It stays banked until you use it &mdash; save it for a crowd.<br><br><b>Then go deeper:</b> land a <span class="text-white font-bold">Perfect Slip while Instinct is running</span> and you drop into <span class="text-white font-bold">THE ZONE</span> &mdash; the world slows down around you.`);
             return;
         } else if (banner) banner.style.display = 'block';
     } else if (banner) banner.style.display = 'none';
@@ -896,7 +940,11 @@ function endRun() {
     // RETENTION: commit to the local leaderboard + lifetime stats and grant any
     // grade-keyed cosmetics this run earned. The per-run boss streak is simply
     // the number of bosses cleared in a row this run (a loss ends the run).
-    const rec = commitRunRecord({ score, grade, stage: st.currentStage, daily: st.dailyMode, bossKills: st.statBossKills });
+    const rec = commitRunRecord({ score, grade, stage: st.currentStage, daily: false, bossKills: st.statBossKills, goldMedal: !!st.goldThisRun });
+    // v21: a mode this run unlocked is called out on the results (full pop-up on the menu).
+    const newModes = pendingUnlocks().map(id => UNLOCK_NOTES[id].title);
+    const um = document.getElementById('unlock-banner');
+    if (um) { um.innerText = newModes.length ? `★ ${newModes.join(' · ')} — SEE THE MAIN MENU` : ''; um.style.display = newModes.length ? 'block' : 'none'; }
 
     // ONLINE: submit to the global leaderboard, fire-and-forget. Gated twice —
     // (1) the player must have opted in (default OFF; nothing is uploaded until
@@ -1057,7 +1105,6 @@ function renderRecords() {
 
     // Global boards (async): all-time + today's daily seed.
     renderGlobalBoard('global-alltime', onlineEnabled() ? fetchTopAllTime(10) : Promise.resolve(null), 'No global runs yet. Be the first.');
-    renderGlobalBoard('global-daily', onlineEnabled() ? fetchTopDaily(todayKey(), 10) : Promise.resolve(null), 'No daily runs yet today.');
 
     const list = document.getElementById('records-list');
     if (list) {
@@ -1224,7 +1271,7 @@ function loop() {
     st.lastKeys = { ...st.keys };
     requestAnimationFrame(loop);
 }
-function init() { st.width = 1000; st.height = 600; if(canvas) { canvas.width = st.width; canvas.height = st.height; } applySettingsSideEffects(); renderInstructions(); resetGame(); initAtmosphere(); fitViewport(); renderBest(); applyStrikerColor(); renderStartExtras(); loop(); }
+function init() { st.width = 1000; st.height = 600; if(canvas) { canvas.width = st.width; canvas.height = st.height; } applySettingsSideEffects(); renderInstructions(); resetGame(); initAtmosphere(); fitViewport(); renderBest(); applyStrikerColor(); renderStartExtras(); showNextUnlock(); loop(); }
 init();
 
 // Test hooks for the headless harness / bot sim (tests/*.mjs). Not used in play.
@@ -1238,10 +1285,7 @@ try {
             st, CONSTANTS, SequenceManager,
             jump(stage) { st.enemies = []; st.currentStage = Math.max(1, stage - 1); st.stageClearing = false; st.bossActive = false; advanceStage(); },
             draft(n = 1) { st.pendingUpgrades += n; triggerUpgradeDraft(); },
-            // Item-11 onboarding mockup: draws in-world teaching callouts over the
-            // live scene. null clears it. Never set outside ?debug.
             telemetry() { return { live: liveRun(), runs: loadTelemetry(), summary: summarizeTelemetry(loadTelemetry()) }; },
-            mockOnboarding(scene) { st.onboardingMock = scene || null; draw(); },
             // Save the current frame (canvas + a painted stand-in for the DOM HUD
             // clusters) to a local receiver — used to export mockup images.
             capture(name, url = 'http://127.0.0.1:8124/') {

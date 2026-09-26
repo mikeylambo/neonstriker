@@ -20,7 +20,7 @@ export const STRIKER_SKINS = [
     { id: 'ember',  name: 'Ember',        color: '#ff5a3c', unlock: 'grade:B', hint: 'Finish a run at grade B+' },
     { id: 'violet', name: 'Violet Ghost', color: '#c084fc', unlock: 'grade:A', hint: 'Finish a run at grade A+' },
     { id: 'gold',   name: 'Apex Gold',    color: '#facc15', unlock: 'grade:S', hint: 'Finish a run at grade S' },
-    { id: 'prism',  name: 'Prism',        color: '#34d399', unlock: 'daily',   hint: 'Beat a boss in a Daily Challenge' }
+    { id: 'prism',  name: 'Prism',        color: '#34d399', unlock: 'gold',    hint: 'Earn a GOLD Arc medal' }
 ];
 
 const GRADE_RANK = { C: 0, B: 1, A: 2, S: 3 };
@@ -96,7 +96,8 @@ export function unlocksForRun(run, unlocked) {
     for (const s of STRIKER_SKINS) {
         if (unlocked.includes(s.id) || out.includes(s.id)) continue;
         if (s.unlock === 'default') { out.push(s.id); continue; }
-        if (s.unlock === 'daily') { if (run.daily && (run.bossKills || 0) >= 1) out.push(s.id); continue; }
+        // v21: the Daily Challenge was removed; Prism now comes from a GOLD Arc medal.
+        if (s.unlock === 'gold') { if (run.goldMedal) out.push(s.id); continue; }
         if (s.unlock.startsWith('grade:')) {
             const need = s.unlock.split(':')[1];
             if ((GRADE_RANK[run.grade] ?? -1) >= (GRADE_RANK[need] ?? 99)) out.push(s.id);

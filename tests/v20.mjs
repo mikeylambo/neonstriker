@@ -112,8 +112,8 @@ localStorage.clear(); heat.saveHeat(['crowded']);
 localStorage.setItem('neon_strike_meta_v1', JSON.stringify({ bestBossStreak: 1, bestStage: 7 }));
 T.startGame({ tutorial: false, seed: 9 });
 ok('heat: applies to a normal run once unlocked', heat.heatOn('crowded'));
-T.startGame(true);
-ok('heat: never in the Daily', !heat.heatOn('crowded'));
+T.startGame(true); // v21: the Daily flag is ignored now (mode removed)
+ok('daily: removed — a daily start is a normal run', st.dailyMode === false);
 localStorage.setItem('neon_strike_meta_v1', JSON.stringify({ bestBossStreak: 0, bestStage: 3 }));
 T.startGame({ tutorial: false, seed: 9 });
 ok('heat: locked until the Arc 1 boss is beaten', !heat.heatOn('crowded'));

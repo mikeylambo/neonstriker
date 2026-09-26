@@ -50,7 +50,7 @@ ok('input grace: the held confirm press does not trigger Instinct', !st.isInstin
 // ---- 3. body blocking: no backing up into / walking through enemies ----
 run(); st.enemies = [mob({ x: 200, lane: 0, attackCooldown: 999 })];
 st.player.x = 190; player.resolveBodies(st.player);
-ok('bodies: you can\'t stand past the front line in another lane', st.player.x <= 200 - 70 + 0.01, `${st.player.x}`);
+ok('bodies: v21 — enemies in OTHER lanes walk past without shoving you', st.player.x === 190, `${st.player.x}`);
 run(); st.enemies = [mob({ x: 220, lane: 1, attackCooldown: 999 })];
 st.player.x = 200; player.resolveBodies(st.player);
 ok('bodies: same lane keeps a body gap', 220 - st.player.x >= 62 - 0.01, `${st.player.x}`);
@@ -62,9 +62,9 @@ player.registerPerfectGhostStep();
 ok('ghost parity: Instinct gained', st.instinctMeter > 0, `${st.instinctMeter}`);
 ok('ghost parity: slip-heal perks apply', st.health > 50, `${st.health}`);
 ok('ghost parity: EXP gained', st.exp > exp0);
-run(); st.instinctMeter = 100; st.isInstinct = false; st.player.ghostPerfected = false;
+run(); st.instinctMeter = 100; st.isInstinct = true; st.zoneTimer = 0; st.player.ghostPerfected = false;
 player.registerPerfectGhostStep();
-ok('ghost parity: on a full meter it opens the Zone', st.isInstinct && st.zoneTimer > 0);
+ok('ghost parity: during Instinct it opens the Zone (v21)', st.isInstinct && st.zoneTimer > 0);
 
 // ---- 5. player hitstun, knockback, floored on counter hits ----
 run(); st.health = 100; const x0 = st.player.x;

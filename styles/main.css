@@ -665,8 +665,8 @@ body.cine-zone.cine-zone-soft #gameCanvas { filter: grayscale(.7) contrast(1.2);
 /* v20 arc par readout (under the stage name) */
 .hud-par { margin-top: 3px; font-size: .55rem; font-weight: 700; letter-spacing: 1px; color: #9ca3af; font-variant-numeric: tabular-nums; }
 /* v20 fusion preview on draft cards */
-.card-fusion { margin-top: 8px; font-size: .6rem; font-weight: 800; letter-spacing: 1px; color: #fbbf24; text-shadow: 0 0 8px rgba(251,191,36,.45); }
-.card-fusion b { color: #fff; }
+.card-fusion-hint { margin-top: 8px; font-size: .6rem; font-weight: 800; letter-spacing: 1px; color: #fbbf24; text-shadow: 0 0 8px rgba(251,191,36,.45); }
+.card-fusion-hint b { color: #fff; }
 /* v20 death recap */
 .recap-overlay { position: absolute; inset: 0; z-index: 30; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; background: #05050b; cursor: pointer; }
 .recap-title { font-weight: 900; letter-spacing: 6px; color: #ff2bd6; font-size: 1.1rem; }
@@ -693,10 +693,14 @@ body.cine-zone.cine-zone-soft #gameCanvas { filter: grayscale(.7) contrast(1.2);
 .heat-bonus { color: #fb923c; font-size: .7rem; margin-left: 6px; }
 .heat-total { text-align: center; font-weight: 900; letter-spacing: 2px; color: #fb923c; margin: 6px 0; }
 .heat-total span { display: block; font-size: .55rem; color: #6b7280; font-weight: 700; }
-.start-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; width: min(640px, 92vw); margin-top: 4px; }
+.start-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; width: min(640px, 92vw); margin-top: 4px; }
 .start-grid .orb-btn { margin: 0; }
 .start-grid .span2 { grid-column: span 2; }
 .orb-btn.start-main { margin-bottom: 10px; }
 .start-grid .orb-btn, .submenu-grid .orb-btn, .submenu-list .orb-btn, .menu-pair .orb-btn { width: auto; }
 .start-grid .orb-btn.menu-focus::before, .submenu-grid .orb-btn.menu-focus::before, .submenu-list .orb-btn.menu-focus::before { left: 6px; }
 .submenu-list .orb-btn.sm { padding: 7px 14px; }
+/* v21 unlock announcement */
+#unlock-screen { z-index: 60; background: rgba(4,4,10,.96); }
+.unlock-kicker { font-size: .7rem; font-weight: 900; letter-spacing: 6px; color: #9ca3af; margin-bottom: 6px; }
+#unlock-banner { font-size: .75rem; font-weight: 900; letter-spacing: 2px; color: #a78bfa; margin: 2px 0 4px; text-shadow: 0 0 10px rgba(167,139,250,.6); }

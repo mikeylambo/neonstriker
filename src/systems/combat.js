@@ -79,6 +79,7 @@ export function checkHit(type) {
 
             if (buffActive) dmg *= 2;
             if (loaded) dmg = Math.round(dmg * 1.3);
+            if (en.floored > 0) dmg = Math.round(dmg * CONSTANTS.ENEMY_KD.groundMult); // v21: hitting a downed enemy
 
             // v17 EVOLVED FUSION (Shatter Nova): a Counter-Charged Cross tears a chunk
             // off a boss (still gated by the stagger thresholds), or shatters the lane.
@@ -226,6 +227,15 @@ export function checkHit(type) {
             } else { baseKB = Math.floor(baseKB / (en.weight || 1)); }
 
             en.vx += baseKB * powerFactor;
+            // v21 ENEMY KNOCKDOWN: a heavy enough blow floors the enemy.
+            const KD = CONSTANTS.ENEMY_KD, impulse = baseKB * powerFactor;
+            if (!en.isBoss && !en.tutorialType && en.hp > 0 && !(en.floored > 0) && impulse >= KD.threshold) {
+                const slam = Math.round(impulse * KD.slamMult);
+                en.hp -= slam; en.floored = KD.frames; en.stun = Math.max(en.stun, KD.frames);
+                en.attackCooldown = en.maxCooldown;
+                spawnFloatingText(en.x + jX(), en.y - 120 + jY(), 'KNOCKDOWN!', '#ffffff');
+                st.shake += 6; st.statEnemyKnockdowns = (st.statEnemyKnockdowns || 0) + 1;
+            }
 
             if (type === 'cross' || type === 'hook' || type === 'check_hook' || buffActive || trueReadActive || isJab) {
                 let canStun = true; let stunAmount = 0;

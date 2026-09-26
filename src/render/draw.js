@@ -6,7 +6,6 @@ import { drawBoxer } from './boxer.js';
 import { SequenceManager } from '../systems/sequences.js';
 import { shakeScale, getSettings } from '../systems/settings.js';
 import { buildColor } from '../systems/colors.js';
-import { drawOnboardingMock } from './onboarding_mock.js';
 import { drawBossPoster, drawLiveLanes, drawAfterimages, drawKnockdownUI, drawKoFx, drawScorePops, drawBossTells, drawBossHud, drawFinisherDim, drawFinisherUI, drawVignette, drawThreatPips, drawSlipWindows } from './overlays.js';
 
 const dl = (x1, y1, x2, y2) => { ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); };
@@ -171,7 +170,13 @@ export function draw() {
     st.enemies.forEach(en => {
         let opacity = en.isActiveThreat ? 1.0 : 0.4;
         if (st.purifyTimer > 0) opacity *= 0.5;
-        drawBoxer(ctx, en, false, opacity);
+        if (en.floored > 0 && !en.isBoss) {
+            // v21: knocked down — tipped over backwards, then back up
+            const T = CONSTANTS.ENEMY_KD.frames, t = en.floored, k = Math.min(1, (T - t) / 6, t / 8);
+            ctx.save(); ctx.translate(en.x + 25, en.y); ctx.rotate(Math.PI / 2 * k); ctx.translate(-(en.x + 25), -en.y);
+            drawBoxer(ctx, { ...en, state: 'hurt' }, false, opacity);
+            ctx.restore();
+        } else drawBoxer(ctx, en, false, opacity);
 
         // --- RESTORED: Zoner Telegraph & Shield Visuals ---
         if (en.isActiveThreat) {
@@ -292,7 +297,6 @@ export function draw() {
     drawFinisherUI(ctx);
     drawKnockdownUI(ctx);
     drawBossPoster(ctx);
-    if (st.onboardingMock) drawOnboardingMock(ctx); // item-11 mockup (debug hook only)
     SequenceManager.draw(ctx, st.width, st.height);
     drawVignette(ctx);
 }
