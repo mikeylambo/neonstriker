@@ -34,6 +34,7 @@ import { captureRecap, resetRecap, startRecapPlayback, recapPlaying, stopRecap, 
 import { arcParStart, arcParTick, loadMedals, MEDALS, ARC_PAR, fmtSecs, fmtK } from './systems/arc_par.js';
 import { tmStartRun, tmTick, tmEndRun, liveRun, fmtTime, loadTelemetry, summarizeTelemetry, exportTelemetryJSON } from './systems/telemetry.js';
 import { startKnockdown, updateKnockdown, canBeKnockedDown } from './systems/knockdown.js';
+import { updateBossKo } from './systems/boss_ko.js';
 import { playUpgradeVignette, updateVignette, skipVignette, upgradeRarity, upgradeColor, evolutionLabel } from './systems/vignette.js';
 
 export const $ = function(id) { return document.getElementById(id); };
@@ -168,7 +169,7 @@ export function resetGame() {
     st.finisher = null; st.finisherZoom = 1; st.vignette = null;
     st.stageHitsTaken = 0; st.statFlawless = 0;
     st.knockdown = null; st.knockdownsThisArc = 0; st.statKnockdowns = 0; st.zoneTimer = 0; st.bossPoster = null; st.enemyEchoes = [];
-    st.afterimages = []; st.koFx = []; st.rankOrder = []; st.orbPulse = 0;
+    st.afterimages = []; st.koFx = []; st.bossKo = null; st.rankOrder = []; st.orbPulse = 0;
     st.paletteFrom = 1; st.paletteTo = 1; st.paletteT = 1; st.lightSweep = -1;
     setMusicIntensity(0);
 
@@ -782,7 +783,11 @@ export function update() {
 
     updateAtmosphere();
     updateParticlesAndTrails();
+    updateBossKo();
     if (SequenceManager.active) {
+        // v22: attack / confirm cuts a stage card short.
+        const K = getBinds(), jp = c => !!st.keys[c] && !st.lastKeys[c];
+        if (jp(K.jab) || jp(K.cross) || jp(K.hook) || jp('Enter') || jp('Space') || st.pad.jab || st.pad.cross) SequenceManager.skipCard();
         SequenceManager.update();
         if (typeof updateHUD === 'function') updateHUD();
         return;
@@ -842,7 +847,14 @@ export function update() {
     if (st.stageClearing && st.enemies.length === 0 && !st.bossActive && st.screen === 'playing' && st.purifyTimer <= 0) {
         if (CONSTANTS.isBossStage(st.currentStage) && !st.bossDefeatedThisStage) {
             if (typeof spawnBoss === 'function') spawnBoss();
+        } else if (st.pendingUpgrades > 0 && !st.practice && !tutorialRunning()) {
+            // v22: an Evolution earned in the fight (a boss KO nearly always pays
+            // one) is drafted right here, before the walk-out — not after the
+            // cards, where it used to be the last hurdle before the next punch.
+            if (++st.draftHold >= DRAFT_HOLD_FRAMES) triggerUpgradeDraft();
+            return;
         } else {
+            st.draftHold = 0;
             advanceStage();
             if (typeof updateHUD === 'function') updateHUD();
             return;

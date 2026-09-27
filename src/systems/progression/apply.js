@@ -192,7 +192,7 @@ export function advanceStage() {
     st.wavesCleared = 0;
     st.waveThreshold = 0;
 
-    st.waveTimer = 90;
+    st.waveTimer = 30; // v22: was 90 — the walk-in already buys the breather
     st.health = Math.min(st.maxHealth, st.health + 25);
 
     if (st.player) {
@@ -244,8 +244,9 @@ export function advanceStage() {
         }
     }
     const LANE_LABEL = ['TOP', 'MID', 'BOTTOM'];
+    // v22: a hot lane is called out as the fight starts, not on its own card.
     const hotLaneCard = st.hotLane >= 0
-        ? [{ type: 'text', title: 'LANE SURGE', subtitle: `${LANE_LABEL[st.hotLane]} LANE RUNNING HOT`, duration: 120 }]
+        ? [{ type: 'call', fn: () => showToast(`LANE SURGE · ${LANE_LABEL[st.hotLane]} LANE RUNNING HOT`, '#fb923c') }]
         : [];
     let stageData = CONSTANTS.ARC_STAGE_TABLES[safeArcIndex]?.[levelInArc] || { stageName: "UNKNOWN DEPTHS" };
 
@@ -263,7 +264,7 @@ export function advanceStage() {
     // v17 TEN-COUNT: the once-per-arc knockdown refreshes with each new arc.
     if (isNewArc) st.knockdownsThisArc = 0;
     // v20 ARC PAR: judge the Arc that just ended, pay its medal, restart the clock.
-    let medalSteps = [];
+    let medalLine = '';
     if (isNewArc) {
         const r = judgeArc(CONSTANTS.getArcIndex(prevStage));
         const M = MEDALS[r.medal];
@@ -271,32 +272,31 @@ export function advanceStage() {
         tmArc(r);
         st.lastArcResult = r;
         if (r.medal === 'gold') st.goldThisRun = true; // v21: unlocks the Prism Striker
-        medalSteps = [{ type: 'text', title: `ARC ${r.arc} · ${M.label}${r.isBest ? ' ★' : ''}`,
-            subtitle: `TIME ${fmtSecs(r.secs)} / PAR ${fmtSecs(r.par.time)}  ·  SCORE ${fmtK(r.score)} / PAR ${fmtK(r.par.score)}  ·  +${(M.bonus * r.arc).toLocaleString()}`, duration: 150 }];
+        medalLine = `ARC ${r.arc} ${M.label}${r.isBest ? ' ★' : ''}  ·  TIME ${fmtSecs(r.secs)} / PAR ${fmtSecs(r.par.time)}  ·  +${(M.bonus * r.arc).toLocaleString()}`;
         arcParStart();
     }
+    // v22 (playtest: "6-8 screens between the boss KO and the next punch"): the
+    // medal, the ARC N card and the law/theme card are now ONE chapter card, and
+    // a new Arc skips the round billing (the chapter card IS the billing).
     const chapterCardSteps = isNewArc ? [
-        { type: 'tint', color: 'rgba(0, 0, 0, 0.82)', duration: 20 },
-        ...medalSteps,
-        { type: 'text', title: `ARC ${safeArcIndex}`, subtitle: law.name.toUpperCase(), duration: 85 },
         { type: 'tint', color: ARC_TINTS[safeArcIndex] || 'rgba(236, 72, 153, 0.18)', duration: 10 },
-        { type: 'text', title: law.name.toUpperCase(), subtitle: law.theme, duration: 160 },
+        { type: 'text', title: `ARC ${safeArcIndex} · ${law.name.toUpperCase()}`, subtitle: law.theme, detail: medalLine, duration: 170 },
         { type: 'tint', color: 'transparent', duration: 10 },
     ] : [];
 
     const rm = reducedMotion();
     SequenceManager.playDynamic([
-        { type: 'walkout', duration: rm ? 24 : 46 },
+        { type: 'walkout', duration: rm ? 24 : 36 },
         { type: 'call', fn: () => { playSound('sweep'); refreshStageHud(); } },
-        { type: 'sweep', duration: rm ? 24 : 54 },
+        { type: 'sweep', duration: rm ? 24 : 40 },
         ...chapterCardSteps,
         // v17 ROUND FRAMING: every fight opens on a bell + billing card; a boss
         // stage instead gets its title-fight poster when the champion walks out.
-        ...(isBoss ? [] : [{ type: 'billing', duration: 120, card: roundCard(st.currentStage, subtitleText) }]),
+        ...(isBoss || isNewArc ? [] : [{ type: 'billing', duration: 110, card: roundCard(st.currentStage, subtitleText) }]),
         { type: 'wager' },
-        ...hotLaneCard,
-        { type: 'walkin', duration: rm ? 24 : 44 },
+        { type: 'walkin', duration: rm ? 24 : 40 },
         { type: 'call', fn: refreshStageHud },
+        ...hotLaneCard,
         { type: 'resume' }
     ]);
 }

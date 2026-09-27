@@ -91,7 +91,7 @@ ok('hold line: a zoner stops within a jab of your furthest step', gap < 120 && g
 run(); st.player.x = 180; st.tutorialGrace = 0;
 st.enemies = [mob({ type: 'zoner', x: 900, lane: 1, speed: 4, attackCooldown: 999, maxCooldown: 999 })];
 frames(400, () => enemies.updateEnemies());
-ok('hold line: with room to press, a zoner keeps its range', st.enemies[0].x - st.player.x >= 190, `${(st.enemies[0].x - st.player.x).toFixed(0)}`);
+ok('hold line (v22: zoners walk the rail): a zoner in your lane closes to within a jab', st.enemies[0].x - st.player.x < 120 && st.enemies[0].x > st.player.x, `${(st.enemies[0].x - st.player.x).toFixed(0)}`);
 
 // ---- 7. strings follow a slip ----
 run(); st.tutorialGrace = 0; st.seenTutorials.string_id = true;

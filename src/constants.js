@@ -364,11 +364,12 @@ export const CONSTANTS = {
     // standing in it shocks you. It forces a lane change — lane boxing, not corners.
     LIVE_LANE: { warnFrames: 26, liveFrames: 80, tickEvery: 24, damage: 6 },
 
-    // --- v19 HOLD THE LINE: enemies stop at a line in front of the Striker in EVERY
-    // lane instead of walking past him and off-screen (playtest: "is it possible to
-    // end all enemies on each map? right now it doesn't"). Every enemy can now be
-    // KO'd — a stage only clears when they all are. Zoners hold back at range.
-    HOLD_LINE: { melee: 90, zoner: 200, reach: 105 },
+    // v22 SLIP SPEED (playtest: "increase lane slip speed?"). A slip is judged
+    // the instant it's pressed (lane is logical), so the glide between lanes is
+    // pure feel: 0.25 -> 0.42 per frame settles in ~5 frames instead of ~9. The
+    // re-slip cooldown (12 -> 9) is the only balance-relevant part: it's how fast
+    // you can chain top->bottom. Kept above ~6 so up/down can't be jittered.
+    SLIP_MOVE: { glide: 0.42, cooldown: 9 },
     // v21 ENEMY KNOCKDOWNS + IMPACT DAMAGE. A blow whose knockback impulse (after
     // weight, Power, counter and Instinct multipliers) reaches `threshold` floors
     // a non-boss enemy: slam damage, can't act for `frames`, follow-ups deal
@@ -378,9 +379,10 @@ export const CONSTANTS = {
     ENEMY_KD: { threshold: 40, frames: 48, slamMult: 0.4, groundMult: 1.25, impactMinVx: 6, impactDmg: 1.2, impactSelf: 0.5, impactCooldown: 20 },
     // v21 RAIL LOOP: melee enemies in OTHER lanes don't park and wait any more —
     // they walk past the Striker, off the left edge, and come back in from the
-    // right (half the time in your lane) until they're KO'd. Zoners still hold
-    // range (they're turrets). Nobody attacks from behind.
-    RAIL_LOOP: { exitX: -60, reentryDelay: [30, 100], toPlayerLaneChance: 0.5 }, // zoners keep range — press forward to reach them
+    // right (half the time in your lane) until they're KO'd. v22: Zoners loop too
+    // (playtest: they sat parked mid-lane) — firing as they drift past, never
+    // from behind. (Replaces the v19 hold line.)
+    RAIL_LOOP: { exitX: -60, reentryDelay: [30, 100], toPlayerLaneChance: 0.5 },
 
     // --- v19 PLAYER HIT FEEL: taking a hit now has weight — hit-stop on the
     // Striker, a knockback slide, longer hitstun, and heavy boss blows (or a boss

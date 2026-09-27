@@ -4,7 +4,7 @@ import { playSound } from '../vfx_audio/audio.js';
 import { spawnFloatingText, createImpact, createHitRing, doFlash, createShatter, triggerShockwave, createVacuum } from '../vfx_audio/effects.js';
 import { takeDamage } from '../entities/player.js';
 import { random } from './rng.js';
-import { isBossOpen } from './boss_rules.js';
+import { isBossOpen, telegraphLead } from './boss_rules.js';
 import { gateBossDamage } from './finisher.js';
 import { addScore, hitScore } from './score.js';
 import { buildColor } from './colors.js';
@@ -151,7 +151,7 @@ export function checkHit(type) {
                             // jitter the re-entry timing so its post-shift beat can't be
                             // memorized, around the shipped value of 18.
                             createImpact(en.x, en.y - 60, '#aa00ff');
-                            en.attackCooldown = (en.arcMods && en.arcMods.reentryDelayVariant) ? (14 + Math.floor(random() * 11)) : 18;
+                            en.attackCooldown = telegraphLead(en) + ((en.arcMods && en.arcMods.reentryDelayVariant) ? Math.floor(random() * 11) : 4); en.telegraphed = false; // v22: a full telegraph is owed (was 14-24, under the 22-frame floor)
                             return false;
                         }
                     } else if (en.bossMashCount >= 3 && (en.shiftCooldown || 0) <= 0 && en.hp > 0 && !trueReadActive) {

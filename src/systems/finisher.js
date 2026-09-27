@@ -224,7 +224,6 @@ function endPrompts(result) {
         doFlash(0.8);
         st.shake = Math.max(st.shake, 40);
         for (let i = 0; i < 3; i++) triggerShockwave(en.x, en.y - 60 - i * 10, i === 1 ? '#ffffff' : (st.bossThemeColor || '#ff0055'));
-        spawnFloatingText(en.x + en.w / 2, en.y - 260, 'K.O.', '#ffffff');
     }
 }
 

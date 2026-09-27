@@ -248,8 +248,37 @@ function handleNeonEnforcer(en) {
     }
 }
 
+// v22 PHANTOM SHIFT, proactive (playtest: "did the assassin boss lose its
+// teleport?"). The old shift only fired when you mashed it 4x while it wasn't
+// OPEN inside a 20-frame window — which v19's counter hits punish, so clean play
+// never saw it. Now, when its OPEN window closes after every few attacks (sooner
+// in OVERDRIVE), it vanishes and re-materialises in another lane, backed off out
+// of reach, with a full telegraph still owed before its next strike.
+const PHANTOM_SHIFT = { every: 3, everyOverdrive: 2, backOff: 250 };
+function phantomShift(en) {
+    en.attacksSinceShift = 0;
+    const oldX = en.x, oldY = en.y;
+    if (en.trails) { en.trails.push({ x: oldX, y: oldY, lane: en.lane, opacity: 0.7 }); if (en.trails.length > 5) en.trails.shift(); }
+    createShatter(oldX, oldY - 60, '#aa00ff');
+    playSound('ghost_step');
+    const otherLanes = [0, 1, 2].filter(l => l !== en.lane);
+    const pinch = (en.arcMods && en.arcMods.lanePinchBias) || 0;
+    en.lane = random() < pinch
+        ? otherLanes.reduce((a, b) => Math.abs(b - st.player.lane) < Math.abs(a - st.player.lane) ? b : a)
+        : otherLanes[Math.floor(random() * otherLanes.length)];
+    en.y = st.height * CONSTANTS.LANE_Y[en.lane];
+    en.x = Math.min(st.width - 120, st.player.x + PHANTOM_SHIFT.backOff);
+    en.attackCooldown = Math.max(en.attackCooldown, telegraphLead(en) + 20);
+    en.telegraphed = false; en.feintSwitched = false; en.decoyRolledThisCycle = false; en.decoyTimer = 0;
+    createImpact(en.x, en.y - 60, '#aa00ff');
+    spawnFloatingText(en.x, en.y - 150, 'PHANTOM SHIFT', '#aa00ff');
+}
+
 function handlePhantomBoxer(en) {
-    if (en.recoverTimer > 0) { en.recoverTimer--; return; } // OPEN — punish it
+    if (en.recoverTimer > 0) { // OPEN — punish it
+        if (--en.recoverTimer === 0 && (en.attacksSinceShift || 0) >= (en.phase === 2 ? PHANTOM_SHIFT.everyOverdrive : PHANTOM_SHIFT.every)) phantomShift(en);
+        return;
+    }
     en.attackCooldown--;
 
     if (en.x > st.player.x + 100) {
@@ -304,6 +333,7 @@ function handlePhantomBoxer(en) {
             en.justAttacked = 5;
             const struck = en.currentMove;
             resolveBossStrike(en, 15, false);
+            en.attacksSinceShift = (en.attacksSinceShift || 0) + 1;
             en.decoyRolledThisCycle = false; en.decoyTimer = 0; en.feintSwitched = false;
             let roll = random();
             if (en.phase === 1) {

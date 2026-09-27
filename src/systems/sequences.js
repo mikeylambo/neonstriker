@@ -9,7 +9,7 @@ import { playSound } from '../vfx_audio/audio.js';
 // change is staged as walk-out -> neon light sweep (palette morph) -> cards ->
 // walk-in. Step types:
 //   tint    { color, duration }           fade the overlay to `color`
-//   text    { title, subtitle, duration } a title card on a band
+//   text    { title, subtitle, detail?, duration } a title card on a band
 //   walkout { duration }                  the Striker walks off the right edge
 //   sweep   { duration }                  light band crosses; palette from->to
 //   walkin  { duration }                  the Striker walks in from the left
@@ -78,6 +78,18 @@ export const SequenceManager = {
         this.startStep();
     },
 
+    // v22: a press (attack / confirm) cuts the current card short — into its
+    // fade-out — so a returning player isn't made to sit through the billing.
+    // Walk-outs, sweeps and the wager are never skipped this way.
+    skipCard: function() {
+        if (!this.active || this.waiting) return false;
+        const step = this.currentSequence && this.currentSequence[this.stepIndex];
+        if (!step || (step.type !== 'text' && step.type !== 'billing')) return false;
+        if (this.text.age < 12 || this.timer <= 10) return false;
+        this.timer = 10; this.text.alpha = Math.min(this.text.alpha, 0.5);
+        return true;
+    },
+
     startStep: function() {
         // Instant steps (call / skipped wager) chain without spending a frame.
         for (let guard = 0; guard < 64; guard++) {
@@ -105,7 +117,7 @@ export const SequenceManager = {
                 this.overlayColor = step.color;
             }
             if (step.type === 'text') {
-                this.text = { title: step.title, subtitle: step.subtitle || '', alpha: 1, age: 0 };
+                this.text = { title: step.title, subtitle: step.subtitle || '', detail: step.detail || '', alpha: 1, age: 0 };
             }
             if (step.type === 'billing') {
                 // v17 ROUND FRAMING: bell + "ROUND N — VENUE" billing card.
@@ -191,7 +203,7 @@ export const SequenceManager = {
             const slide = reducedMotion() ? 0 : (1 - inT) * 60;
             ctx.save();
             // Translucent band over the live arena (was a near-opaque full-screen tint).
-            const bandH = this.text.subtitle ? 110 : 80;
+            const bandH = this.text.detail ? 140 : this.text.subtitle ? 110 : 80;
             const bg = ctx.createLinearGradient(0, 0, w, 0);
             bg.addColorStop(0, 'rgba(0,0,0,0)'); bg.addColorStop(0.2, `rgba(0,0,0,${0.72 * a * inT})`);
             bg.addColorStop(0.8, `rgba(0,0,0,${0.72 * a * inT})`); bg.addColorStop(1, 'rgba(0,0,0,0)');
@@ -209,6 +221,11 @@ export const SequenceManager = {
                 ctx.fillStyle = `rgba(0, 255, 255, ${a * inT})`;
                 ctx.font = 'bold 20px Orbitron';
                 ctx.fillText(this.text.subtitle, w / 2 - slide, h / 2 + 30);
+            }
+            if (this.text.detail) {
+                ctx.fillStyle = `rgba(250, 204, 21, ${a * inT})`;
+                ctx.font = 'bold 13px Orbitron';
+                ctx.fillText(this.text.detail, w / 2, h / 2 + 60);
             }
             ctx.restore();
         }

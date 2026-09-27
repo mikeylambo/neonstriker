@@ -387,11 +387,12 @@
     // string the lane he struck charges up (warning), then runs live for a beat:
     // standing in it shocks you. It forces a lane change — lane boxing, not corners.
     LIVE_LANE: { warnFrames: 26, liveFrames: 80, tickEvery: 24, damage: 6 },
-    // --- v19 HOLD THE LINE: enemies stop at a line in front of the Striker in EVERY
-    // lane instead of walking past him and off-screen (playtest: "is it possible to
-    // end all enemies on each map? right now it doesn't"). Every enemy can now be
-    // KO'd — a stage only clears when they all are. Zoners hold back at range.
-    HOLD_LINE: { melee: 90, zoner: 200, reach: 105 },
+    // v22 SLIP SPEED (playtest: "increase lane slip speed?"). A slip is judged
+    // the instant it's pressed (lane is logical), so the glide between lanes is
+    // pure feel: 0.25 -> 0.42 per frame settles in ~5 frames instead of ~9. The
+    // re-slip cooldown (12 -> 9) is the only balance-relevant part: it's how fast
+    // you can chain top->bottom. Kept above ~6 so up/down can't be jittered.
+    SLIP_MOVE: { glide: 0.42, cooldown: 9 },
     // v21 ENEMY KNOCKDOWNS + IMPACT DAMAGE. A blow whose knockback impulse (after
     // weight, Power, counter and Instinct multipliers) reaches `threshold` floors
     // a non-boss enemy: slam damage, can't act for `frames`, follow-ups deal
@@ -401,10 +402,10 @@
     ENEMY_KD: { threshold: 40, frames: 48, slamMult: 0.4, groundMult: 1.25, impactMinVx: 6, impactDmg: 1.2, impactSelf: 0.5, impactCooldown: 20 },
     // v21 RAIL LOOP: melee enemies in OTHER lanes don't park and wait any more —
     // they walk past the Striker, off the left edge, and come back in from the
-    // right (half the time in your lane) until they're KO'd. Zoners still hold
-    // range (they're turrets). Nobody attacks from behind.
+    // right (half the time in your lane) until they're KO'd. v22: Zoners loop too
+    // (playtest: they sat parked mid-lane) — firing as they drift past, never
+    // from behind. (Replaces the v19 hold line.)
     RAIL_LOOP: { exitX: -60, reentryDelay: [30, 100], toPlayerLaneChance: 0.5 },
-    // zoners keep range — press forward to reach them
     // --- v19 PLAYER HIT FEEL: taking a hit now has weight — hit-stop on the
     // Striker, a knockback slide, longer hitstun, and heavy boss blows (or a boss
     // catching you mid-punch while it isn't OPEN: a COUNTER HIT) FLOOR you.
@@ -2374,7 +2375,6 @@
       doFlash(0.8);
       gameState.shake = Math.max(gameState.shake, 40);
       for (let i = 0; i < 3; i++) triggerShockwave(en.x, en.y - 60 - i * 10, i === 1 ? "#ffffff" : gameState.bossThemeColor || "#ff0055");
-      spawnFloatingText(en.x + en.w / 2, en.y - 260, "K.O.", "#ffffff");
     }
   }
   function finishFinisher() {
@@ -2677,7 +2677,8 @@
                 }
                 en.y = gameState.height * CONSTANTS.LANE_Y[en.lane];
                 createImpact(en.x, en.y - 60, "#aa00ff");
-                en.attackCooldown = en.arcMods && en.arcMods.reentryDelayVariant ? 14 + Math.floor(random() * 11) : 18;
+                en.attackCooldown = telegraphLead(en) + (en.arcMods && en.arcMods.reentryDelayVariant ? Math.floor(random() * 11) : 4);
+                en.telegraphed = false;
                 return false;
               }
             } else if (en.bossMashCount >= 3 && (en.shiftCooldown || 0) <= 0 && en.hp > 0 && !trueReadActive) {
@@ -2989,7 +2990,7 @@
       if (oldLane !== gameState.player.lane) {
         if (gameState.player.slipCooldown <= 0) {
           checkPerfectSlip(oldLane);
-          gameState.player.slipCooldown = 12;
+          gameState.player.slipCooldown = CONSTANTS.SLIP_MOVE.cooldown;
           resetJabString();
           if (gameState.progressionMods.pivotSlip) pivotForward();
           resolveBodies(gameState.player);
@@ -3371,7 +3372,7 @@
     if (p.guardReadTimer > 0) p.guardReadTimer--;
     updateAfterimages();
     const targetY = gameState.height * CONSTANTS.LANE_Y[p.lane];
-    p.y += (targetY - p.y) * 0.25;
+    p.y += (targetY - p.y) * CONSTANTS.SLIP_MOVE.glide;
     if (p.state !== "hurt" && p.state !== "punching") {
       if (input.holdRight) p.x = Math.min(FOOTWORK_MAX_X, p.x + FOOTWORK_ADVANCE_SPD);
       else if (input.holdLeft) p.x = Math.max(FOOTWORK_MIN_X, p.x - FOOTWORK_RETREAT_SPD);
@@ -3803,9 +3804,32 @@
       beginPunishWindow(en, struck);
     }
   }
+  var PHANTOM_SHIFT = { every: 3, everyOverdrive: 2, backOff: 250 };
+  function phantomShift(en) {
+    en.attacksSinceShift = 0;
+    const oldX = en.x, oldY = en.y;
+    if (en.trails) {
+      en.trails.push({ x: oldX, y: oldY, lane: en.lane, opacity: 0.7 });
+      if (en.trails.length > 5) en.trails.shift();
+    }
+    createShatter(oldX, oldY - 60, "#aa00ff");
+    playSound("ghost_step");
+    const otherLanes = [0, 1, 2].filter((l) => l !== en.lane);
+    const pinch = en.arcMods && en.arcMods.lanePinchBias || 0;
+    en.lane = random() < pinch ? otherLanes.reduce((a, b) => Math.abs(b - gameState.player.lane) < Math.abs(a - gameState.player.lane) ? b : a) : otherLanes[Math.floor(random() * otherLanes.length)];
+    en.y = gameState.height * CONSTANTS.LANE_Y[en.lane];
+    en.x = Math.min(gameState.width - 120, gameState.player.x + PHANTOM_SHIFT.backOff);
+    en.attackCooldown = Math.max(en.attackCooldown, telegraphLead(en) + 20);
+    en.telegraphed = false;
+    en.feintSwitched = false;
+    en.decoyRolledThisCycle = false;
+    en.decoyTimer = 0;
+    createImpact(en.x, en.y - 60, "#aa00ff");
+    spawnFloatingText(en.x, en.y - 150, "PHANTOM SHIFT", "#aa00ff");
+  }
   function handlePhantomBoxer(en) {
     if (en.recoverTimer > 0) {
-      en.recoverTimer--;
+      if (--en.recoverTimer === 0 && (en.attacksSinceShift || 0) >= (en.phase === 2 ? PHANTOM_SHIFT.everyOverdrive : PHANTOM_SHIFT.every)) phantomShift(en);
       return;
     }
     en.attackCooldown--;
@@ -3845,6 +3869,7 @@
         en.justAttacked = 5;
         const struck = en.currentMove;
         resolveBossStrike(en, 15, false);
+        en.attacksSinceShift = (en.attacksSinceShift || 0) + 1;
         en.decoyRolledThisCycle = false;
         en.decoyTimer = 0;
         en.feintSwitched = false;
@@ -4887,6 +4912,70 @@
     return { move: k.seq[k.idx], progress: Math.min(1.2, Math.max(0, (t + K.beatFrames) / K.beatFrames)), t };
   }
 
+  // src/systems/boss_ko.js
+  var KO = { flight: 26, bounce: 14, shatterAt: 118 };
+  var BOSS_KO_FRAMES = 132;
+  function startBossKo(en) {
+    const midY = gameState.height * CONSTANTS.LANE_Y[en.lane];
+    gameState.bossKo = {
+      body: { ...en, trails: [], state: "hurt", stun: 1, isActiveThreat: true, telegraphed: false },
+      x0: en.x,
+      x1: Math.min(gameState.width - 90, en.x + 170),
+      y0: midY,
+      t: 0,
+      rot: 0,
+      lift: 0,
+      alpha: 1,
+      shattered: false,
+      color: en.color
+    };
+    gameState.shake = Math.max(gameState.shake, 18);
+    playSound("hit");
+  }
+  function updateBossKo() {
+    const k = gameState.bossKo;
+    if (!k) return;
+    k.t++;
+    const b = k.body;
+    if (k.t <= KO.flight) {
+      const u = k.t / KO.flight;
+      b.x = k.x0 + (k.x1 - k.x0) * (1 - Math.pow(1 - u, 2));
+      k.lift = Math.sin(Math.PI * u) * 70;
+      k.rot = Math.PI / 2 * Math.min(1, u * 1.15);
+      if (k.t % 3 === 0) createImpact(b.x + 20, k.y0 - 60 - k.lift, k.color);
+    } else if (k.t <= KO.flight + KO.bounce) {
+      if (k.t === KO.flight + 1) {
+        gameState.shake = Math.max(gameState.shake, 26);
+        doFlash(0.35);
+        playSound("bounce");
+        triggerShockwave(b.x + 60, k.y0, k.color);
+        for (let i = 0; i < 6; i++) createImpact(b.x + i * 22, k.y0 - 6, "#ffffff");
+      }
+      const u = (k.t - KO.flight) / KO.bounce;
+      k.lift = Math.sin(Math.PI * u) * 16;
+      k.rot = Math.PI / 2;
+    } else {
+      k.lift = 0;
+      k.rot = Math.PI / 2;
+      const since = k.t - (KO.flight + KO.bounce);
+      if (since === 6 || since === 22 || since === 38) playSound("bell");
+    }
+    if (k.t === KO.shatterAt && !k.shattered) {
+      k.shattered = true;
+      createKoShatter({ ...b, x: b.x + 30, y: k.y0 + 30, h: 60, isBoss: true });
+    }
+    if (k.t > KO.shatterAt) k.alpha = Math.max(0, k.alpha - 0.12);
+    if (k.t >= BOSS_KO_FRAMES) gameState.bossKo = null;
+  }
+  function koBannerAlpha() {
+    const k = gameState.bossKo;
+    if (!k) return 0;
+    const t = k.t - KO.flight;
+    if (t < 0) return 0;
+    const fadeOut = BOSS_KO_FRAMES - k.t;
+    return Math.min(1, t / 8, fadeOut / 14);
+  }
+
   // src/systems/vignette.js
   var VIGNETTE_FULL_FRAMES = 70;
   var VIGNETTE_REPEAT_FRAMES = 36;
@@ -5630,6 +5719,34 @@
     }
     ctx3.restore();
   }
+  function drawKoBanner(ctx3) {
+    const a = koBannerAlpha();
+    if (a <= 0) return;
+    const k = gameState.bossKo, w = gameState.width, h = gameState.height, rm = reducedMotion();
+    const pop = rm ? 1 : 1 + 0.35 * Math.max(0, 1 - (k.t - 26) / 10);
+    ctx3.save();
+    ctx3.globalAlpha = a;
+    const band = ctx3.createLinearGradient(0, 0, w, 0);
+    band.addColorStop(0, "rgba(0,0,0,0)");
+    band.addColorStop(0.25, "rgba(0,0,0,0.78)");
+    band.addColorStop(0.75, "rgba(0,0,0,0.78)");
+    band.addColorStop(1, "rgba(0,0,0,0)");
+    ctx3.fillStyle = band;
+    ctx3.fillRect(0, h * 0.27, w, 130);
+    ctx3.translate(w / 2, h * 0.27 + 88);
+    ctx3.scale(pop, pop);
+    ctx3.textAlign = "center";
+    ctx3.font = "900 italic 96px Orbitron";
+    ctx3.shadowColor = k.color || "#ff0055";
+    ctx3.shadowBlur = 30;
+    ctx3.fillStyle = "#ffffff";
+    ctx3.fillText("K.O.", 0, 0);
+    ctx3.shadowBlur = 0;
+    ctx3.font = "bold 16px Orbitron";
+    ctx3.fillStyle = k.color || "#ff0055";
+    ctx3.fillText(`${k.body.name || "CHAMPION"} IS DOWN`, 0, 30);
+    ctx3.restore();
+  }
   var POSTER_FRAMES = 180;
   function drawBossPoster(ctx3) {
     const P = gameState.bossPoster;
@@ -5873,6 +5990,18 @@
       this.stepIndex++;
       this.startStep();
     },
+    // v22: a press (attack / confirm) cuts the current card short — into its
+    // fade-out — so a returning player isn't made to sit through the billing.
+    // Walk-outs, sweeps and the wager are never skipped this way.
+    skipCard: function() {
+      if (!this.active || this.waiting) return false;
+      const step = this.currentSequence && this.currentSequence[this.stepIndex];
+      if (!step || step.type !== "text" && step.type !== "billing") return false;
+      if (this.text.age < 12 || this.timer <= 10) return false;
+      this.timer = 10;
+      this.text.alpha = Math.min(this.text.alpha, 0.5);
+      return true;
+    },
     startStep: function() {
       for (let guard = 0; guard < 64; guard++) {
         if (!this.currentSequence || this.stepIndex >= this.currentSequence.length) {
@@ -5907,7 +6036,7 @@
           this.overlayColor = step.color;
         }
         if (step.type === "text") {
-          this.text = { title: step.title, subtitle: step.subtitle || "", alpha: 1, age: 0 };
+          this.text = { title: step.title, subtitle: step.subtitle || "", detail: step.detail || "", alpha: 1, age: 0 };
         }
         if (step.type === "billing") {
           this.text = { title: "", subtitle: "", alpha: 1, age: 0 };
@@ -5997,7 +6126,7 @@
         const inT = Math.min(1, this.text.age / 12);
         const slide = reducedMotion() ? 0 : (1 - inT) * 60;
         ctx3.save();
-        const bandH = this.text.subtitle ? 110 : 80;
+        const bandH = this.text.detail ? 140 : this.text.subtitle ? 110 : 80;
         const bg = ctx3.createLinearGradient(0, 0, w, 0);
         bg.addColorStop(0, "rgba(0,0,0,0)");
         bg.addColorStop(0.2, `rgba(0,0,0,${0.72 * a * inT})`);
@@ -6016,6 +6145,11 @@
           ctx3.fillStyle = `rgba(0, 255, 255, ${a * inT})`;
           ctx3.font = "bold 20px Orbitron";
           ctx3.fillText(this.text.subtitle, w / 2 - slide, h / 2 + 30);
+        }
+        if (this.text.detail) {
+          ctx3.fillStyle = `rgba(250, 204, 21, ${a * inT})`;
+          ctx3.font = "bold 13px Orbitron";
+          ctx3.fillText(this.text.detail, w / 2, h / 2 + 60);
         }
         ctx3.restore();
       }
@@ -6267,7 +6401,7 @@
     gameState.stageProgress = 0;
     gameState.wavesCleared = 0;
     gameState.waveThreshold = 0;
-    gameState.waveTimer = 90;
+    gameState.waveTimer = 30;
     gameState.health = Math.min(gameState.maxHealth, gameState.health + 25);
     if (gameState.player) {
       gameState.player.state = "idle";
@@ -6304,13 +6438,13 @@
       }
     }
     const LANE_LABEL = ["TOP", "MID", "BOTTOM"];
-    const hotLaneCard = gameState.hotLane >= 0 ? [{ type: "text", title: "LANE SURGE", subtitle: `${LANE_LABEL[gameState.hotLane]} LANE RUNNING HOT`, duration: 120 }] : [];
+    const hotLaneCard = gameState.hotLane >= 0 ? [{ type: "call", fn: () => showToast(`LANE SURGE \xB7 ${LANE_LABEL[gameState.hotLane]} LANE RUNNING HOT`, "#fb923c") }] : [];
     let stageData = ((_a = CONSTANTS.ARC_STAGE_TABLES[safeArcIndex]) == null ? void 0 : _a[levelInArc]) || { stageName: "UNKNOWN DEPTHS" };
     let titleText = isBoss ? stageData.stageName : `${law.shortName} \u2014 ${stageData.stageName}`;
     let subtitleText = isBoss ? law.uiText : CONSTANTS.STAGE_TAGLINES[levelInArc];
     const isNewArc = CONSTANTS.locateStage(gameState.currentStage).ordinal === 1 && gameState.currentStage > 1;
     if (isNewArc) gameState.knockdownsThisArc = 0;
-    let medalSteps = [];
+    let medalLine = "";
     if (isNewArc) {
       const r = judgeArc(CONSTANTS.getArcIndex(prevStage));
       const M = MEDALS[r.medal];
@@ -6318,38 +6452,30 @@
       tmArc(r);
       gameState.lastArcResult = r;
       if (r.medal === "gold") gameState.goldThisRun = true;
-      medalSteps = [{
-        type: "text",
-        title: `ARC ${r.arc} \xB7 ${M.label}${r.isBest ? " \u2605" : ""}`,
-        subtitle: `TIME ${fmtSecs(r.secs)} / PAR ${fmtSecs(r.par.time)}  \xB7  SCORE ${fmtK(r.score)} / PAR ${fmtK(r.par.score)}  \xB7  +${(M.bonus * r.arc).toLocaleString()}`,
-        duration: 150
-      }];
+      medalLine = `ARC ${r.arc} ${M.label}${r.isBest ? " \u2605" : ""}  \xB7  TIME ${fmtSecs(r.secs)} / PAR ${fmtSecs(r.par.time)}  \xB7  +${(M.bonus * r.arc).toLocaleString()}`;
       arcParStart();
     }
     const chapterCardSteps = isNewArc ? [
-      { type: "tint", color: "rgba(0, 0, 0, 0.82)", duration: 20 },
-      ...medalSteps,
-      { type: "text", title: `ARC ${safeArcIndex}`, subtitle: law.name.toUpperCase(), duration: 85 },
       { type: "tint", color: ARC_TINTS[safeArcIndex] || "rgba(236, 72, 153, 0.18)", duration: 10 },
-      { type: "text", title: law.name.toUpperCase(), subtitle: law.theme, duration: 160 },
+      { type: "text", title: `ARC ${safeArcIndex} \xB7 ${law.name.toUpperCase()}`, subtitle: law.theme, detail: medalLine, duration: 170 },
       { type: "tint", color: "transparent", duration: 10 }
     ] : [];
     const rm = reducedMotion();
     SequenceManager.playDynamic([
-      { type: "walkout", duration: rm ? 24 : 46 },
+      { type: "walkout", duration: rm ? 24 : 36 },
       { type: "call", fn: () => {
         playSound("sweep");
         refreshStageHud();
       } },
-      { type: "sweep", duration: rm ? 24 : 54 },
+      { type: "sweep", duration: rm ? 24 : 40 },
       ...chapterCardSteps,
       // v17 ROUND FRAMING: every fight opens on a bell + billing card; a boss
       // stage instead gets its title-fight poster when the champion walks out.
-      ...isBoss ? [] : [{ type: "billing", duration: 120, card: roundCard(gameState.currentStage, subtitleText) }],
+      ...isBoss || isNewArc ? [] : [{ type: "billing", duration: 110, card: roundCard(gameState.currentStage, subtitleText) }],
       { type: "wager" },
-      ...hotLaneCard,
-      { type: "walkin", duration: rm ? 24 : 44 },
+      { type: "walkin", duration: rm ? 24 : 40 },
       { type: "call", fn: refreshStageHud },
+      ...hotLaneCard,
       { type: "resume" }
     ]);
   }
@@ -6520,13 +6646,6 @@
   function applyKnockback(en) {
     en.x += en.vx;
     en.vx *= 0.85;
-  }
-  function atHoldLine(en) {
-    if (en.isBoss || en.tutorialType) return false;
-    if (en.type !== "zoner") return false;
-    let line = gameState.player.x + (en.type === "zoner" ? CONSTANTS.HOLD_LINE.zoner : CONSTANTS.HOLD_LINE.melee);
-    line = Math.min(line, CONSTANTS.FOOTWORK.maxX + CONSTANTS.HOLD_LINE.reach);
-    return en.x <= line;
   }
   function endAttack(en) {
     if ((en.stringLen || 1) > 1 && (en.stringIdx || 0) < en.stringLen - 1) {
@@ -6730,7 +6849,7 @@
           en.vx = 0;
           if (en.isBoss && en.x < gameState.player.x + 100 && en.name !== "STATIC MONK") {
             en.x = gameState.player.x + 100;
-          } else if (!isBlockedByEnemy && !isAtPlayer && !atHoldLine(en) && gameState.tutorialGrace <= 0 && en.name !== "STATIC MONK") {
+          } else if (!isBlockedByEnemy && !isAtPlayer && gameState.tutorialGrace <= 0 && en.name !== "STATIC MONK") {
             en.x -= en.speed;
           }
         }
@@ -6878,7 +6997,10 @@
           if (!en.tutorialType) addScore(killScore(en.type), en.x + en.w / 2, en.y - 130);
         }
         if (en.tutorialType) gameState.tutorialDelay = 60;
-        createKoShatter(en);
+        if (en.isBoss) {
+          startBossKo(en);
+          gameState.purifyTimer = Math.max(gameState.purifyTimer, BOSS_KO_FRAMES + 10);
+        } else createKoShatter(en);
         gameState.enemies.splice(i, 1);
       } else if (en.x < CONSTANTS.RAIL_LOOP.exitX && !en.isBoss && !en.tutorialType) {
         const R = CONSTANTS.RAIL_LOOP;
@@ -7584,6 +7706,15 @@
       }
       drawBossTells(ctx, en);
     });
+    if (gameState.bossKo) {
+      const k = gameState.bossKo, b = k.body, fy = k.y0 - k.lift;
+      ctx.save();
+      ctx.translate(b.x + 25, fy);
+      ctx.rotate(k.rot);
+      ctx.translate(-(b.x + 25), -fy);
+      drawBoxer(ctx, { ...b, y: fy }, false, k.alpha);
+      ctx.restore();
+    }
     gameState.player.trailColor = buildColor();
     if (gameState.knockdown) {
       ctx.fillStyle = `rgba(0, 0, 0, ${(0.72 * Math.max(0.25, gameState.knockdown.fall)).toFixed(3)})`;
@@ -7626,6 +7757,7 @@
     drawFinisherUI(ctx);
     drawKnockdownUI(ctx);
     drawBossPoster(ctx);
+    drawKoBanner(ctx);
     SequenceManager.draw(ctx, gameState.width, gameState.height);
     drawVignette(ctx);
   }
@@ -7916,6 +8048,7 @@
     gameState.enemyEchoes = [];
     gameState.afterimages = [];
     gameState.koFx = [];
+    gameState.bossKo = null;
     gameState.rankOrder = [];
     gameState.orbPulse = 0;
     gameState.paletteFrom = 1;
@@ -8668,7 +8801,10 @@
     if (gameState.shake > 0) gameState.shake *= 0.88;
     updateAtmosphere();
     updateParticlesAndTrails();
+    updateBossKo();
     if (SequenceManager.active) {
+      const K2 = getBinds(), jp = (c) => !!gameState.keys[c] && !gameState.lastKeys[c];
+      if (jp(K2.jab) || jp(K2.cross) || jp(K2.hook) || jp("Enter") || jp("Space") || gameState.pad.jab || gameState.pad.cross) SequenceManager.skipCard();
       SequenceManager.update();
       if (typeof updateHUD === "function") updateHUD();
       return;
@@ -8726,7 +8862,11 @@
     if (gameState.stageClearing && gameState.enemies.length === 0 && !gameState.bossActive && gameState.screen === "playing" && gameState.purifyTimer <= 0) {
       if (CONSTANTS.isBossStage(gameState.currentStage) && !gameState.bossDefeatedThisStage) {
         if (typeof spawnBoss === "function") spawnBoss();
+      } else if (gameState.pendingUpgrades > 0 && !gameState.practice && !tutorialRunning()) {
+        if (++gameState.draftHold >= DRAFT_HOLD_FRAMES) triggerUpgradeDraft();
+        return;
       } else {
+        gameState.draftHold = 0;
         advanceStage();
         if (typeof updateHUD === "function") updateHUD();
         return;

@@ -65,7 +65,7 @@ function executeMovementInput(action) {
         if (action === 'down') st.player.lane = Math.min(2, st.player.lane + 1);
         if (oldLane !== st.player.lane) {
             if (st.player.slipCooldown <= 0) {
-                checkPerfectSlip(oldLane); st.player.slipCooldown = 12; resetJabString();
+                checkPerfectSlip(oldLane); st.player.slipCooldown = CONSTANTS.SLIP_MOVE.cooldown; resetJabString();
                 if (st.progressionMods.pivotSlip) pivotForward();
                 resolveBodies(st.player);
             }
@@ -445,7 +445,7 @@ export function updatePlayer() {
     updateAfterimages();
 
     const targetY = st.height * CONSTANTS.LANE_Y[p.lane];
-    p.y += (targetY - p.y) * 0.25;
+    p.y += (targetY - p.y) * CONSTANTS.SLIP_MOVE.glide;
 
     // FOOTWORK: [RIGHT] presses forward, [LEFT] gives ground (v17: LEFT is footwork
     // ONLY — Ghost Step has its own button). With neither held, a soft pull home.

@@ -82,7 +82,7 @@ eq('rail: still alive (must be KO\'d to clear)', st.enemies.length, 1);
 run(); st.tutorialGrace = 0;
 const z = mob({ type: 'zoner', lane: 0, x: 900, speed: 4, attackCooldown: 999, maxCooldown: 999 });
 st.enemies = [z]; frames(300, () => enemies.updateEnemies());
-ok('rail: zoners still hold range', z.x > st.player.x + 100 && !z.loops, `${z.x | 0}`);
+ok('rail (v22): zoners loop the rail too', z.loops >= 1, `${z.x | 0} loops ${z.loops}`);
 run(); const inLane = mob({ lane: 1, x: st.player.x + 300, speed: 4, attackCooldown: 999 });
 st.enemies = [inLane]; frames(200, () => enemies.updateEnemies());
 ok('rail: an enemy in YOUR lane stops and fights', inLane.x >= st.player.x && inLane.x <= st.player.x + 95 && !inLane.loops, `${inLane.x | 0}`);

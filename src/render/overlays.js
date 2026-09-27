@@ -12,6 +12,7 @@ import { promptProgress } from '../systems/finisher.js';
 import { reducedMotion } from '../systems/settings.js';
 import { knockdownPrompt } from '../systems/knockdown.js';
 import { buildColor } from '../systems/colors.js';
+import { koBannerAlpha } from '../systems/boss_ko.js';
 import { evolutionLabel, upgradeColor } from '../systems/vignette.js';
 import { glyph, glyphText, inputDevice } from '../systems/input_device.js';
 
@@ -464,6 +465,29 @@ export function drawKnockdownUI(ctx) {
         ctx.globalAlpha = Math.min(1, k.judgeTimer / 10); ctx.fillStyle = k.judge.color; ctx.font = '900 italic 26px Orbitron';
         ctx.fillText(k.judge.text, W * 0.72, H * 0.46 - 120);
     }
+    ctx.restore();
+}
+
+// ---------- v22 BOSS K.O. BANNER (screen space, while the champion is down) ----------
+export function drawKoBanner(ctx) {
+    const a = koBannerAlpha();
+    if (a <= 0) return;
+    const k = st.bossKo, w = st.width, h = st.height, rm = reducedMotion();
+    const pop = rm ? 1 : 1 + 0.35 * Math.max(0, 1 - (k.t - 26) / 10);
+    ctx.save();
+    ctx.globalAlpha = a;
+    const band = ctx.createLinearGradient(0, 0, w, 0);
+    band.addColorStop(0, 'rgba(0,0,0,0)'); band.addColorStop(0.25, 'rgba(0,0,0,0.78)');
+    band.addColorStop(0.75, 'rgba(0,0,0,0.78)'); band.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = band; ctx.fillRect(0, h * 0.27, w, 130);
+    ctx.translate(w / 2, h * 0.27 + 88); ctx.scale(pop, pop);
+    ctx.textAlign = 'center';
+    ctx.font = '900 italic 96px Orbitron';
+    ctx.shadowColor = k.color || '#ff0055'; ctx.shadowBlur = 30;
+    ctx.fillStyle = '#ffffff'; ctx.fillText('K.O.', 0, 0);
+    ctx.shadowBlur = 0;
+    ctx.font = 'bold 16px Orbitron'; ctx.fillStyle = k.color || '#ff0055';
+    ctx.fillText(`${k.body.name || 'CHAMPION'} IS DOWN`, 0, 30);
     ctx.restore();
 }
 

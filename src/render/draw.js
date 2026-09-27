@@ -6,7 +6,7 @@ import { drawBoxer } from './boxer.js';
 import { SequenceManager } from '../systems/sequences.js';
 import { shakeScale, getSettings } from '../systems/settings.js';
 import { buildColor } from '../systems/colors.js';
-import { drawBossPoster, drawLiveLanes, drawAfterimages, drawKnockdownUI, drawKoFx, drawScorePops, drawBossTells, drawBossHud, drawFinisherDim, drawFinisherUI, drawVignette, drawThreatPips, drawSlipWindows } from './overlays.js';
+import { drawBossPoster, drawLiveLanes, drawAfterimages, drawKnockdownUI, drawKoFx, drawScorePops, drawBossTells, drawBossHud, drawFinisherDim, drawFinisherUI, drawVignette, drawThreatPips, drawSlipWindows, drawKoBanner } from './overlays.js';
 
 const dl = (x1, y1, x2, y2) => { ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); };
 
@@ -252,6 +252,14 @@ export function draw() {
         // the windup meter and OPEN tag have clean space.
     });
 
+    // v22 BOSS KO: the champion flies back, hits the canvas and lies there.
+    if (st.bossKo) {
+        const k = st.bossKo, b = k.body, fy = k.y0 - k.lift;
+        ctx.save(); ctx.translate(b.x + 25, fy); ctx.rotate(k.rot); ctx.translate(-(b.x + 25), -fy);
+        drawBoxer(ctx, { ...b, y: fy }, false, k.alpha);
+        ctx.restore();
+    }
+
     // v17: build colour rides the punch trail (never the body/gloves).
     st.player.trailColor = buildColor();
     if (st.knockdown) {
@@ -297,6 +305,7 @@ export function draw() {
     drawFinisherUI(ctx);
     drawKnockdownUI(ctx);
     drawBossPoster(ctx);
+    drawKoBanner(ctx);
     SequenceManager.draw(ctx, st.width, st.height);
     drawVignette(ctx);
 }

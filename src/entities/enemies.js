@@ -10,6 +10,7 @@ import { setMusicIntensity } from '../vfx_audio/audio.js';
 import { keyName } from '../systems/settings.js';
 import { createKoShatter } from '../vfx_audio/effects.js';
 import { tmKill } from '../systems/telemetry.js';
+import { startBossKo, BOSS_KO_FRAMES } from '../systems/boss_ko.js';
 
 // v17 PUNCH STRINGS: after each hit of a string resolves (landed, slipped,
 // guarded or ghosted), the next hit re-targets the Striker's lane and winds up
@@ -17,17 +18,6 @@ import { tmKill } from '../systems/telemetry.js';
 // last hit hands back to the normal recovery cycle.
 export function applyKnockback(en) {
     en.x += en.vx; en.vx *= 0.85;
-}
-
-// v19 HOLD THE LINE (see CONSTANTS.HOLD_LINE): nobody walks past the Striker.
-function atHoldLine(en) {
-    if (en.isBoss || en.tutorialType) return false;
-    if (en.type !== 'zoner') return false; // v21: melee enemies loop the rail instead (see RAIL_LOOP)
-    let line = st.player.x + (en.type === 'zoner' ? CONSTANTS.HOLD_LINE.zoner : CONSTANTS.HOLD_LINE.melee);
-    // Never park out of reach: the line always sits within a jab of the
-    // furthest point footwork can carry the Striker (else the stage soft-locks).
-    line = Math.min(line, CONSTANTS.FOOTWORK.maxX + CONSTANTS.HOLD_LINE.reach);
-    return en.x <= line;
 }
 
 function endAttack(en) {
@@ -223,7 +213,7 @@ export function updateEnemies() {
             } else {
                 en.vx = 0;
                 if (en.isBoss && en.x < st.player.x + 100 && en.name !== 'STATIC MONK') { en.x = st.player.x + 100; }
-                else if (!isBlockedByEnemy && !isAtPlayer && !atHoldLine(en) && st.tutorialGrace <= 0 && en.name !== 'STATIC MONK') { en.x -= en.speed; }
+                else if (!isBlockedByEnemy && !isAtPlayer && st.tutorialGrace <= 0 && en.name !== 'STATIC MONK') { en.x -= en.speed; }
             }
 
             en.y += ((st.height * CONSTANTS.LANE_Y[en.lane]) - en.y) * 0.3;
@@ -356,7 +346,10 @@ export function updateEnemies() {
             }
             if (en.tutorialType) st.tutorialDelay = 60;
             // v17 KO SHATTER: the body breaks into neon shards that stream into an orb.
-            createKoShatter(en);
+            // v22: a boss gets a real KO first — launched, floored, counted out —
+            // and only shatters once it's lying still (systems/boss_ko.js).
+            if (en.isBoss) { startBossKo(en); st.purifyTimer = Math.max(st.purifyTimer, BOSS_KO_FRAMES + 10); }
+            else createKoShatter(en);
             st.enemies.splice(i, 1);
 
         } else if (en.x < CONSTANTS.RAIL_LOOP.exitX && !en.isBoss && !en.tutorialType) {
