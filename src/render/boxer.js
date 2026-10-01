@@ -90,6 +90,8 @@ export function drawBoxer(ctx, entity, isPlayer, opacity = 1, isTrail = false) {
         if (entity.type === 'bruiser') { h *= 0.85; pL = 15 * d; }
     }
 
+    // v23 IDLE FOOTWORK bounce (legs shuffle below)
+    if (isPlayer && !isTrail && !entity.walking && (entity.state === 'idle' || entity.state === 'guarding')) bn = -Math.abs(Math.sin(t * 0.011)) * 5;
     let hY = rY - h * 0.2 + bn, nY = rY - h * 0.75 + bn, hdY = rY - h * 0.85 + bn;
     if (!isPlayer && entity.type === 'bruiser') hdY += 10;
     if (!isPlayer && entity.type === 'assassin') hdY += 5;
@@ -108,6 +110,13 @@ export function drawBoxer(ctx, entity, isPlayer, opacity = 1, isTrail = false) {
         // v16 stage transitions: a real walk cycle for the walk-out / walk-in.
         const wc = Math.sin(t * 0.018) * 16;
         lg1X = wc * d; lg2X = -wc * d; bn += Math.abs(Math.sin(t * 0.018)) * -3;
+    }
+    else if (isPlayer && !isTrail && (entity.state === 'idle' || entity.state === 'guarding')) {
+        // v23 IDLE FOOTWORK: a boxer's bounce — up on the balls of the feet, a
+        // little shuffle and sway — instead of standing planted.
+        const bt = t * 0.011;
+        lX += Math.sin(bt * 0.5) * 2.5 * d;
+        lg1X = 15 * d + Math.sin(bt) * 3 * d; lg2X = -10 * d - Math.sin(bt) * 3 * d;
     }
     else if (isPlayer) { lg1X = 15 * d; lg2X = -10 * d; }
     else {

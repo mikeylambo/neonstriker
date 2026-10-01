@@ -253,11 +253,11 @@ const frames = (n, fn) => { for (let i = 0; i < n; i++) fn(i); };
     ok('ten-count: stumbles drag recovery toward the floor', knock.recoveryHpFrac({ perfects: 0, goods: 3, stumbles: 4, prompts: 3 }) < knock.recoveryHpFrac({ perfects: 0, goods: 3, stumbles: 0, prompts: 3 }) && knock.recoveryHpFrac({ perfects: 0, goods: 0, stumbles: 9, prompts: 3 }) === CONSTANTS.KNOCKDOWN.hpMin);
     ok('ten-count: short invulnerability after getting up', st.player.invuln > 0);
     st.player.invuln = 0; st.health = 0; T.update();
-    eq('ten-count: a second knockdown in the same arc ends the run', st.screen, 'gameover');
+    eq('ten-count: a second knockdown in the same arc ends the run (v23: via the Continue prompt)', st.screen, 'continue');
 
     setupRun(); st.health = 0; T.update();
     let g2 = 0; while (st.knockdown && g2++ < 700) { st.lastKeys = { ...st.keys }; st.keys = {}; T.update(); }
-    eq('ten-count: no input -> counted out at ten', st.screen, 'gameover');
+    eq('ten-count: no input -> counted out at ten (v23: Continue prompt)', st.screen, 'continue');
 
     setupRun(); st.health = 0; T.update();
     const mash = st.knockdown.idx; st.lastKeys = {}; st.keys = { KeyA: true }; frames(60, () => { st.lastKeys = { ...st.keys }; st.keys = { KeyA: !st.keys.KeyA }; T.update(); });

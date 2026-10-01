@@ -387,6 +387,16 @@
     // string the lane he struck charges up (warning), then runs live for a beat:
     // standing in it shocks you. It forces a lane change — lane boxing, not corners.
     LIVE_LANE: { warnFrames: 26, liveFrames: 80, tickEvery: 24, damage: 6 },
+    // v23 STATIC MONK CANISTERS: blast radius around where the canister detonates
+    // (your lane hit is still decided by lane, as before) and damage to adds.
+    CANISTER: { radius: 120, addDamage: 50 },
+    // v23 BOSS KNOCKBACK: hooks only move a boss while it's OPEN; any push is capped
+    // (vx cap -> ~35px / ~55px of slide) so nothing punts a boss out of range. A
+    // Loaded Cross staggers a boss through stun resist for `loadedStagger` frames.
+    BOSS_KB: { cap: 5, loadedCap: 8, loadedStagger: 26 },
+    // v23 SET UP (playtest: "late game jab becomes useless"): landing Jab 3 of a
+    // 1-2-3 string sets up the next Hook / Cross inside `window` frames for `mult`.
+    JAB_SETUP: { window: 40, mult: 1.5 },
     // v22 SLIP SPEED (playtest: "increase lane slip speed?"). A slip is judged
     // the instant it's pressed (lane is logical), so the glide between lanes is
     // pure feel: 0.25 -> 0.42 per frame settles in ~5 frames instead of ~9. The
@@ -2262,6 +2272,7 @@
     en.justAttacked = 0;
     gameState.hazards = [];
     gameState.liveLanes = [];
+    gameState.canisters = [];
     gameState.hitstop = 0;
     const label = kind === "ko" ? "FINAL BLOW" : "STAGGERED!";
     spawnFloatingText(en.x + en.w / 2, en.y - 190, label, kind === "ko" ? "#ff0055" : "#ffffff");
@@ -2538,11 +2549,14 @@
     const spark = buildColor();
     let novaLanes = [];
     if (gameState.player.slipBuff > 0) gameState.player.slipBuff--;
+    const setUpShot = (type === "hook" || type === "cross" || type === "check_hook") && (gameState.player.setUpTimer || 0) > 0;
+    let setUpShown = false;
+    if (setUpShot) gameState.player.setUpTimer = 0;
     const jX = () => Math.random() * 50 - 25;
     const jY = () => Math.random() * 30 - 15;
     for (let i = 0; i < gameState.enemies.length; i++) {
       let en = gameState.enemies[i];
-      if (en.lane === gameState.player.lane && en.x > gameState.player.x - 20 && en.x < gameState.player.x + reach) {
+      if (en.lane === gameState.player.lane && !en.passed && en.x > gameState.player.x - 20 && en.x < gameState.player.x + reach) {
         if (en.tutorialType === "counter") {
           if (buffActive) {
             en.hp = 0;
@@ -2608,6 +2622,13 @@
         }
         if (buffActive) dmg *= 2;
         if (loaded) dmg = Math.round(dmg * 1.3);
+        if (setUpShot) {
+          dmg = Math.round(dmg * CONSTANTS.JAB_SETUP.mult);
+          if (!setUpShown) {
+            setUpShown = true;
+            spawnFloatingText(en.x + jX(), en.y - 130 + jY(), "SET UP!", "#ffffff");
+          }
+        }
         if (en.floored > 0) dmg = Math.round(dmg * CONSTANTS.ENEMY_KD.groundMult);
         if (gameState.progressionMods.shatterNova && buffActive && type === "cross") {
           if (en.isBoss) dmg += Math.round(en.maxHp * 0.08);
@@ -2756,13 +2777,14 @@
           } else if (type === "guard_jab") {
             baseKB = 2;
           } else if (type === "hook" || type === "check_hook") {
-            baseKB = Math.max(30, gameState.progressionMods.hookKnockbackFloor);
+            baseKB = 30 + gameState.progressionMods.hookKnockbackFloor;
           } else if (type === "cross") {
             baseKB = 5;
           }
         }
         if (en.isBoss) {
           baseKB = isJab ? 0 : Math.max(2, Math.floor(baseKB * 0.3));
+          if ((type === "hook" || type === "check_hook") && !bossOpen) baseKB = 0;
           if (en.name === "NEON ENFORCER" && en.phase === 2 && !trueReadActive) {
             baseKB = buffActive || gameState.isInstinct && type === "cross" ? 10 : 0;
           }
@@ -2770,6 +2792,7 @@
           baseKB = Math.floor(baseKB / (en.weight || 1));
         }
         en.vx += baseKB * powerFactor;
+        if (en.isBoss) en.vx = Math.min(en.vx, loaded ? CONSTANTS.BOSS_KB.loadedCap : CONSTANTS.BOSS_KB.cap);
         const KD = CONSTANTS.ENEMY_KD, impulse = baseKB * powerFactor;
         if (!en.isBoss && !en.tutorialType && en.hp > 0 && !(en.floored > 0) && impulse >= KD.threshold) {
           const slam = Math.round(impulse * KD.slamMult);
@@ -2813,6 +2836,17 @@
             } else {
               canStun = false;
             }
+          }
+          if (loaded && en.isBoss && canStun && !(en.controller === "static_monk" && en.currentMove === "recharge")) {
+            en.stun = Math.max(en.stun, CONSTANTS.BOSS_KB.loadedStagger);
+            en.stunResist = en.stun + 30;
+            if (en.controller !== "static_monk") {
+              en.telegraphed = false;
+              if (en.attackCooldown < CONSTANTS.BOSS_OFFENSE.telegraphLead) en.attackCooldown = CONSTANTS.BOSS_OFFENSE.telegraphLead + 6;
+            }
+            spawnFloatingText(en.x + jX(), en.y - 160 + jY(), "STAGGER!", "#ffffff");
+            gameState.shake += 6;
+            canStun = false;
           }
           if (canStun) {
             let isResisting = en.isBoss && en.stunResist > 0;
@@ -3002,7 +3036,7 @@
   }
   function pivotForward() {
     const V = CONSTANTS.VERBS.pivotSlip, p = gameState.player;
-    const target = gameState.enemies.filter((e) => e.lane === p.lane && e.x > p.x).sort((a, b) => a.x - b.x)[0];
+    const target = gameState.enemies.filter((e) => e.lane === p.lane && !e.passed && e.x > p.x).sort((a, b) => a.x - b.x)[0];
     const want = target ? Math.min(target.x - 95, p.x + V.advance) : p.x;
     if (want > p.x + 4) {
       p.x = Math.min(FOOTWORK_MAX_X, want);
@@ -3239,10 +3273,10 @@
     let sF = Math.max(0.35, (gameState.isInstinct ? 0.6 : 1) * (1 / gameState.stats.speedMult));
     let cF = Math.max(0.35, (gameState.isInstinct ? 0.6 : 1) * (1 / (1 + (gameState.stats.speedMult - 1) * 0.4)));
     if (isJab1 || isJab2 || t === "guard_jab") {
-      gameState.player.punchTimer = Math.max(5, gameState.orbCounts.speed >= 2 ? Math.floor(5 * sF) : Math.floor(8 * sF));
+      gameState.player.punchTimer = Math.max(3, gameState.orbCounts.speed >= 2 ? Math.floor(5 * sF) : Math.floor(8 * sF));
       gameState.player.hitFrame = Math.max(2, Math.floor(2 * sF));
     } else if (isJab3) {
-      gameState.player.punchTimer = Math.max(6, gameState.orbCounts.speed >= 2 ? Math.floor(7 * sF) : Math.floor(12 * sF));
+      gameState.player.punchTimer = Math.max(4, gameState.orbCounts.speed >= 2 ? Math.floor(7 * sF) : Math.floor(12 * sF));
       gameState.player.hitFrame = Math.max(2, Math.floor(3 * sF));
     } else if (t === "cross") {
       gameState.player.punchTimer = Math.max(12, Math.floor(22 * cF));
@@ -3324,13 +3358,13 @@
   var BODY_GAP = 62;
   function resolveBodies(p) {
     for (const e of gameState.enemies) {
-      if (e.hp <= 0 || e.controller === "static_monk" || e.x > gameState.width || e.lane !== p.lane) continue;
+      if (e.hp <= 0 || e.passed || e.controller === "static_monk" || e.x > gameState.width || e.lane !== p.lane) continue;
       if (e.x - p.x < BODY_GAP && e.x > p.x - 10) p.x = Math.max(FOOTWORK_MIN_X, e.x - BODY_GAP);
     }
   }
   function isEngaged(p) {
     if (p.comboWindow > 0 || p.state === "punching" || p.state === "recovery") return true;
-    return gameState.enemies.some((e) => e.hp > 0 && e.lane === p.lane && e.x > p.x - 30 && e.x - p.x < 160);
+    return gameState.enemies.some((e) => e.hp > 0 && !e.passed && e.lane === p.lane && e.x > p.x - 30 && e.x - p.x < 160);
   }
   function readInput() {
     if ((gameState.inputGrace || 0) > 0) {
@@ -3360,6 +3394,7 @@
     gameState.scrollX += (gameState.isInstinct ? 20 : 8) * (gameState.stageSpeedMult || 1);
     if (p.invuln > 0) p.invuln--;
     if (p.pivotTimer > 0) p.pivotTimer--;
+    if (p.setUpTimer > 0) p.setUpTimer--;
     if (p.slipCooldown > 0) p.slipCooldown--;
     if (p.ghostStepCooldown > 0) {
       p.ghostStepCooldown--;
@@ -3413,7 +3448,11 @@
     if (gameState.progressionMods.loadedCross) {
       const LC = CONSTANTS.VERBS.loadedCross;
       crossAttempt = false;
-      if (input.cross) {
+      if (input.cross && gameState.isInstinct) {
+        crossAttempt = true;
+        crossCharge = LC.chargeFrames;
+        p.charging = false;
+      } else if (input.cross) {
         p.charging = true;
         p.crossCharge = 0;
       }
@@ -3523,13 +3562,9 @@
           const circuitSafe = gameState.progressionMods.infiniteCircuit && p.dempseyActive;
           if (circuitSafe) {
           } else if (isJab && !iGP) {
-            if (gameState.progressionMods.relentlessRhythm && (p.punchType === "jab1" || p.punchType === "jab2")) {
-              gameState.combo = Math.max(0, gameState.combo - 1);
-            } else if (gameState.orbCounts.speed < 2) {
-              gameState.combo = Math.max(0, gameState.combo - 1);
-            } else {
-              gameState.combo = 0;
-            }
+            if (gameState.progressionMods.relentlessRhythm) {
+            } else if (gameState.orbCounts.speed >= 2) gameState.combo = Math.max(0, gameState.combo - 1);
+            else gameState.combo = 0;
           } else if (!iGP) gameState.combo = 0;
           resetJabString();
           let cD = gameState.enemies.find((e) => e.tutorialType === "counter");
@@ -3551,6 +3586,9 @@
             }
           }
           p.lastPunchLanded = p.punchType;
+          if (p.punchType === "jab3") {
+            p.setUpTimer = CONSTANTS.JAB_SETUP.window;
+          }
         }
         p.crossLoaded = false;
       }
@@ -3909,6 +3947,16 @@
         en.targetLanes = [gameState.player.lane];
         let adjacentLane = gameState.player.lane === 1 ? random() > 0.5 ? 0 : 2 : 1;
         en.targetLanes.push(adjacentLane);
+        en.canisterFrom = en.attackCooldown;
+        gameState.canisters = en.targetLanes.map((lane) => ({ lane, x0: en.x - 30, x: en.x - 30, spin: 0 }));
+      }
+      if (gameState.canisters && gameState.canisters.length && en.canisterFrom) {
+        const k = Math.max(0, en.attackCooldown) / en.canisterFrom;
+        for (const c of gameState.canisters) {
+          const tx = gameState.player.x + 20;
+          c.x = tx + (c.x0 - tx) * k;
+          c.spin += 0.25;
+        }
       }
       if (en.attackCooldown > 0 && en.targetLanes.length > 0) {
         en.targetLanes.forEach((laneIndex) => {
@@ -3928,8 +3976,16 @@
         gameState.shake = 15;
         if (en.targetLanes.length > 0) {
           en.targetLanes.forEach((laneIndex) => {
-            for (let i = 0; i < 6; i++) {
-              createImpact(en.x - i * 150, gameState.height * CONSTANTS.LANE_Y[laneIndex], "#00ff00");
+            const can = (gameState.canisters || []).find((c) => c.lane === laneIndex);
+            const bx = can ? can.x : gameState.player.x, ly = gameState.height * CONSTANTS.LANE_Y[laneIndex];
+            for (let i = 0; i < 6; i++) createImpact(bx + (i - 2) * 40, ly - 20 - i % 2 * 30, "#00ff00");
+            triggerShockwave(bx, ly - 30, "#00ff00");
+            for (const add of gameState.enemies) {
+              if (add.isBoss || add.lane !== laneIndex || Math.abs(add.x - bx) > CONSTANTS.CANISTER.radius) continue;
+              add.hp -= CONSTANTS.CANISTER.addDamage;
+              add.stun = Math.max(add.stun, 20);
+              add.vx += 8;
+              spawnFloatingText(add.x, add.y - 120, "CAUGHT IN THE BLAST", "#00ff00");
             }
             if (gameState.player.lane === laneIndex) {
               if (gameState.player.state === "ghost_step") {
@@ -3941,6 +3997,8 @@
         }
         en.targetLanes = [];
         en.telegraphed = false;
+        gameState.canisters = [];
+        en.canisterFrom = 0;
         en.bossMashCount++;
         const volleysPerBurst = 1 + (en.arcMods.patternChainLength || 1);
         if (en.bossMashCount >= volleysPerBurst) {
@@ -4117,214 +4175,64 @@
     }
   }
 
-  // src/systems/practice.js
-  var BOSS_NAMES = ["NEON ENFORCER", "PHANTOM BOXER", "STATIC MONK", "LIVE WIRE", "NEGATIVE"];
-  function practiceTargets() {
-    const list = [
-      { id: "grunt", label: "GRUNT", type: "grunt", stage: 2, need: 0 },
-      { id: "shield", label: "GOLD ARMOR", type: "shield", stage: 3, need: 0 },
-      { id: "bruiser", label: "BRUISER", type: "bruiser", stage: 3, need: 0 },
-      { id: "zoner", label: "ZONER", type: "zoner", stage: 4, need: 0 },
-      { id: "assassin", label: "ASSASSIN", type: "assassin", stage: 4, need: 0 }
-    ];
-    for (let arc = 1; arc <= 5; arc++) {
-      const bs = CONSTANTS.bossStageOfArc(arc);
-      list.push({ id: `boss${arc}`, label: BOSS_NAMES[arc - 1], boss: arc, stage: bs, need: bs });
-    }
-    return list;
-  }
-  function practiceTargetUnlocked(t, bestStage) {
-    return (bestStage || 0) >= (t.need || 0);
-  }
-  function beginPractice(target, showWindows) {
-    gameState.practice = { id: target.id, target, windows: !!showWindows, respawn: 30, resets: 0, perfect0: 0 };
-    gameState.currentStage = target.stage;
-    gameState.stageClearing = false;
-    gameState.bossActive = false;
-    gameState.waveTimer = 9999;
-    gameState.seenTutorials = { ...gameState.seenTutorials || {}, footwork_tip: true, instinct: true, bruiser_id: true, string_id: true, assassin_id: true };
-    gameState.tutorialEnabled = false;
-    gameState.pendingUpgrades = 0;
-  }
-  function updatePractice() {
-    const P = gameState.practice;
-    if (!P) return;
-    gameState.exp = 0;
-    gameState.pendingUpgrades = 0;
-    gameState.stageClearing = false;
-    if (gameState.health < 40) {
-      gameState.health = gameState.maxHealth;
-      P.resets++;
-      spawnFloatingText(gameState.player.x, gameState.player.y - 130, "HP RESET", "#9ca3af");
-    }
-    const t = P.target;
-    const alive = t.boss ? gameState.enemies.some((e) => e.isBoss && e.hp > 0) || gameState.bossIntroTimer > 0 || !!gameState.finisher : gameState.enemies.some((e) => e.hp > 0);
-    if (alive) {
-      P.respawn = t.boss ? 90 : 40;
-      return;
-    }
-    if (--P.respawn > 0) return;
-    if (t.boss) {
-      gameState.enemies = gameState.enemies.filter((e) => !e.isBoss);
-      gameState.bossDefeatedThisStage = false;
-      gameState.bossActive = false;
-      spawnBoss();
-    } else {
-      const lane = gameState.player ? Math.random() < 0.6 ? gameState.player.lane : Math.floor(Math.random() * 3) : 1;
-      gameState.enemies.push(makeEnemy(t.type, lane, 0, { stringLen: t.stringLen }));
-    }
-  }
-  function practiceHudText() {
-    const P = gameState.practice;
-    if (!P) return "";
-    return `PRACTICE \xB7 ${P.target.label} \xB7 PERFECT ${gameState.statTotalSlips || 0} \xB7 HITS TAKEN ${gameState.stageHitsTaken || 0}`;
-  }
-
-  // src/ui/ui.js
-  var HUD = {
-    get combo() {
-      return $("combo-ui");
-    },
-    get expBar() {
-      return $("exp-bar");
-    },
-    get expMult() {
-      return $("exp-multiplier");
-    },
-    get instinctBar() {
-      return $("instinct-bar");
-    },
-    get instinctBanner() {
-      return $("instinct-ready-banner");
-    },
-    get barCont() {
-      return $("bar-cont");
-    },
-    get health() {
-      return $("health-ui");
-    },
-    get flash() {
-      return $("screen-flash");
-    },
-    get screens() {
-      return {
-        upgrade: $("upgrade-screen"),
-        pause: $("pause-screen"),
-        gameover: $("gameover-screen"),
-        start: $("start-screen"),
-        howto: $("howto-screen"),
-        tutorial: $("tutorial-screen")
-      };
-    },
-    get finalStage() {
-      return $("final-stage-ui");
-    },
-    get slipPopup() {
-      return $("perfect-slip-ui");
-    },
-    get stage() {
-      return $("stage-ui");
-    },
-    get affix() {
-      return $("affix-ui");
-    },
-    get counterHud() {
-      return $("counter-hud");
-    },
-    get counterStatus() {
-      return $("counter-status");
-    }
+  // src/data/upgrades.js
+  var UPGRADE_POOL = {
+    // v17: each tree is a LINEAR 5-rank ladder (drafted one rank at a time, capped
+    // by arc — see CONSTANTS.RANK_CAP_BY_ARC). Ranks 1/2/4 are stat ranks with
+    // their own names; rank 3 changes a VERB; rank 5 is the tree's Apex.
+    // `orbs` is kept as the key the draft/HUD code reads; it now holds all ranks.
+    orbs: [
+      // ---- SPEED (cyan) ----
+      { id: "spd_r1", kind: "rank", tree: "speed", rank: 1, memoryPolicy: "none", name: "Quick Hands", desc: "Your Jab, Hook and recoveries all get faster.", weight: 10, effects: [{ op: "incOrb", tree: "speed", amount: 1 }, { op: "mulStat", stat: "speedMult", amount: 0.25 }] },
+      { id: "spd_r2", kind: "rank", tree: "speed", rank: 2, memoryPolicy: "none", name: "Rhythm Keeper", desc: "Faster still \u2014 and a missed Jab only costs 1 Combo instead of all of it.", weight: 10, effects: [{ op: "incOrb", tree: "speed", amount: 1 }, { op: "mulStat", stat: "speedMult", amount: 0.2 }] },
+      { id: "spd_r3", kind: "rank", tree: "speed", rank: 3, verb: true, memoryPolicy: "none", name: "Pivot Slip", desc: "Every slip carries you forward into punching range \u2014 and your first punch out of it lands instantly.", weight: 12, effects: [{ op: "incOrb", tree: "speed", amount: 1 }, { op: "setFlag", key: "pivotSlip", value: true }] },
+      { id: "spd_r4", kind: "rank", tree: "speed", rank: 4, memoryPolicy: "none", name: "Hair Trigger", desc: "Faster again \u2014 and a landed Jab or Hook can be cancelled straight into a slip.", weight: 10, effects: [{ op: "incOrb", tree: "speed", amount: 1 }, { op: "mulStat", stat: "speedMult", amount: 0.2 }] },
+      { id: "apex_speed_blur_step", kind: "rank", draftRole: "apex", tree: "speed", rank: 5, memoryPolicy: "none", name: "Blur Step", desc: "Ghost Step gains a second charge \u2014 dash twice in a row before it has to refill.", weight: 8, effects: [{ op: "incOrb", tree: "speed", amount: 1 }, { op: "grantUpgradeId", id: "apex_speed_blur_step" }, { op: "setFlag", key: "blurStep", value: true }] },
+      // ---- POWER (magenta) ----
+      { id: "pwr_r1", kind: "rank", tree: "power", rank: 1, memoryPolicy: "none", name: "Heavy Shoulders", desc: "Your punches knock enemies 35% further. A solid Hook now puts them on the floor.", weight: 10, effects: [{ op: "incOrb", tree: "power", amount: 1 }, { op: "mulStat", stat: "powerMult", amount: 0.35 }] },
+      { id: "pwr_r2", kind: "rank", tree: "power", rank: 2, memoryPolicy: "none", name: "Long Reach", desc: "Knockback up again \u2014 and your Cross reaches 25% further.", weight: 10, effects: [{ op: "incOrb", tree: "power", amount: 1 }, { op: "mulStat", stat: "powerMult", amount: 0.3 }] },
+      { id: "pwr_r3", kind: "rank", tree: "power", rank: 3, verb: true, memoryPolicy: "none", name: "Loaded Cross", desc: "Hold Cross to load it, release to throw. A loaded Cross breaks any guard and blasts enemies across the ring. A quick tap is still a normal Cross.", weight: 12, effects: [{ op: "incOrb", tree: "power", amount: 1 }, { op: "setFlag", key: "loadedCross", value: true }] },
+      { id: "pwr_r4", kind: "rank", tree: "power", rank: 4, memoryPolicy: "none", name: "Iron Frame", desc: "Knockback up again \u2014 anyone you send flying bowls over the enemies behind them.", weight: 10, effects: [{ op: "incOrb", tree: "power", amount: 1 }, { op: "mulStat", stat: "powerMult", amount: 0.3 }] },
+      { id: "apex_power_executioner", kind: "rank", draftRole: "apex", tree: "power", rank: 5, memoryPolicy: "none", name: "Executioner's Cross", desc: "A Cross against an enemy below 25% health finishes it, guaranteed.", weight: 8, effects: [{ op: "incOrb", tree: "power", amount: 1 }, { op: "grantUpgradeId", id: "apex_power_executioner" }, { op: "setFlag", key: "executionerCross", value: true }] },
+      // ---- TECHNIQUE (yellow) ----
+      { id: "tec_r1", kind: "rank", tree: "technique", rank: 1, memoryPolicy: "none", name: "Sharp Eyes", desc: "More Instinct from clean reads and Perfect Slips.", weight: 10, effects: [{ op: "incOrb", tree: "technique", amount: 1 }, { op: "mulStat", stat: "techMult", amount: 0.3 }] },
+      { id: "tec_r2", kind: "rank", tree: "technique", rank: 2, memoryPolicy: "none", name: "Double Tap", desc: "Sharper still \u2014 a Perfect Slip charges TWO Counter hits.", weight: 10, effects: [{ op: "incOrb", tree: "technique", amount: 1 }, { op: "mulStat", stat: "techMult", amount: 0.25 }] },
+      { id: "tec_r3", kind: "rank", tree: "technique", rank: 3, verb: true, memoryPolicy: "none", name: "Afterimage Slip", desc: "A Perfect Slip leaves a neon afterimage in the lane you left \u2014 a beat later it throws an echo punch at whoever swung.", weight: 12, effects: [{ op: "incOrb", tree: "technique", amount: 1 }, { op: "setFlag", key: "afterimageSlip", value: true }] },
+      { id: "tec_r4", kind: "rank", tree: "technique", rank: 4, memoryPolicy: "none", name: "True Read", desc: "Sharper again \u2014 a Perfect Slip on a boss EXPOSES it for a True Read.", weight: 10, effects: [{ op: "incOrb", tree: "technique", amount: 1 }, { op: "mulStat", stat: "techMult", amount: 0.25 }] },
+      { id: "apex_technique_flow_state", kind: "rank", draftRole: "apex", tree: "technique", rank: 5, memoryPolicy: "none", name: "Flow State", desc: "A streak of clean hits and Perfect Slips ramps up your Instinct and EXP gain. Getting hit resets it.", weight: 8, effects: [{ op: "incOrb", tree: "technique", amount: 1 }, { op: "grantUpgradeId", id: "apex_technique_flow_state" }, { op: "setFlag", key: "flowState", value: true }] }
+    ],
+    masteries: [
+      { id: "mast_weavers_step", kind: "mastery", draftRole: "evolution", tree: "speed", tier: 2, repeatable: false, memoryPolicy: "hard", name: "Weaver's Step", desc: "Ghost Step cooldown reduced by 20%.", weight: 8, reqs: { orbTreeAtLeast: { speed: 2 }, notOwned: ["mast_weavers_step"] }, effects: [{ op: "grantUpgradeId", id: "mast_weavers_step" }, { op: "mulMod", key: "ghostStepCooldownMult", amount: 0.8 }] },
+      { id: "mast_loose_shoulders", kind: "mastery", draftRole: "evolution", tree: "speed", tier: 2, repeatable: false, memoryPolicy: "hard", name: "Loose Shoulders", desc: "A missed Hook \u2014 or Check Hook (Guard + Hook) \u2014 recovers 18% faster.", weight: 8, reqs: { orbTreeAtLeast: { speed: 2 }, notOwned: ["mast_loose_shoulders"] }, effects: [{ op: "grantUpgradeId", id: "mast_loose_shoulders" }, { op: "mulMod", key: "hookRecoveryMult", amount: 0.82 }] },
+      { id: "mast_relentless_rhythm", kind: "mastery", draftRole: "evolution", tree: "speed", tier: 2, repeatable: false, memoryPolicy: "hard", name: "Relentless Rhythm", desc: "A missed Jab costs no Combo at all.", weight: 8, reqs: { orbTreeAtLeast: { speed: 2 }, notOwned: ["mast_relentless_rhythm"] }, effects: [{ op: "grantUpgradeId", id: "mast_relentless_rhythm" }, { op: "setFlag", key: "relentlessRhythm", value: true }] },
+      { id: "mast_heavy_hands", kind: "mastery", draftRole: "evolution", tree: "power", tier: 2, repeatable: false, memoryPolicy: "hard", name: "Heavy Hands", desc: "Your Cross staggers armored enemies \u2014 Shields, Bruisers, the Enforcer \u2014 for longer.", weight: 8, reqs: { orbTreeAtLeast: { power: 2 }, notOwned: ["mast_heavy_hands"] }, effects: [{ op: "grantUpgradeId", id: "mast_heavy_hands" }, { op: "addMod", key: "crossArmorStunBonus", amount: 12 }] },
+      { id: "mast_ring_cutter", kind: "mastery", draftRole: "evolution", tree: "power", tier: 2, repeatable: false, memoryPolicy: "hard", name: "Ring Cutter", desc: "Your Hooks knock enemies further, every time. The cleanest way to make space.", weight: 8, reqs: { orbTreeAtLeast: { power: 2 }, notOwned: ["mast_ring_cutter"] }, effects: [{ op: "grantUpgradeId", id: "mast_ring_cutter" }, { op: "addMod", key: "hookKnockbackFloor", amount: 10 }] },
+      { id: "mast_body_shot_discipline", kind: "mastery", draftRole: "evolution", tree: "power", tier: 2, repeatable: false, memoryPolicy: "hard", name: "Body Shot Discipline", desc: "Cross or Hook a Shield or Bruiser for bonus Instinct and EXP.", weight: 8, reqs: { orbTreeAtLeast: { power: 2 }, notOwned: ["mast_body_shot_discipline"] }, effects: [{ op: "grantUpgradeId", id: "mast_body_shot_discipline" }, { op: "addMod", key: "hardTargetInstinctFlat", amount: 4 }, { op: "addMod", key: "hardTargetExpFlat", amount: 1 }] },
+      { id: "mast_deep_focus", kind: "mastery", draftRole: "evolution", tree: "technique", tier: 2, repeatable: false, memoryPolicy: "hard", name: "Deep Focus", desc: "Perfect Slip window gains +2 frames.", weight: 8, reqs: { orbTreeAtLeast: { technique: 2 }, notOwned: ["mast_deep_focus"] }, effects: [{ op: "grantUpgradeId", id: "mast_deep_focus" }, { op: "addMod", key: "perfectSlipWindowBonus", amount: 2 }] },
+      { id: "mast_cold_read", kind: "mastery", draftRole: "evolution", tree: "technique", tier: 2, repeatable: false, memoryPolicy: "hard", name: "Cold Read", desc: "When you EXPOSE a boss, the opening lasts an extra half-second.", weight: 8, reqs: { orbTreeAtLeast: { technique: 2 }, notOwned: ["mast_cold_read"] }, effects: [{ op: "grantUpgradeId", id: "mast_cold_read" }, { op: "addMod", key: "bossExposeBonusFrames", amount: 30 }] },
+      { id: "mast_vantage_point", kind: "mastery", draftRole: "evolution", tree: "technique", tier: 2, repeatable: false, memoryPolicy: "hard", name: "Vantage Point", desc: "Perfect Slip restores a small amount of health.", weight: 8, reqs: { orbTreeAtLeast: { technique: 2 }, notOwned: ["mast_vantage_point"] }, effects: [{ op: "grantUpgradeId", id: "mast_vantage_point" }, { op: "addMod", key: "perfectSlipHeal", amount: 3 }] },
+      { id: "mast_guard_read", kind: "mastery", draftRole: "evolution", tree: "technique", tier: 2, repeatable: false, memoryPolicy: "hard", name: "Guard Read", desc: "Releasing Guard the instant a hit lands charges a Counter. Turtling becomes a second read, not just a shield.", weight: 8, reqs: { orbTreeAtLeast: { technique: 2 }, notOwned: ["mast_guard_read"] }, effects: [{ op: "grantUpgradeId", id: "mast_guard_read" }, { op: "setFlag", key: "guardRead", value: true }] }
+    ],
+    // v17: a Fusion unlocks when BOTH its trees reach rank 3, and EVOLVES when both
+    // reach rank 5 (Arc 5). Colour = the mix of its two trees (constants FUSION_COLORS).
+    fusions: [
+      { id: "fuse_dempsey_circuit", kind: "fusion", draftRole: "capstone", tree: "general", trees: ["speed", "power"], tier: 3, repeatable: false, memoryPolicy: "hard", name: "Dempsey Circuit", desc: "Alternate Jab and Hook: each switch recovers faster and keeps your Combo window open longer.", weight: 6, reqs: { orbTreeAtLeast: { speed: 3, power: 3 }, notOwned: ["fuse_dempsey_circuit"] }, effects: [{ op: "grantUpgradeId", id: "fuse_dempsey_circuit" }, { op: "setFlag", key: "dempseyCircuit", value: true }, { op: "addMod", key: "dempseyRecoveryBonus", amount: 0.18 }] },
+      { id: "fuse_ghost_counter", kind: "fusion", draftRole: "capstone", tree: "general", trees: ["speed", "technique"], tier: 3, repeatable: false, memoryPolicy: "hard", name: "Ghost Counter", desc: "Ghost Step through an active hitbox to gain Counter Charge.", weight: 6, reqs: { orbTreeAtLeast: { speed: 3, technique: 3 }, notOwned: ["fuse_ghost_counter"] }, effects: [{ op: "grantUpgradeId", id: "fuse_ghost_counter" }, { op: "setFlag", key: "ghostCounter", value: true }] },
+      { id: "fuse_shatter_read", kind: "fusion", draftRole: "capstone", tree: "general", trees: ["power", "technique"], tier: 3, repeatable: false, memoryPolicy: "hard", name: "Shatter Read", desc: "A Counter-Charged Cross on a boss cuts through its stagger resistance and rocks it longer.", weight: 6, reqs: { orbTreeAtLeast: { power: 3, technique: 3 }, notOwned: ["fuse_shatter_read"] }, effects: [{ op: "grantUpgradeId", id: "fuse_shatter_read" }, { op: "setFlag", key: "shatterRead", value: true }, { op: "addMod", key: "shatterReadBossBypass", amount: 0.35 }, { op: "addMod", key: "shatterReadStaggerBonus", amount: 12 }] },
+      // ---- EVOLVED (both trees at rank 5, base Fusion owned) ----
+      { id: "evo_infinite_circuit", kind: "fusion", evolved: true, draftRole: "capstone", tree: "general", trees: ["speed", "power"], tier: 4, repeatable: false, memoryPolicy: "hard", name: "Infinite Circuit", desc: "An alternating Jab/Hook string never drops Combo on a miss \u2014 and every 4th switch charges a Counter.", weight: 8, reqs: { orbTreeAtLeast: { speed: 5, power: 5 }, hasUpgradeIds: ["fuse_dempsey_circuit"], notOwned: ["evo_infinite_circuit"] }, effects: [{ op: "grantUpgradeId", id: "evo_infinite_circuit" }, { op: "setFlag", key: "infiniteCircuit", value: true }] },
+      { id: "evo_phantom_riposte", kind: "fusion", evolved: true, draftRole: "capstone", tree: "general", trees: ["speed", "technique"], tier: 4, repeatable: false, memoryPolicy: "hard", name: "Phantom Riposte", desc: "A perfect Ghost Step leaves an afterimage that instantly punches back at the attacker.", weight: 8, reqs: { orbTreeAtLeast: { speed: 5, technique: 5 }, hasUpgradeIds: ["fuse_ghost_counter"], notOwned: ["evo_phantom_riposte"] }, effects: [{ op: "grantUpgradeId", id: "evo_phantom_riposte" }, { op: "setFlag", key: "phantomRiposte", value: true }] },
+      { id: "evo_shatter_nova", kind: "fusion", evolved: true, draftRole: "capstone", tree: "general", trees: ["power", "technique"], tier: 4, repeatable: false, memoryPolicy: "hard", name: "Shatter Nova", desc: "A Counter-Charged Cross tears an extra 8% off a boss's health \u2014 on anyone else, it shatters every enemy in the lane.", weight: 8, reqs: { orbTreeAtLeast: { power: 5, technique: 5 }, hasUpgradeIds: ["fuse_shatter_read"], notOwned: ["evo_shatter_nova"] }, effects: [{ op: "grantUpgradeId", id: "evo_shatter_nova" }, { op: "setFlag", key: "shatterNova", value: true }] }
+    ],
+    overclocks: [
+      { id: "oc_vital_surge", kind: "overclock", draftRole: "fallback", tree: "general", tier: 4, repeatable: true, memoryPolicy: "soft", name: "Vital Surge", desc: "Restore +20 health.", weight: 20, reqs: {}, effects: [{ op: "heal", amount: 20 }, { op: "incOverclock", key: "vitality", amount: 1 }] },
+      { id: "oc_quick_nerves", kind: "overclock", draftRole: "fallback", tree: "general", tier: 4, repeatable: true, memoryPolicy: "soft", name: "Quick Nerves", desc: "Ghost Step refills 5% faster.", weight: 12, reqs: {}, effects: [{ op: "mulMod", key: "ghostStepCooldownMult", amount: 0.95 }, { op: "incOverclock", key: "nerves", amount: 1 }] },
+      { id: "oc_sharp_eye", kind: "overclock", draftRole: "fallback", tree: "general", tier: 4, repeatable: true, memoryPolicy: "soft", name: "Keen Read", desc: "Perfect Slips pay a little more Instinct and score.", weight: 12, reqs: {}, effects: [{ op: "addMod", key: "perfectSlipRewardBonusMult", amount: 0.08 }, { op: "incOverclock", key: "focus", amount: 1 }] },
+      { id: "oc_calm_engine", kind: "overclock", draftRole: "fallback", tree: "general", tier: 4, repeatable: true, memoryPolicy: "soft", name: "Calm Engine", desc: "+6% Instinct from everything, for the rest of the run.", weight: 12, reqs: {}, effects: [{ op: "addMod", key: "instinctGainBonusMult", amount: 0.06 }, { op: "incOverclock", key: "instinct", amount: 1 }] },
+      { id: "oc_clinch_breaker", kind: "overclock", draftRole: "fallback", tree: "general", tier: 4, repeatable: true, memoryPolicy: "soft", name: "Clinch Breaker", desc: "Getting hit slides you back 6% less.", weight: 10, reqs: {}, effects: [{ op: "mulMod", key: "incomingRecoilMult", amount: 0.94 }, { op: "incOverclock", key: "clinch", amount: 1 }] },
+      { id: "oc_clean_finish", kind: "overclock", draftRole: "fallback", tree: "general", tier: 4, repeatable: true, memoryPolicy: "soft", name: "Clean Finish", desc: "+5% EXP from everything, for the rest of the run.", weight: 10, reqs: {}, effects: [{ op: "addMod", key: "expGainBonusMult", amount: 0.05 }, { op: "incOverclock", key: "finish", amount: 1 }] }
+    ]
   };
-  function updateHUD() {
-    const target = Math.round(gameState.score || 0);
-    if (gameState.displayScore !== target) {
-      const diff = target - gameState.displayScore;
-      gameState.displayScore = Math.abs(diff) < 4 ? target : gameState.displayScore + Math.ceil(diff * 0.2);
-    }
-    if (gameState.lastHUD.score !== gameState.displayScore) {
-      const el = $("score-ui");
-      if (el) el.innerText = gameState.displayScore.toLocaleString();
-      gameState.lastHUD.score = gameState.displayScore;
-    }
-    const cm = comboMultiplier(gameState.combo);
-    const key = `${cm}|${gameState.wagerMult}`;
-    if (gameState.lastHUD.wager !== key) {
-      const m = $("score-mult");
-      if (m) {
-        m.innerText = `\xD7${cm.toFixed(2)}`;
-        m.classList.toggle("hot", cm > 1);
-      }
-      const w = $("wager-badge");
-      if (w) {
-        w.innerText = gameState.wagerMult > 1 ? `\xD7${gameState.wagerMult} WAGER` : "";
-        w.style.display = gameState.wagerMult > 1 ? "inline-block" : "none";
-      }
-      gameState.lastHUD.wager = key;
-    }
-    if (gameState.practice) {
-      const txt = practiceHudText();
-      if (gameState.lastHUD.practice !== txt) {
-        if (HUD.stage) HUD.stage.innerText = txt;
-        const el = $("arc-par");
-        if (el) el.innerHTML = "";
-        gameState.lastHUD.practice = txt;
-      }
-    }
-    const al = gameState.practice ? null : arcLive(), parKey = al ? `${al.arc}|${al.secs}|${Math.floor(al.score / 1e3)}` : "";
-    if (al && gameState.lastHUD.par !== parKey) {
-      const el = $("arc-par");
-      if (el) {
-        const late = al.secs > al.par.time, rich = al.score >= al.par.score;
-        el.innerHTML = `PAR <span style="color:${late ? "#f87171" : "#e5e7eb"}">${fmtSecs(al.secs)}/${fmtSecs(al.par.time)}</span> \xB7 <span style="color:${rich ? "#facc15" : "#e5e7eb"}">${fmtK(al.score)}/${fmtK(al.par.score)}</span>`;
-      }
-      gameState.lastHUD.par = parKey;
-    }
-    if (gameState.lastHUD.combo !== gameState.combo) {
-      HUD.combo.innerText = gameState.combo;
-      gameState.lastHUD.combo = gameState.combo;
-    }
-    let expPct = Math.min(100, gameState.exp / gameState.expNeeded * 100);
-    if (gameState.lastHUD.exp !== expPct) {
-      if (HUD.expBar) HUD.expBar.style.width = expPct + "%";
-      gameState.lastHUD.exp = expPct;
-    }
-    let mult = 1 + Math.min(0.3, Math.floor(gameState.combo / 2) * 0.1);
-    if (gameState.lastHUD.mult !== mult) {
-      if (HUD.expMult) {
-        if (mult > 1) {
-          HUD.expMult.innerText = `x${mult.toFixed(1)}`;
-          HUD.expMult.classList.remove("opacity-0");
-          HUD.expMult.classList.add("opacity-100");
-        } else {
-          HUD.expMult.classList.remove("opacity-100");
-          HUD.expMult.classList.add("opacity-0");
-        }
-      }
-      gameState.lastHUD.mult = mult;
-    }
-    let roundInstinct = Math.floor(gameState.instinctMeter);
-    if (gameState.lastHUD.instinct !== roundInstinct) {
-      HUD.instinctBar.style.width = roundInstinct + "%";
-      gameState.lastHUD.instinct = roundInstinct;
-    }
-    let displayHP = Math.max(0, Math.round(gameState.health));
-    if (gameState.lastHUD.hp !== displayHP) {
-      HUD.health.innerText = `${displayHP}`;
-      gameState.lastHUD.hp = displayHP;
-      const bar = $("hp-bar");
-      if (bar) {
-        const pct = Math.max(0, Math.min(100, displayHP / (gameState.maxHealth || 100) * 100));
-        bar.style.width = pct + "%";
-        bar.classList.toggle("low", pct <= 25);
-      }
-    }
-    if (gameState.player && gameState.lastHUD.slipBuff !== gameState.player.slipBuff) {
-      HUD.counterStatus.innerText = gameState.player.slipBuff > 0 ? gameState.player.slipBuff > 1 ? "READY \xD72" : "READY" : "\u2014";
-      if (HUD.counterHud) HUD.counterHud.classList.toggle("ready", gameState.player.slipBuff > 0);
-      gameState.lastHUD.slipBuff = gameState.player.slipBuff;
-    }
-    if (HUD.expBar) HUD.expBar.classList.toggle("pulse", (gameState.orbPulse || 0) > 6);
-  }
 
   // src/render/boxer.js
   function silhouetteOf(entity, isPlayer) {
@@ -4446,6 +4354,7 @@
         pL = 15 * d;
       }
     }
+    if (isPlayer && !isTrail && !entity.walking && (entity.state === "idle" || entity.state === "guarding")) bn = -Math.abs(Math.sin(t * 0.011)) * 5;
     let hY = rY - h * 0.2 + bn, nY = rY - h * 0.75 + bn, hdY = rY - h * 0.85 + bn;
     if (!isPlayer && entity.type === "bruiser") hdY += 10;
     if (!isPlayer && entity.type === "assassin") hdY += 5;
@@ -4467,6 +4376,11 @@
       lg1X = wc * d;
       lg2X = -wc * d;
       bn += Math.abs(Math.sin(t * 0.018)) * -3;
+    } else if (isPlayer && !isTrail && (entity.state === "idle" || entity.state === "guarding")) {
+      const bt = t * 0.011;
+      lX += Math.sin(bt * 0.5) * 2.5 * d;
+      lg1X = 15 * d + Math.sin(bt) * 3 * d;
+      lg2X = -10 * d - Math.sin(bt) * 3 * d;
     } else if (isPlayer) {
       lg1X = 15 * d;
       lg2X = -10 * d;
@@ -5260,12 +5174,11 @@
     ctx3.fillStyle = `rgba(0, 0, 0, ${0.55 * f.bars})`;
     ctx3.fillRect(-200, -200, gameState.width + 400, gameState.height + 400);
   }
-  var MOVE_NAME = { up: "SLIP UP", down: "SLIP DOWN", jab: "JAB", cross: "CROSS", hook: "HOOK" };
   var KEY_COLOR = { up: "#22d3ee", down: "#22d3ee", jab: "#ffffff", cross: "#ec4899", hook: "#facc15" };
   function promptGlyph(move) {
     const g = glyph(move), dev = inputDevice();
     const key = move === "up" || move === "down" ? move === "up" ? "\u25B2" : "\u25BC" : g.label;
-    return { key, hint: MOVE_NAME[move] || move.toUpperCase(), color: dev === "keyboard" ? KEY_COLOR[move] : move === "up" || move === "down" ? "#22d3ee" : g.color };
+    return { key, color: dev === "keyboard" ? KEY_COLOR[move] : move === "up" || move === "down" ? "#22d3ee" : g.color };
   }
   function drawFinisherUI(ctx3) {
     const f = gameState.finisher;
@@ -5348,13 +5261,6 @@
       ctx3.textBaseline = "middle";
       ctx3.fillText(g.key, cx, cy + 2);
       ctx3.textBaseline = "alphabetic";
-      ctx3.fillStyle = "#ffffff";
-      ctx3.font = "900 16px Orbitron";
-      ctx3.fillText(g.hint, cx, cy + box + 30);
-    } else if (f.phase === "intro") {
-      ctx3.fillStyle = `rgba(255,255,255,${f.bars})`;
-      ctx3.font = "bold 13px Orbitron";
-      ctx3.fillText("HIT EACH PROMPT ON THE BEAT", cx, cy);
     }
     if (f.phase === "prompts" && f.lockFlash > 0) {
       ctx3.globalAlpha = f.lockFlash / 10;
@@ -5719,6 +5625,54 @@
     }
     ctx3.restore();
   }
+  function drawCanisters(ctx3) {
+    const cs = gameState.canisters;
+    if (!cs || !cs.length) return;
+    const monk = gameState.enemies.find((e) => e.controller === "static_monk");
+    const k = monk && monk.canisterFrom ? Math.max(0, monk.attackCooldown) / monk.canisterFrom : 1;
+    ctx3.save();
+    for (const c of cs) {
+      const ly = gameState.height * CONSTANTS.LANE_Y[c.lane], cy = ly - 12;
+      const g = ctx3.createLinearGradient(gameState.player.x, 0, c.x, 0);
+      g.addColorStop(0, "rgba(0,255,0,0.6)");
+      g.addColorStop(1, "rgba(0,255,0,0.02)");
+      ctx3.strokeStyle = g;
+      ctx3.lineWidth = 3;
+      ctx3.setLineDash([10, 8]);
+      ctx3.beginPath();
+      ctx3.moveTo(c.x, ly - 2);
+      ctx3.lineTo(gameState.player.x + 20, ly - 2);
+      ctx3.stroke();
+      ctx3.setLineDash([]);
+      ctx3.save();
+      ctx3.translate(c.x, cy);
+      ctx3.rotate(-c.spin);
+      ctx3.fillStyle = "#0b1f0b";
+      ctx3.strokeStyle = "#00ff00";
+      ctx3.lineWidth = 3;
+      ctx3.shadowColor = "#00ff00";
+      ctx3.shadowBlur = 12;
+      ctx3.beginPath();
+      ctx3.arc(0, 0, 15, 0, Math.PI * 2);
+      ctx3.fill();
+      ctx3.stroke();
+      ctx3.shadowBlur = 0;
+      ctx3.lineWidth = 2;
+      ctx3.beginPath();
+      ctx3.moveTo(-15, 0);
+      ctx3.lineTo(15, 0);
+      ctx3.moveTo(0, -15);
+      ctx3.lineTo(0, 15);
+      ctx3.stroke();
+      ctx3.restore();
+      const blink = Math.floor(Date.now() / (45 + k * 200)) % 2 === 0;
+      ctx3.fillStyle = blink ? k < 0.2 ? "#ffffff" : "#00ff00" : "rgba(0,255,0,0.25)";
+      ctx3.beginPath();
+      ctx3.arc(c.x, cy - 22, 4, 0, Math.PI * 2);
+      ctx3.fill();
+    }
+    ctx3.restore();
+  }
   function drawKoBanner(ctx3) {
     const a = koBannerAlpha();
     if (a <= 0) return;
@@ -5742,9 +5696,6 @@
     ctx3.fillStyle = "#ffffff";
     ctx3.fillText("K.O.", 0, 0);
     ctx3.shadowBlur = 0;
-    ctx3.font = "bold 16px Orbitron";
-    ctx3.fillStyle = k.color || "#ff0055";
-    ctx3.fillText(`${k.body.name || "CHAMPION"} IS DOWN`, 0, 30);
     ctx3.restore();
   }
   var POSTER_FRAMES = 180;
@@ -5778,7 +5729,7 @@
     ctx3.textAlign = "center";
     ctx3.fillStyle = P.color;
     ctx3.font = "900 14px Orbitron";
-    ctx3.fillText(`TITLE FIGHT \xB7 ARC ${P.arc} \xB7 ROUND ${P.round}`, W / 2, py + 36);
+    ctx3.fillText(`ARC ${P.arc} \xB7 ROUND ${P.round}`, W / 2, py + 36);
     ctx3.fillStyle = "rgba(255,255,255,0.6)";
     ctx3.font = "bold 11px Orbitron";
     ctx3.fillText(String(P.venue).toUpperCase(), W / 2, py + 54);
@@ -6156,65 +6107,6 @@
     }
   };
 
-  // src/data/upgrades.js
-  var UPGRADE_POOL = {
-    // v17: each tree is a LINEAR 5-rank ladder (drafted one rank at a time, capped
-    // by arc — see CONSTANTS.RANK_CAP_BY_ARC). Ranks 1/2/4 are stat ranks with
-    // their own names; rank 3 changes a VERB; rank 5 is the tree's Apex.
-    // `orbs` is kept as the key the draft/HUD code reads; it now holds all ranks.
-    orbs: [
-      // ---- SPEED (cyan) ----
-      { id: "spd_r1", kind: "rank", tree: "speed", rank: 1, memoryPolicy: "none", name: "Quick Hands", desc: "Faster jabs, hooks and recoveries.", weight: 10, effects: [{ op: "incOrb", tree: "speed", amount: 1 }, { op: "mulStat", stat: "speedMult", amount: 0.25 }] },
-      { id: "spd_r2", kind: "rank", tree: "speed", rank: 2, memoryPolicy: "none", name: "Rhythm Keeper", desc: "Faster still \u2014 and a missed Jab no longer snaps your Combo.", weight: 10, effects: [{ op: "incOrb", tree: "speed", amount: 1 }, { op: "mulStat", stat: "speedMult", amount: 0.2 }] },
-      { id: "spd_r3", kind: "rank", tree: "speed", rank: 3, verb: true, memoryPolicy: "none", name: "Pivot Slip", desc: "Every slip carries you forward into punching range \u2014 and your first punch out of it lands instantly.", weight: 12, effects: [{ op: "incOrb", tree: "speed", amount: 1 }, { op: "setFlag", key: "pivotSlip", value: true }] },
-      { id: "spd_r4", kind: "rank", tree: "speed", rank: 4, memoryPolicy: "none", name: "Hair Trigger", desc: "Faster again \u2014 and a landed Jab or Hook can be cancelled straight into a slip.", weight: 10, effects: [{ op: "incOrb", tree: "speed", amount: 1 }, { op: "mulStat", stat: "speedMult", amount: 0.2 }] },
-      { id: "apex_speed_blur_step", kind: "rank", draftRole: "apex", tree: "speed", rank: 5, memoryPolicy: "none", name: "Blur Step", desc: "Ghost Step gains a second charge \u2014 dash twice in a row before it has to refill.", weight: 8, effects: [{ op: "incOrb", tree: "speed", amount: 1 }, { op: "grantUpgradeId", id: "apex_speed_blur_step" }, { op: "setFlag", key: "blurStep", value: true }] },
-      // ---- POWER (magenta) ----
-      { id: "pwr_r1", kind: "rank", tree: "power", rank: 1, memoryPolicy: "none", name: "Heavy Shoulders", desc: "Every blow carries more knockback authority.", weight: 10, effects: [{ op: "incOrb", tree: "power", amount: 1 }, { op: "mulStat", stat: "powerMult", amount: 0.35 }] },
-      { id: "pwr_r2", kind: "rank", tree: "power", rank: 2, memoryPolicy: "none", name: "Long Reach", desc: "Heavier still \u2014 and your Cross reaches 25% further.", weight: 10, effects: [{ op: "incOrb", tree: "power", amount: 1 }, { op: "mulStat", stat: "powerMult", amount: 0.3 }] },
-      { id: "pwr_r3", kind: "rank", tree: "power", rank: 3, verb: true, memoryPolicy: "none", name: "Loaded Cross", desc: "Hold Cross to load it, release to throw. A loaded Cross breaks any guard and blasts enemies across the ring. A quick tap is still a normal Cross.", weight: 12, effects: [{ op: "incOrb", tree: "power", amount: 1 }, { op: "setFlag", key: "loadedCross", value: true }] },
-      { id: "pwr_r4", kind: "rank", tree: "power", rank: 4, memoryPolicy: "none", name: "Iron Frame", desc: "Heavier again \u2014 knocked-back enemies bowl through everyone behind them.", weight: 10, effects: [{ op: "incOrb", tree: "power", amount: 1 }, { op: "mulStat", stat: "powerMult", amount: 0.3 }] },
-      { id: "apex_power_executioner", kind: "rank", draftRole: "apex", tree: "power", rank: 5, memoryPolicy: "none", name: "Executioner's Cross", desc: "a Cross against an enemy below 25% health is a guaranteed finish.", weight: 8, effects: [{ op: "incOrb", tree: "power", amount: 1 }, { op: "grantUpgradeId", id: "apex_power_executioner" }, { op: "setFlag", key: "executionerCross", value: true }] },
-      // ---- TECHNIQUE (yellow) ----
-      { id: "tec_r1", kind: "rank", tree: "technique", rank: 1, memoryPolicy: "none", name: "Sharp Eyes", desc: "More Instinct from clean reads and Perfect Slips.", weight: 10, effects: [{ op: "incOrb", tree: "technique", amount: 1 }, { op: "mulStat", stat: "techMult", amount: 0.3 }] },
-      { id: "tec_r2", kind: "rank", tree: "technique", rank: 2, memoryPolicy: "none", name: "Double Tap", desc: "Sharper still \u2014 a Perfect Slip charges TWO Counter hits.", weight: 10, effects: [{ op: "incOrb", tree: "technique", amount: 1 }, { op: "mulStat", stat: "techMult", amount: 0.25 }] },
-      { id: "tec_r3", kind: "rank", tree: "technique", rank: 3, verb: true, memoryPolicy: "none", name: "Afterimage Slip", desc: "A Perfect Slip leaves a neon afterimage in the lane you left \u2014 a beat later it throws an echo punch at whoever swung.", weight: 12, effects: [{ op: "incOrb", tree: "technique", amount: 1 }, { op: "setFlag", key: "afterimageSlip", value: true }] },
-      { id: "tec_r4", kind: "rank", tree: "technique", rank: 4, memoryPolicy: "none", name: "True Read", desc: "Sharper again \u2014 a Perfect Slip on a boss EXPOSES it for a True Read.", weight: 10, effects: [{ op: "incOrb", tree: "technique", amount: 1 }, { op: "mulStat", stat: "techMult", amount: 0.25 }] },
-      { id: "apex_technique_flow_state", kind: "rank", draftRole: "apex", tree: "technique", rank: 5, memoryPolicy: "none", name: "Flow State", desc: "a sustained streak of clean hits and Perfect Slips ramps Instinct and EXP gain. Getting hit resets it.", weight: 8, effects: [{ op: "incOrb", tree: "technique", amount: 1 }, { op: "grantUpgradeId", id: "apex_technique_flow_state" }, { op: "setFlag", key: "flowState", value: true }] }
-    ],
-    masteries: [
-      { id: "mast_weavers_step", kind: "mastery", draftRole: "evolution", tree: "speed", tier: 2, repeatable: false, memoryPolicy: "hard", name: "Weaver's Step", desc: "Ghost Step cooldown reduced by 20%.", weight: 8, reqs: { orbTreeAtLeast: { speed: 2 }, notOwned: ["mast_weavers_step"] }, effects: [{ op: "grantUpgradeId", id: "mast_weavers_step" }, { op: "mulMod", key: "ghostStepCooldownMult", amount: 0.8 }] },
-      { id: "mast_loose_shoulders", kind: "mastery", draftRole: "evolution", tree: "speed", tier: 2, repeatable: false, memoryPolicy: "hard", name: "Loose Shoulders", desc: "Hook and Check Hook recover faster.", weight: 8, reqs: { orbTreeAtLeast: { speed: 2 }, notOwned: ["mast_loose_shoulders"] }, effects: [{ op: "grantUpgradeId", id: "mast_loose_shoulders" }, { op: "mulMod", key: "hookRecoveryMult", amount: 0.82 }] },
-      { id: "mast_relentless_rhythm", kind: "mastery", draftRole: "evolution", tree: "speed", tier: 2, repeatable: false, memoryPolicy: "hard", name: "Relentless Rhythm", desc: "Missing Jab 1 or Jab 2 decays Combo instead of snapping it completely.", weight: 8, reqs: { orbTreeAtLeast: { speed: 2 }, notOwned: ["mast_relentless_rhythm"] }, effects: [{ op: "grantUpgradeId", id: "mast_relentless_rhythm" }, { op: "setFlag", key: "relentlessRhythm", value: true }] },
-      { id: "mast_heavy_hands", kind: "mastery", draftRole: "evolution", tree: "power", tier: 2, repeatable: false, memoryPolicy: "hard", name: "Heavy Hands", desc: "Cross applies bonus stun and stronger pressure against armor states.", weight: 8, reqs: { orbTreeAtLeast: { power: 2 }, notOwned: ["mast_heavy_hands"] }, effects: [{ op: "grantUpgradeId", id: "mast_heavy_hands" }, { op: "addMod", key: "crossArmorStunBonus", amount: 12 }] },
-      { id: "mast_ring_cutter", kind: "mastery", draftRole: "evolution", tree: "power", tier: 2, repeatable: false, memoryPolicy: "hard", name: "Ring Cutter", desc: "Hook gains a stronger minimum knockback floor at close and mid spacing.", weight: 8, reqs: { orbTreeAtLeast: { power: 2 }, notOwned: ["mast_ring_cutter"] }, effects: [{ op: "grantUpgradeId", id: "mast_ring_cutter" }, { op: "addMod", key: "hookKnockbackFloor", amount: 10 }] },
-      { id: "mast_body_shot_discipline", kind: "mastery", draftRole: "evolution", tree: "power", tier: 2, repeatable: false, memoryPolicy: "hard", name: "Body Shot Discipline", desc: "Cross and Hook on Shields and Bruisers grant extra Instinct and EXP.", weight: 8, reqs: { orbTreeAtLeast: { power: 2 }, notOwned: ["mast_body_shot_discipline"] }, effects: [{ op: "grantUpgradeId", id: "mast_body_shot_discipline" }, { op: "addMod", key: "hardTargetInstinctFlat", amount: 4 }, { op: "addMod", key: "hardTargetExpFlat", amount: 1 }] },
-      { id: "mast_deep_focus", kind: "mastery", draftRole: "evolution", tree: "technique", tier: 2, repeatable: false, memoryPolicy: "hard", name: "Deep Focus", desc: "Perfect Slip window gains +2 frames.", weight: 8, reqs: { orbTreeAtLeast: { technique: 2 }, notOwned: ["mast_deep_focus"] }, effects: [{ op: "grantUpgradeId", id: "mast_deep_focus" }, { op: "addMod", key: "perfectSlipWindowBonus", amount: 2 }] },
-      { id: "mast_cold_read", kind: "mastery", draftRole: "evolution", tree: "technique", tier: 2, repeatable: false, memoryPolicy: "hard", name: "Cold Read", desc: "Boss expose / True Read windows last longer.", weight: 8, reqs: { orbTreeAtLeast: { technique: 2 }, notOwned: ["mast_cold_read"] }, effects: [{ op: "grantUpgradeId", id: "mast_cold_read" }, { op: "addMod", key: "bossExposeBonusFrames", amount: 30 }] },
-      { id: "mast_vantage_point", kind: "mastery", draftRole: "evolution", tree: "technique", tier: 2, repeatable: false, memoryPolicy: "hard", name: "Vantage Point", desc: "Perfect Slip restores a small amount of health.", weight: 8, reqs: { orbTreeAtLeast: { technique: 2 }, notOwned: ["mast_vantage_point"] }, effects: [{ op: "grantUpgradeId", id: "mast_vantage_point" }, { op: "addMod", key: "perfectSlipHeal", amount: 3 }] },
-      { id: "mast_guard_read", kind: "mastery", draftRole: "evolution", tree: "technique", tier: 2, repeatable: false, memoryPolicy: "hard", name: "Guard Read", desc: "Releasing Guard the instant a hit lands charges a Counter. Turtling becomes a second read, not just a shield.", weight: 8, reqs: { orbTreeAtLeast: { technique: 2 }, notOwned: ["mast_guard_read"] }, effects: [{ op: "grantUpgradeId", id: "mast_guard_read" }, { op: "setFlag", key: "guardRead", value: true }] }
-    ],
-    // v17: a Fusion unlocks when BOTH its trees reach rank 3, and EVOLVES when both
-    // reach rank 5 (Arc 5). Colour = the mix of its two trees (constants FUSION_COLORS).
-    fusions: [
-      { id: "fuse_dempsey_circuit", kind: "fusion", draftRole: "capstone", tree: "general", trees: ["speed", "power"], tier: 3, repeatable: false, memoryPolicy: "hard", name: "Dempsey Circuit", desc: "Alternating Jab and Hook reduces recovery and preserves offensive rhythm.", weight: 6, reqs: { orbTreeAtLeast: { speed: 3, power: 3 }, notOwned: ["fuse_dempsey_circuit"] }, effects: [{ op: "grantUpgradeId", id: "fuse_dempsey_circuit" }, { op: "setFlag", key: "dempseyCircuit", value: true }, { op: "addMod", key: "dempseyRecoveryBonus", amount: 0.18 }] },
-      { id: "fuse_ghost_counter", kind: "fusion", draftRole: "capstone", tree: "general", trees: ["speed", "technique"], tier: 3, repeatable: false, memoryPolicy: "hard", name: "Ghost Counter", desc: "Ghost Step through an active hitbox to gain Counter Charge.", weight: 6, reqs: { orbTreeAtLeast: { speed: 3, technique: 3 }, notOwned: ["fuse_ghost_counter"] }, effects: [{ op: "grantUpgradeId", id: "fuse_ghost_counter" }, { op: "setFlag", key: "ghostCounter", value: true }] },
-      { id: "fuse_shatter_read", kind: "fusion", draftRole: "capstone", tree: "general", trees: ["power", "technique"], tier: 3, repeatable: false, memoryPolicy: "hard", name: "Shatter Read", desc: "A Counter-Charged Cross partially bypasses boss resistance and forces a stronger stagger.", weight: 6, reqs: { orbTreeAtLeast: { power: 3, technique: 3 }, notOwned: ["fuse_shatter_read"] }, effects: [{ op: "grantUpgradeId", id: "fuse_shatter_read" }, { op: "setFlag", key: "shatterRead", value: true }, { op: "addMod", key: "shatterReadBossBypass", amount: 0.35 }, { op: "addMod", key: "shatterReadStaggerBonus", amount: 12 }] },
-      // ---- EVOLVED (both trees at rank 5, base Fusion owned) ----
-      { id: "evo_infinite_circuit", kind: "fusion", evolved: true, draftRole: "capstone", tree: "general", trees: ["speed", "power"], tier: 4, repeatable: false, memoryPolicy: "hard", name: "Infinite Circuit", desc: "an alternating Jab/Hook string never drops Combo on a whiff, and every 4th alternation charges a Counter.", weight: 8, reqs: { orbTreeAtLeast: { speed: 5, power: 5 }, hasUpgradeIds: ["fuse_dempsey_circuit"], notOwned: ["evo_infinite_circuit"] }, effects: [{ op: "grantUpgradeId", id: "evo_infinite_circuit" }, { op: "setFlag", key: "infiniteCircuit", value: true }] },
-      { id: "evo_phantom_riposte", kind: "fusion", evolved: true, draftRole: "capstone", tree: "general", trees: ["speed", "technique"], tier: 4, repeatable: false, memoryPolicy: "hard", name: "Phantom Riposte", desc: "a perfect Ghost Step leaves an afterimage that instantly echoes a punch back at the attacker.", weight: 8, reqs: { orbTreeAtLeast: { speed: 5, technique: 5 }, hasUpgradeIds: ["fuse_ghost_counter"], notOwned: ["evo_phantom_riposte"] }, effects: [{ op: "grantUpgradeId", id: "evo_phantom_riposte" }, { op: "setFlag", key: "phantomRiposte", value: true }] },
-      { id: "evo_shatter_nova", kind: "fusion", evolved: true, draftRole: "capstone", tree: "general", trees: ["power", "technique"], tier: 4, repeatable: false, memoryPolicy: "hard", name: "Shatter Nova", desc: "a Counter-Charged Cross on a boss tears off an extra 8% of its health; on anyone else it shatters every enemy in the lane.", weight: 8, reqs: { orbTreeAtLeast: { power: 5, technique: 5 }, hasUpgradeIds: ["fuse_shatter_read"], notOwned: ["evo_shatter_nova"] }, effects: [{ op: "grantUpgradeId", id: "evo_shatter_nova" }, { op: "setFlag", key: "shatterNova", value: true }] }
-    ],
-    overclocks: [
-      { id: "oc_vital_surge", kind: "overclock", draftRole: "fallback", tree: "general", tier: 4, repeatable: true, memoryPolicy: "soft", name: "Vital Surge", desc: "Restore +20 health.", weight: 20, reqs: {}, effects: [{ op: "heal", amount: 20 }, { op: "incOverclock", key: "vitality", amount: 1 }] },
-      { id: "oc_quick_nerves", kind: "overclock", draftRole: "fallback", tree: "general", tier: 4, repeatable: true, memoryPolicy: "soft", name: "Quick Nerves", desc: "Tiny Ghost Step cooldown trim.", weight: 12, reqs: {}, effects: [{ op: "mulMod", key: "ghostStepCooldownMult", amount: 0.95 }, { op: "incOverclock", key: "nerves", amount: 1 }] },
-      { id: "oc_sharp_eye", kind: "overclock", draftRole: "fallback", tree: "general", tier: 4, repeatable: true, memoryPolicy: "soft", name: "Keen Read", desc: "Perfect Slips pay a little more Instinct and score.", weight: 12, reqs: {}, effects: [{ op: "addMod", key: "perfectSlipRewardBonusMult", amount: 0.08 }, { op: "incOverclock", key: "focus", amount: 1 }] },
-      { id: "oc_calm_engine", kind: "overclock", draftRole: "fallback", tree: "general", tier: 4, repeatable: true, memoryPolicy: "soft", name: "Calm Engine", desc: "Slightly improve Instinct gain for the rest of the run.", weight: 12, reqs: {}, effects: [{ op: "addMod", key: "instinctGainBonusMult", amount: 0.06 }, { op: "incOverclock", key: "instinct", amount: 1 }] },
-      { id: "oc_clinch_breaker", kind: "overclock", draftRole: "fallback", tree: "general", tier: 4, repeatable: true, memoryPolicy: "soft", name: "Clinch Breaker", desc: "Reduce incoming recoil and hit pushback slightly.", weight: 10, reqs: {}, effects: [{ op: "mulMod", key: "incomingRecoilMult", amount: 0.94 }, { op: "incOverclock", key: "clinch", amount: 1 }] },
-      { id: "oc_clean_finish", kind: "overclock", draftRole: "fallback", tree: "general", tier: 4, repeatable: true, memoryPolicy: "soft", name: "Clean Finish", desc: "Slightly improve EXP / score efficiency.", weight: 10, reqs: {}, effects: [{ op: "addMod", key: "expGainBonusMult", amount: 0.05 }, { op: "incOverclock", key: "finish", amount: 1 }] }
-    ]
-  };
-
   // src/systems/wagers.js
   var NONE = CONSTANTS.AFFIXES[0];
   function rollWagerOffer(stage2) {
@@ -6300,6 +6192,26 @@
         break;
       }
     }
+  }
+  function applyBuild(st, build) {
+    const granted = [];
+    for (const tree of ["speed", "power", "technique"]) {
+      for (let r = 1; r <= (build[tree] || 0); r++) {
+        const card = UPGRADE_POOL.orbs.find((u) => u.tree === tree && u.rank === r);
+        if (card) {
+          card.effects.forEach((e) => applyEffect(st, e));
+          granted.push(card.id);
+        }
+      }
+    }
+    for (const f of UPGRADE_POOL.fusions) {
+      const need = f.evolved ? 5 : 3;
+      if (f.trees.every((t) => (build[t] || 0) >= need)) {
+        f.effects.forEach((e) => applyEffect(st, e));
+        granted.push(f.id);
+      }
+    }
+    return granted;
   }
   function applyUpgrade(st, upgrade) {
     if (!upgrade || !upgrade.effects) return;
@@ -6423,6 +6335,7 @@
     gameState.paletteTo = CONSTANTS.paletteKeyForStage(gameState.currentStage);
     gameState.paletteT = 0;
     gameState.hazards = [];
+    gameState.canisters = [];
     gameState.hazardCooldown = CONSTANTS.HAZARDS.cooldownFrames;
     gameState.hazardsThisStage = 0;
     gameState.surpriseBudget = isBoss ? 0 : (CONSTANTS.SURPRISE.budgetByArc || {})[safeArcIndex] || 0;
@@ -6478,6 +6391,228 @@
       ...hotLaneCard,
       { type: "resume" }
     ]);
+  }
+
+  // src/systems/practice.js
+  var PRACTICE_TREES = ["speed", "power", "technique"];
+  function earnedRank(tree) {
+    let best = 0;
+    for (const u of UPGRADE_POOL.orbs) if (u.tree === tree && u.rank > best && hasSeenUpgrade(u.id)) best = u.rank;
+    return best;
+  }
+  var BOSS_NAMES = ["NEON ENFORCER", "PHANTOM BOXER", "STATIC MONK", "LIVE WIRE", "NEGATIVE"];
+  function practiceTargets() {
+    const list = [
+      { id: "grunt", label: "GRUNT", type: "grunt", stage: 2, need: 0 },
+      { id: "shield", label: "GOLD ARMOR", type: "shield", stage: 3, need: 0 },
+      { id: "bruiser", label: "BRUISER", type: "bruiser", stage: 3, need: 0 },
+      { id: "zoner", label: "ZONER", type: "zoner", stage: 4, need: 0 },
+      { id: "assassin", label: "ASSASSIN", type: "assassin", stage: 4, need: 0 }
+    ];
+    for (let arc = 1; arc <= 5; arc++) {
+      const bs = CONSTANTS.bossStageOfArc(arc);
+      list.push({ id: `boss${arc}`, label: BOSS_NAMES[arc - 1], boss: arc, stage: bs, need: bs });
+    }
+    return list;
+  }
+  function practiceTargetUnlocked(t, bestStage) {
+    return (bestStage || 0) >= (t.need || 0);
+  }
+  function beginPractice(target, showWindows, build) {
+    gameState.practice = { id: target.id, target, windows: !!showWindows, respawn: 30, resets: 0, perfect0: 0, build: build || null };
+    if (build) {
+      const capped = {};
+      PRACTICE_TREES.forEach((t) => {
+        capped[t] = Math.min(build[t] || 0, earnedRank(t));
+      });
+      gameState.practice.granted = applyBuild(gameState, capped);
+    }
+    gameState.currentStage = target.stage;
+    gameState.stageClearing = false;
+    gameState.bossActive = false;
+    gameState.waveTimer = 9999;
+    gameState.seenTutorials = { ...gameState.seenTutorials || {}, footwork_tip: true, instinct: true, bruiser_id: true, string_id: true, assassin_id: true };
+    gameState.tutorialEnabled = false;
+    gameState.pendingUpgrades = 0;
+  }
+  function updatePractice() {
+    const P = gameState.practice;
+    if (!P) return;
+    gameState.exp = 0;
+    gameState.pendingUpgrades = 0;
+    gameState.stageClearing = false;
+    if (gameState.health < 40) {
+      gameState.health = gameState.maxHealth;
+      P.resets++;
+      spawnFloatingText(gameState.player.x, gameState.player.y - 130, "HP RESET", "#9ca3af");
+    }
+    const t = P.target;
+    const alive = t.boss ? gameState.enemies.some((e) => e.isBoss && e.hp > 0) || gameState.bossIntroTimer > 0 || !!gameState.finisher : gameState.enemies.some((e) => e.hp > 0);
+    if (alive) {
+      P.respawn = t.boss ? 90 : 40;
+      return;
+    }
+    if (--P.respawn > 0) return;
+    if (t.boss) {
+      gameState.enemies = gameState.enemies.filter((e) => !e.isBoss);
+      gameState.bossDefeatedThisStage = false;
+      gameState.bossActive = false;
+      spawnBoss();
+    } else {
+      const lane = gameState.player ? Math.random() < 0.6 ? gameState.player.lane : Math.floor(Math.random() * 3) : 1;
+      gameState.enemies.push(makeEnemy(t.type, lane, 0, { stringLen: t.stringLen }));
+    }
+  }
+  function practiceHudText() {
+    const P = gameState.practice;
+    if (!P) return "";
+    return `PRACTICE \xB7 ${P.target.label} \xB7 PERFECT ${gameState.statTotalSlips || 0} \xB7 HITS TAKEN ${gameState.stageHitsTaken || 0}`;
+  }
+
+  // src/ui/ui.js
+  var HUD = {
+    get combo() {
+      return $("combo-ui");
+    },
+    get expBar() {
+      return $("exp-bar");
+    },
+    get expMult() {
+      return $("exp-multiplier");
+    },
+    get instinctBar() {
+      return $("instinct-bar");
+    },
+    get instinctBanner() {
+      return $("instinct-ready-banner");
+    },
+    get barCont() {
+      return $("bar-cont");
+    },
+    get health() {
+      return $("health-ui");
+    },
+    get flash() {
+      return $("screen-flash");
+    },
+    get screens() {
+      return {
+        upgrade: $("upgrade-screen"),
+        pause: $("pause-screen"),
+        gameover: $("gameover-screen"),
+        start: $("start-screen"),
+        howto: $("howto-screen"),
+        tutorial: $("tutorial-screen")
+      };
+    },
+    get finalStage() {
+      return $("final-stage-ui");
+    },
+    get slipPopup() {
+      return $("perfect-slip-ui");
+    },
+    get stage() {
+      return $("stage-ui");
+    },
+    get affix() {
+      return $("affix-ui");
+    },
+    get counterHud() {
+      return $("counter-hud");
+    },
+    get counterStatus() {
+      return $("counter-status");
+    }
+  };
+  function updateHUD() {
+    const target = Math.round(gameState.score || 0);
+    if (gameState.displayScore !== target) {
+      const diff = target - gameState.displayScore;
+      gameState.displayScore = Math.abs(diff) < 4 ? target : gameState.displayScore + Math.ceil(diff * 0.2);
+    }
+    if (gameState.lastHUD.score !== gameState.displayScore) {
+      const el = $("score-ui");
+      if (el) el.innerText = gameState.displayScore.toLocaleString();
+      gameState.lastHUD.score = gameState.displayScore;
+    }
+    const cm = comboMultiplier(gameState.combo);
+    const key = `${cm}|${gameState.wagerMult}`;
+    if (gameState.lastHUD.wager !== key) {
+      const m = $("score-mult");
+      if (m) {
+        m.innerText = `\xD7${cm.toFixed(2)}`;
+        m.classList.toggle("hot", cm > 1);
+      }
+      const w = $("wager-badge");
+      if (w) {
+        w.innerText = gameState.wagerMult > 1 ? `\xD7${gameState.wagerMult} WAGER` : "";
+        w.style.display = gameState.wagerMult > 1 ? "inline-block" : "none";
+      }
+      gameState.lastHUD.wager = key;
+    }
+    if (gameState.practice) {
+      const txt = practiceHudText();
+      if (gameState.lastHUD.practice !== txt) {
+        if (HUD.stage) HUD.stage.innerText = txt;
+        const el = $("arc-par");
+        if (el) el.innerHTML = "";
+        gameState.lastHUD.practice = txt;
+      }
+    }
+    const al = gameState.practice ? null : arcLive(), parKey = al ? `${al.arc}|${al.secs}|${Math.floor(al.score / 1e3)}` : "";
+    if (al && gameState.lastHUD.par !== parKey) {
+      const el = $("arc-par");
+      if (el) {
+        const late = al.secs > al.par.time, rich = al.score >= al.par.score;
+        el.innerHTML = `PAR <span style="color:${late ? "#f87171" : "#e5e7eb"}">${fmtSecs(al.secs)}/${fmtSecs(al.par.time)}</span> \xB7 <span style="color:${rich ? "#facc15" : "#e5e7eb"}">${fmtK(al.score)}/${fmtK(al.par.score)}</span>`;
+      }
+      gameState.lastHUD.par = parKey;
+    }
+    if (gameState.lastHUD.combo !== gameState.combo) {
+      HUD.combo.innerText = gameState.combo;
+      gameState.lastHUD.combo = gameState.combo;
+    }
+    let expPct = Math.min(100, gameState.exp / gameState.expNeeded * 100);
+    if (gameState.lastHUD.exp !== expPct) {
+      if (HUD.expBar) HUD.expBar.style.width = expPct + "%";
+      gameState.lastHUD.exp = expPct;
+    }
+    let mult = 1 + Math.min(0.3, Math.floor(gameState.combo / 2) * 0.1);
+    if (gameState.lastHUD.mult !== mult) {
+      if (HUD.expMult) {
+        if (mult > 1) {
+          HUD.expMult.innerText = `x${mult.toFixed(1)}`;
+          HUD.expMult.classList.remove("opacity-0");
+          HUD.expMult.classList.add("opacity-100");
+        } else {
+          HUD.expMult.classList.remove("opacity-100");
+          HUD.expMult.classList.add("opacity-0");
+        }
+      }
+      gameState.lastHUD.mult = mult;
+    }
+    let roundInstinct = Math.floor(gameState.instinctMeter);
+    if (gameState.lastHUD.instinct !== roundInstinct) {
+      HUD.instinctBar.style.width = roundInstinct + "%";
+      gameState.lastHUD.instinct = roundInstinct;
+    }
+    let displayHP = Math.max(0, Math.round(gameState.health));
+    if (gameState.lastHUD.hp !== displayHP) {
+      HUD.health.innerText = `${displayHP}`;
+      gameState.lastHUD.hp = displayHP;
+      const bar = $("hp-bar");
+      if (bar) {
+        const pct = Math.max(0, Math.min(100, displayHP / (gameState.maxHealth || 100) * 100));
+        bar.style.width = pct + "%";
+        bar.classList.toggle("low", pct <= 25);
+      }
+    }
+    if (gameState.player && gameState.lastHUD.slipBuff !== gameState.player.slipBuff) {
+      HUD.counterStatus.innerText = gameState.player.slipBuff > 0 ? gameState.player.slipBuff > 1 ? "READY \xD72" : "READY" : "\u2014";
+      if (HUD.counterHud) HUD.counterHud.classList.toggle("ready", gameState.player.slipBuff > 0);
+      gameState.lastHUD.slipBuff = gameState.player.slipBuff;
+    }
+    if (HUD.expBar) HUD.expBar.classList.toggle("pulse", (gameState.orbPulse || 0) > 6);
   }
 
   // src/systems/progression/requirements.js
@@ -6705,7 +6840,7 @@
       }
     });
     gameState.enemies.forEach((en) => {
-      en.isActiveThreat = (frontEnemy[en.lane] === en || en.isBoss || en.tutorialType || en.type === "zoner") && en.x > gameState.player.x - 30;
+      en.isActiveThreat = !en.passed && ((frontEnemy[en.lane] === en || en.isBoss || en.tutorialType || en.type === "zoner") && en.x > gameState.player.x - 30);
     });
     for (let i = 0; i < gameState.enemies.length; i++) {
       const en = gameState.enemies[i];
@@ -6739,6 +6874,7 @@
           return;
         }
       }
+      if (!en.isBoss && !en.tutorialType && !en.passed && en.x < gameState.player.x - 20) en.passed = true;
       if (en.floored > 0) en.floored--;
       if (en.bumpTimer > 0) en.bumpTimer--;
       if (en.stun > 0 || gameState.bossIntroTimer > 0) {
@@ -7012,6 +7148,7 @@
         en.attackCooldown = en.maxCooldown;
         en.stringIdx = 0;
         en.loops = (en.loops || 0) + 1;
+        en.passed = false;
       } else if (en.x < -100) {
         gameState.enemies.splice(i, 1);
       }
@@ -7585,6 +7722,7 @@
     });
     ctx.globalAlpha = 1;
     drawLiveLanes(ctx);
+    drawCanisters(ctx);
     drawFinisherDim(ctx);
     drawAfterimages(ctx);
     gameState.player.trails.forEach((t) => {
@@ -8049,6 +8187,8 @@
     gameState.afterimages = [];
     gameState.koFx = [];
     gameState.bossKo = null;
+    gameState.retries = 0;
+    gameState.canisters = [];
     gameState.rankOrder = [];
     gameState.orbPulse = 0;
     gameState.paletteFrom = 1;
@@ -8102,7 +8242,7 @@
     resetGame();
     gameState.screen = "playing";
     if (opts.practice) {
-      beginPractice(opts.practice, opts.windows);
+      beginPractice(opts.practice, opts.windows, opts.build);
       gameState.tutorialEnabled = false;
     } else {
       gameState.heat = !daily && heatUnlocked() ? loadHeat() : [];
@@ -8110,7 +8250,7 @@
     }
     resetRecap();
     arcParStart();
-    ["start-screen", "gameover-screen", "pause-screen", "wager-screen", "upgrade-screen", "practice-screen", "heat-screen"].forEach(hideOverlay);
+    ["start-screen", "gameover-screen", "continue-screen", "pause-screen", "wager-screen", "upgrade-screen", "practice-screen", "heat-screen"].forEach(hideOverlay);
     duckMusic(false);
     startMusic();
     SequenceManager.playDynamic(gameState.practice ? [
@@ -8125,26 +8265,44 @@
     ]);
   }
   var practiceWindows = true;
+  var PRACTICE_BUILD_KEY = "neon_strike_practice_build_v1";
+  var practiceBuild = (() => {
+    try {
+      return JSON.parse(localStorage.getItem(PRACTICE_BUILD_KEY) || "{}") || {};
+    } catch (e) {
+      return {};
+    }
+  })();
+  window.enginePracticeRank = (t) => {
+    const cap = earnedRank(t);
+    if (!cap) {
+      playSound("bounce");
+      return;
+    }
+    practiceBuild[t] = (Math.min(practiceBuild[t] || 0, cap) + 1) % (cap + 1);
+    try {
+      localStorage.setItem(PRACTICE_BUILD_KEY, JSON.stringify(practiceBuild));
+    } catch (e) {
+    }
+    playSound("slip");
+    renderPracticeMenu();
+  };
   function renderStartExtras() {
     const m = loadMeta();
     const pb = document.getElementById("practice-btn"), hb = document.getElementById("heat-btn");
-    if (pb) {
-      const ok = practiceUnlocked(m);
-      pb.classList.toggle("locked", !ok);
-      pb.querySelector(".sub").innerText = ok ? "Drill any enemy or boss" : "Reach the Arc 1 title fight";
-    }
+    if (pb) pb.classList.toggle("locked", !practiceUnlocked(m));
     if (hb) {
       const ok = heatUnlocked(m);
       hb.classList.toggle("locked", !ok);
-      const h = loadHeat();
-      hb.querySelector(".sub").innerText = !ok ? "Beat the Arc 1 boss" : h.length ? `HEAT ${h.length} \xB7 SCORE \xD7${heatMultFor(h).toFixed(2)}` : "Off \u2014 add modifiers";
+      const h = loadHeat(), t = document.getElementById("heat-btn-title");
+      if (t) t.innerText = ok && h.length ? `MODIFIERS \xD7${heatMultFor(h).toFixed(2)}` : "MODIFIERS";
     }
   }
   function openSubmenu(screen) {
     initAudio();
     const unlocked = screen === "practice" ? practiceUnlocked() : heatUnlocked();
     if (!unlocked) {
-      showToast(screen === "practice" ? "REACH THE ARC 1 TITLE FIGHT TO UNLOCK" : "BEAT THE ARC 1 BOSS TO UNLOCK", "#9ca3af");
+      showToast(screen === "practice" ? "REACH THE ARC 1 BOSS TO UNLOCK" : "BEAT THE ARC 1 BOSS TO UNLOCK", "#9ca3af");
       playSound("bounce");
       return;
     }
@@ -8169,7 +8327,11 @@
     el.innerHTML = practiceTargets().map((t) => {
       const ok = practiceTargetUnlocked(t, best);
       return `<div class="orb-btn sm${ok ? "" : " locked"}${t.boss ? " boss" : ""}" onclick="window.enginePractice('${t.id}')"><div class="font-bold">${ok ? t.label : "???"}</div><div class="sub">${ok ? t.boss ? `ARC ${t.boss} BOSS` : t.stringLen ? "3-HIT STRINGS" : "ENEMY" : `REACH ROUND ${t.need}`}</div></div>`;
-    }).join("") + `<div class="orb-btn sm wide" onclick="window.enginePracticeWindows()"><div class="font-bold">SLIP WINDOWS: ${practiceWindows ? "ON" : "OFF"}</div><div class="sub">Show each attack's GOOD / PERFECT window</div></div><div class="orb-btn sm wide back" onclick="window.engineCloseSubmenu()"><div class="font-bold">BACK [ESC] / [B]</div></div>`;
+    }).join("") + // v23 BUILD PICKER: one button per tree, cycling 0 -> your best earned rank.
+    `<div class="practice-build">${PRACTICE_TREES.map((t) => {
+      const cap = earnedRank(t), v = Math.min(practiceBuild[t] || 0, cap);
+      return `<div class="orb-btn sm${cap ? "" : " locked"}" style="border-color:${TREE_COLOR[t]};" onclick="window.enginePracticeRank('${t}')"><div class="font-bold" style="color:${TREE_COLOR[t]};">${t.toUpperCase()} ${v}</div><div class="sub">${cap ? `UP TO RANK ${cap}` : "EARN A RANK IN A RUN"}</div></div>`;
+    }).join("")}</div><div class="orb-btn sm wide" onclick="window.enginePracticeWindows()"><div class="font-bold">SLIP WINDOWS: ${practiceWindows ? "ON" : "OFF"}</div><div class="sub">Show each attack's GOOD / PERFECT window</div></div><div class="orb-btn sm wide back" onclick="window.engineCloseSubmenu()"><div class="font-bold">BACK [ESC] / [B]</div></div>`;
   }
   window.enginePractice = (id) => {
     const t = practiceTargets().find((x) => x.id === id);
@@ -8177,7 +8339,7 @@
       playSound("bounce");
       return;
     }
-    startGame({ practice: t, windows: practiceWindows, tutorial: false });
+    startGame({ practice: t, windows: practiceWindows, tutorial: false, build: { ...practiceBuild } });
   };
   window.enginePracticeWindows = () => {
     practiceWindows = !practiceWindows;
@@ -8187,7 +8349,7 @@
     const el = document.getElementById("heat-list");
     if (!el) return;
     const on = loadHeat();
-    el.innerHTML = CONSTANTS.HEAT.mods.map((h) => `<div class="orb-btn sm wide heat-row${on.includes(h.id) ? " on" : ""}" onclick="window.engineToggleHeat('${h.id}')"><div class="font-bold">${on.includes(h.id) ? "\u25A0" : "\u25A1"} ${h.name} <span class="heat-bonus">+${Math.round(h.bonus * 100)}%</span></div><div class="sub">${h.desc}</div></div>`).join("") + `<div class="heat-total">HEAT ${heatLevel(on)} \xB7 SCORE \xD7${heatMultFor(on).toFixed(2)} <span>applies to every Gauntlet run while on</span></div><div class="orb-btn sm wide back" onclick="window.engineCloseSubmenu()"><div class="font-bold">BACK [ESC] / [B]</div></div>`;
+    el.innerHTML = CONSTANTS.HEAT.mods.map((h) => `<div class="orb-btn sm wide heat-row${on.includes(h.id) ? " on" : ""}" onclick="window.engineToggleHeat('${h.id}')"><div class="font-bold">${on.includes(h.id) ? "\u25A0" : "\u25A1"} ${h.name} <span class="heat-bonus">+${Math.round(h.bonus * 100)}%</span></div><div class="sub">${h.desc}</div></div>`).join("") + `<div class="heat-total">${heatLevel(on)} ACTIVE \xB7 SCORE \xD7${heatMultFor(on).toFixed(2)} <span>applies to every Gauntlet run while on</span></div><div class="orb-btn sm wide back" onclick="window.engineCloseSubmenu()"><div class="font-bold">BACK [ESC] / [B]</div></div>`;
   }
   window.engineToggleHeat = (id) => {
     toggleHeat(id);
@@ -8197,7 +8359,7 @@
   var ANNOUNCE_KEY = "neon_strike_announced_v1";
   var UNLOCK_NOTES = {
     practice: { title: "PRACTICE ROOM UNLOCKED", color: "#a78bfa", text: "Pick any enemy you've met \u2014 or a boss you've reached \u2014 and drill it on a loop. You can't lose, nothing is scored, and the SLIP WINDOWS overlay shows exactly when to move.<br><br>Find it on the main menu." },
-    heat: { title: "HEAT UNLOCKED", color: "#fb923c", text: "Stack optional modifiers \u2014 faster enemies, no healing, no ten-count\u2026 \u2014 for a bigger score multiplier on every run.<br><br>Toggle them from HEAT on the main menu." }
+    heat: { title: "MODIFIERS UNLOCKED", color: "#fb923c", text: "Stack optional modifiers \u2014 faster enemies, no healing, no ten-count\u2026 \u2014 for a bigger score multiplier on every run.<br><br>Toggle them from HEAT on the main menu." }
   };
   function loadAnnounced() {
     try {
@@ -8278,7 +8440,7 @@
     gameState.screen = "start";
     const startScreen = document.getElementById("start-screen");
     if (startScreen) startScreen.style.display = "flex";
-    ["pause-screen", "gameover-screen", "wager-screen", "upgrade-screen", "practice-screen", "heat-screen"].forEach(hideOverlay);
+    ["pause-screen", "gameover-screen", "continue-screen", "wager-screen", "upgrade-screen", "practice-screen", "heat-screen"].forEach(hideOverlay);
     renderStartExtras();
     showNextUnlock();
     SequenceManager.active = false;
@@ -8506,6 +8668,13 @@
     if (a) a.innerHTML = kb ? '<span class="glyph">1</span> / <span class="glyph">ENTER</span>' : glyphHTML("confirm");
     if (d) d.innerHTML = kb ? '<span class="glyph">2</span> / <span class="glyph">ESC</span>' : glyphHTML("back");
   }
+  function setWagerFocus(i) {
+    gameState.wagerFocus = i;
+    const a = document.querySelector(".wager-accept"), d = document.querySelector(".wager-decline");
+    if (a) a.classList.toggle("menu-focus", i !== 1);
+    if (d) d.classList.toggle("menu-focus", i === 1);
+    playSound("slip");
+  }
   function showWager() {
     renderWagerPrompts();
     const offer = gameState.wagerOffer;
@@ -8522,6 +8691,10 @@
     set("wager-name", offer.name);
     set("wager-desc", offer.desc);
     set("wager-mult", `\xD7${offer.scoreMult} SCORE THIS STAGE`);
+    gameState.wagerFocus = 0;
+    const wa = document.querySelector(".wager-accept"), wd = document.querySelector(".wager-decline");
+    if (wa) wa.classList.add("menu-focus");
+    if (wd) wd.classList.remove("menu-focus");
     const w = document.getElementById("wager-screen");
     if (w) w.style.display = "flex";
   }
@@ -8601,8 +8774,17 @@
         if (gameState.pad.instinct || gameState.pad.jab || gameState.pad.cross) dismissTutorial();
       } else if (gameState.screen === "vignette") {
         if (anyPress) skipVignette();
+      } else if (gameState.screen === "continue") {
+        if (jp(14) || stickLeft) setContinueFocus(0);
+        else if (jp(15) || stickRight) setContinueFocus(1);
+        else if (gameState.pad.up || gameState.pad.down) setContinueFocus(gameState.continueFocus ? 0 : 1);
+        else if (jp(0)) resolveContinue(gameState.continueFocus !== 1);
+        else if (jp(1)) resolveContinue(false);
       } else if (gameState.screen === "wager") {
-        if (jp(0)) resolveWager(true);
+        if (jp(14) || stickLeft) setWagerFocus(0);
+        else if (jp(15) || stickRight) setWagerFocus(1);
+        else if (gameState.pad.up || gameState.pad.down) setWagerFocus(gameState.wagerFocus ? 0 : 1);
+        else if (jp(0)) resolveWager(gameState.wagerFocus !== 1);
         else if (jp(1)) resolveWager(false);
       } else if (gameState.screen === "upgrading") {
         if (jp(14) || stickLeft) moveDraftFocus(-1);
@@ -8702,8 +8884,22 @@
       if (!e.repeat) confirmPoster();
       return;
     }
+    if (gameState.screen === "continue") {
+      if (e.repeat) return;
+      if (e.code === "ArrowLeft") setContinueFocus(0);
+      else if (e.code === "ArrowRight") setContinueFocus(1);
+      else if (e.code === "ArrowUp" || e.code === "ArrowDown") setContinueFocus(gameState.continueFocus ? 0 : 1);
+      else if (e.code === "Enter" || e.code === "Space") resolveContinue(gameState.continueFocus !== 1);
+      else if (e.code === "Digit1") resolveContinue(true);
+      else if (e.code === "Digit2" || e.code === "Escape") resolveContinue(false);
+      return;
+    }
     if (gameState.screen === "wager") {
-      if (e.code === "Digit1" || e.code === "KeyA" || e.code === "Enter") resolveWager(true);
+      if (e.code === "ArrowLeft") setWagerFocus(0);
+      else if (e.code === "ArrowRight") setWagerFocus(1);
+      else if (e.code === "ArrowUp" || e.code === "ArrowDown") setWagerFocus(gameState.wagerFocus ? 0 : 1);
+      else if (e.code === "Enter" || e.code === "Space") resolveWager(gameState.wagerFocus !== 1);
+      else if (e.code === "Digit1" || e.code === "KeyA") resolveWager(true);
       else if (e.code === "Digit2" || e.code === "KeyD" || e.code === "Escape") resolveWager(false);
       return;
     }
@@ -8785,7 +8981,7 @@
       updateParticlesAndTrails();
       const r = updateKnockdown();
       if (r === "out") {
-        endRun();
+        offerContinue();
         return;
       }
       if (typeof updateHUD === "function") updateHUD();
@@ -8887,7 +9083,7 @@
         if (typeof updateHUD === "function") updateHUD();
         return;
       }
-      endRun();
+      offerContinue();
       return;
     }
     gameState.health = Math.round(gameState.health);
@@ -8903,6 +9099,85 @@
       }
     } else gameState.draftHold = 0;
     spawnEnemy();
+  }
+  function offerContinue() {
+    if (gameState.practice) {
+      endRun();
+      return;
+    }
+    gameState.screen = "continue";
+    stopMusic();
+    const sc = Math.max(0, Math.round(gameState.score || 0));
+    const set = (id, v) => {
+      const el2 = document.getElementById(id);
+      if (el2) el2.innerHTML = v;
+    };
+    set("continue-score", `SCORE ${sc.toLocaleString()} \u2192 ${Math.floor(sc / 2).toLocaleString()}`);
+    const kb = inputDevice() === "keyboard";
+    set("continue-retry-key", kb ? '<span class="glyph">1</span> / <span class="glyph">ENTER</span>' : glyphHTML("confirm"));
+    set("continue-end-key", kb ? '<span class="glyph">2</span> / <span class="glyph">ESC</span>' : glyphHTML("back"));
+    setContinueFocus(0, true);
+    const el = document.getElementById("continue-screen");
+    if (el) el.style.display = "flex";
+  }
+  function setContinueFocus(i, silent) {
+    gameState.continueFocus = i;
+    const a = document.querySelector(".cont-retry"), d = document.querySelector(".cont-end");
+    if (a) a.classList.toggle("menu-focus", i !== 1);
+    if (d) d.classList.toggle("menu-focus", i === 1);
+    if (!silent) playSound("slip");
+  }
+  function resolveContinue(retry) {
+    if (gameState.screen !== "continue") return;
+    hideOverlay("continue-screen");
+    if (!retry) {
+      endRun();
+      return;
+    }
+    retryStage();
+  }
+  window.engineResolveContinue = resolveContinue;
+  function retryStage() {
+    gameState.score = Math.floor((gameState.score || 0) / 2);
+    gameState.retries = (gameState.retries || 0) + 1;
+    gameState.enemies = [];
+    gameState.liveLanes = [];
+    gameState.hazards = [];
+    gameState.enemyEchoes = [];
+    gameState.afterimages = [];
+    gameState.finisher = null;
+    gameState.knockdown = null;
+    gameState.bossKo = null;
+    gameState.canisters = [];
+    gameState.knockdownsThisArc = 0;
+    gameState.health = gameState.maxHealth;
+    gameState.hpCeil = void 0;
+    gameState.stageClearing = false;
+    gameState.bossActive = false;
+    gameState.bossDefeatedThisStage = false;
+    gameState.bossIntroTimer = 0;
+    gameState.stageProgress = 0;
+    gameState.wavesCleared = 0;
+    gameState.waveThreshold = 0;
+    gameState.waveTimer = 30;
+    gameState.purifyTimer = 0;
+    gameState.stageHitsTaken = 0;
+    gameState.combo = 0;
+    gameState.isInstinct = false;
+    gameState.zoneTimer = 0;
+    gameState.hitstop = 0;
+    const p = gameState.player;
+    Object.assign(p, { state: "idle", floorTimer: 0, invuln: 60, punchTimer: 0, hitFrame: 0, recoveryTimer: 0, inputBuffer: null, movementBuffer: null, charging: false, slipBuff: 0, setUpTimer: 0 });
+    gameState.screen = "playing";
+    duckMusic(false);
+    startMusic();
+    setMusicIntensity(0);
+    SequenceManager.playDynamic([
+      { type: "walkin", duration: reducedMotion() ? 24 : 40 },
+      { type: "billing", duration: 90, card: roundCard(gameState.currentStage, `RETRY \xD7${gameState.retries} \xB7 SCORE HALVED`) },
+      { type: "call", fn: refreshStageHud },
+      { type: "resume" }
+    ]);
   }
   function endRun() {
     gameState.screen = "gameover";
@@ -8940,7 +9215,7 @@
     const endedBy = liveRun() && liveRun().lastDamageSrc;
     const rec17 = tmEndRun({ stage: gameState.currentStage, score, grade });
     const rt = document.getElementById("run-time-ui");
-    if (rt && rec17) rt.innerText = `RUN TIME ${fmtTime(rec17.frames)} \xB7 ROUND ${gameState.currentStage}${endedBy ? " \xB7 ENDED BY " + prettySource(endedBy) : ""}`;
+    if (rt && rec17) rt.innerText = `RUN TIME ${fmtTime(rec17.frames)} \xB7 ROUND ${gameState.currentStage}${gameState.retries ? ` \xB7 RETRIED \xD7${gameState.retries}` : ""}${endedBy ? " \xB7 ENDED BY " + prettySource(endedBy) : ""}`;
     const top = topDamage(rec17);
     const tip = tipFor(endedBy || top && top.src || "unknown");
     const setT = (id, v) => {
@@ -9192,7 +9467,9 @@
   var lastCine = "";
   var lastZone = false;
   function syncCinematicClass() {
-    const mode = gameState.screen === "vignette" ? "vignette" : gameState.finisher ? "finisher" : gameState.knockdown ? "knockdown" : gameState.bossIntroTimer > 0 && gameState.bossPoster && gameState.screen === "playing" ? "poster" : "";
+    const seqStep = SequenceManager.active && SequenceManager.currentSequence && SequenceManager.currentSequence[SequenceManager.stepIndex];
+    const onCard = !!seqStep && (seqStep.type === "text" || seqStep.type === "billing") && gameState.screen === "playing";
+    const mode = gameState.screen === "vignette" ? "vignette" : gameState.finisher ? "finisher" : gameState.knockdown ? "knockdown" : gameState.bossIntroTimer > 0 && gameState.bossPoster && gameState.screen === "playing" ? "poster" : onCard ? "card" : "";
     const zone = gameState.zoneTimer > 0 && gameState.screen === "playing";
     if (zone !== lastZone) {
       lastZone = zone;
@@ -9210,6 +9487,7 @@
       b.classList.toggle("cine-finisher", mode === "finisher");
       b.classList.toggle("cine-knockdown", mode === "knockdown");
       b.classList.toggle("cine-poster", mode === "poster");
+      b.classList.toggle("cine-card", mode === "card");
     } catch (e) {
     }
   }
@@ -9307,7 +9585,7 @@
     loop();
   }
   init();
-  var __test = { posterWaiting, confirmPoster, watchResume, startGame, resetGame, update, triggerUpgradeDraft, resolveWager, openPause, closePause, setPauseTab, renderLoadout, renderSettings, endRun };
+  var __test = { offerContinue, resolveContinue, posterWaiting, confirmPoster, watchResume, startGame, resetGame, update, triggerUpgradeDraft, resolveWager, openPause, closePause, setPauseTab, renderLoadout, renderSettings, endRun };
   try {
     if (typeof location !== "undefined" && /[?&]debug\b/.test(location.search)) {
       window.__ns = {

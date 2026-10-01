@@ -102,7 +102,7 @@ export function startFinisher(en, kind) {
     en.y = midY; p.y = midY;
     en.recoverTimer = 0; en.telegraphed = false; en.shiftWarning = 0; en.exposedTimer = 0;
     en.decoyTimer = 0; en.targetLanes = []; en.justAttacked = 0;
-    st.hazards = []; st.liveLanes = [];
+    st.hazards = []; st.liveLanes = []; st.canisters = [];
     st.hitstop = 0;
 
     const label = kind === 'ko' ? 'FINAL BLOW' : 'STAGGERED!';

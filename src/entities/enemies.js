@@ -82,7 +82,7 @@ export function updateEnemies() {
         }
     });
 
-    st.enemies.forEach(en => { en.isActiveThreat = ((frontEnemy[en.lane] === en || en.isBoss || en.tutorialType || en.type === 'zoner') && en.x > st.player.x - 30); });
+    st.enemies.forEach(en => { en.isActiveThreat = !en.passed && ((frontEnemy[en.lane] === en || en.isBoss || en.tutorialType || en.type === 'zoner') && en.x > st.player.x - 30); });
 
     for (let i = 0; i < st.enemies.length; i++) {
         const en = st.enemies[i];
@@ -120,6 +120,11 @@ export function updateEnemies() {
             }
         }
 
+        // v23 PASSED (playtest: "still able to backtrack into an enemy that's passed —
+        // it put me in front of it and I could hit it"): once an enemy on the rail is
+        // behind you it's out of the exchange — not solid, not hittable — until it
+        // loops back in from the right.
+        if (!en.isBoss && !en.tutorialType && !en.passed && en.x < st.player.x - 20) en.passed = true;
         if (en.floored > 0) en.floored--; // v21: enemy knockdown (drawn lying down)
         if (en.bumpTimer > 0) en.bumpTimer--;
         if (en.stun > 0 || st.bossIntroTimer > 0) { if (en.vx > 0.1) applyKnockback(en); continue; }
@@ -359,7 +364,7 @@ export function updateEnemies() {
             en.lane = Math.random() < R.toPlayerLaneChance ? st.player.lane : Math.floor(Math.random() * 3);
             en.x = st.width + 50 + delay * Math.max(1, en.speed);
             en.vx = 0; en.stun = 0; en.attackCooldown = en.maxCooldown; en.stringIdx = 0;
-            en.loops = (en.loops || 0) + 1;
+            en.loops = (en.loops || 0) + 1; en.passed = false;
         } else if (en.x < -100) { st.enemies.splice(i, 1); }
     }
 }

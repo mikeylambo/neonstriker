@@ -71,6 +71,24 @@ function applyEffect(st, effect) {
     }
 }
 
+// v23 PRACTICE BUILD: stamp a build (rank per tree) straight onto a fresh run —
+// each rank card's effects in order, plus any Fusion / Perfected Fusion the
+// ranks qualify for. No draft, no vignette, no telemetry.
+export function applyBuild(st, build) {
+    const granted = [];
+    for (const tree of ['speed', 'power', 'technique']) {
+        for (let r = 1; r <= (build[tree] || 0); r++) {
+            const card = UPGRADE_POOL.orbs.find(u => u.tree === tree && u.rank === r);
+            if (card) { card.effects.forEach(e => applyEffect(st, e)); granted.push(card.id); }
+        }
+    }
+    for (const f of UPGRADE_POOL.fusions) {
+        const need = f.evolved ? 5 : 3;
+        if (f.trees.every(t => (build[t] || 0) >= need)) { f.effects.forEach(e => applyEffect(st, e)); granted.push(f.id); }
+    }
+    return granted;
+}
+
 export function applyUpgrade(st, upgrade) {
     if (!upgrade || !upgrade.effects) return;
     // Only an option that's actually on the table can be taken — guards against a
@@ -224,7 +242,7 @@ export function advanceStage() {
     // telegraph untouched). Signature of Arc 3; never on a boss stage. Seeded -> a
     // Daily plays the same hot lane for everyone, free-play varies run to run.
     // Clear any lane hazards from the previous stage; give a grace window before new ones.
-    st.hazards = [];
+    st.hazards = []; st.canisters = [];
     st.hazardCooldown = CONSTANTS.HAZARDS.cooldownFrames;
     st.hazardsThisStage = 0;
     // SURPRISE BUDGET: one shared per-stage pool for every acute surprise system.

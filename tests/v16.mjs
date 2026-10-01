@@ -442,7 +442,7 @@ function botRun(opts) {
             window.engineApplyUpgradeState(st.currentDraftOptions[0].id);
         }
         else if (st.screen === 'wager') { log.wagersSeen++; T.resolveWager(!!opts.acceptWagers); }
-        else if (st.screen === 'gameover') break;
+        else if (st.screen === 'gameover' || st.screen === 'continue') break;
         if (st.finisher && !log.finishers.includes(st.finisher) ) { log.finishers.push(st.finisher); }
         if (SequenceManager.active) {
             const step = SequenceManager.currentSequence[SequenceManager.stepIndex];

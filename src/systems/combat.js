@@ -26,6 +26,9 @@ export function checkHit(type) {
     let novaLanes = [];
 
     if (st.player.slipBuff > 0) st.player.slipBuff--;
+    const setUpShot = (type === 'hook' || type === 'cross' || type === 'check_hook') && (st.player.setUpTimer || 0) > 0;
+    let setUpShown = false;
+    if (setUpShot) st.player.setUpTimer = 0;
 
     const jX = () => (Math.random() * 50 - 25);
     const jY = () => (Math.random() * 30 - 15);
@@ -33,7 +36,7 @@ export function checkHit(type) {
     for (let i = 0; i < st.enemies.length; i++) {
         let en = st.enemies[i];
 
-        if (en.lane === st.player.lane && en.x > st.player.x - 20 && en.x < st.player.x + reach) {
+        if (en.lane === st.player.lane && !en.passed && en.x > st.player.x - 20 && en.x < st.player.x + reach) {
 
             if (en.tutorialType === 'counter') {
                 if (buffActive) { en.hp = 0; createShatter(en.x, en.y - 60, '#ffffff'); spawnFloatingText(en.x + jX(), en.y - 100 + jY(), "SHATTERED!", "#ffffff"); st.statCounterHits++; }
@@ -79,6 +82,8 @@ export function checkHit(type) {
 
             if (buffActive) dmg *= 2;
             if (loaded) dmg = Math.round(dmg * 1.3);
+            // v23 SET UP: a landed 1-2-3 Jab string sets up the next power shot.
+            if (setUpShot) { dmg = Math.round(dmg * CONSTANTS.JAB_SETUP.mult); if (!setUpShown) { setUpShown = true; spawnFloatingText(en.x + jX(), en.y - 130 + jY(), 'SET UP!', '#ffffff'); } }
             if (en.floored > 0) dmg = Math.round(dmg * CONSTANTS.ENEMY_KD.groundMult); // v21: hitting a downed enemy
 
             // v17 EVOLVED FUSION (Shatter Nova): a Counter-Charged Cross tears a chunk
@@ -217,16 +222,22 @@ export function checkHit(type) {
                 if (type === 'jab1' || type === 'jab2') { baseKB = 1; }
                 else if (type === 'jab3') { baseKB = 12; }
                 else if (type === 'guard_jab') { baseKB = 2; }
-                else if (type === 'hook' || type === 'check_hook') { baseKB = Math.max(30, st.progressionMods.hookKnockbackFloor); }
+                else if (type === 'hook' || type === 'check_hook') { baseKB = 30 + st.progressionMods.hookKnockbackFloor; } // v23: Ring Cutter used to be swallowed by a max(30, 10)
                 else if (type === 'cross') { baseKB = 5; }
             }
 
             if (en.isBoss) {
                 baseKB = isJab ? 0 : Math.max(2, Math.floor(baseKB * 0.3));
+                // v23 (playtest: "hooks thrown on bosses are knocking them back for free"):
+                // a hook only moves a boss while it's OPEN. The Loaded Cross is the boss
+                // shove now (see the stagger below).
+                if ((type === 'hook' || type === 'check_hook') && !bossOpen) baseKB = 0;
                 if (en.name === 'NEON ENFORCER' && en.phase === 2 && !trueReadActive) { baseKB = (buffActive || (st.isInstinct && type === 'cross')) ? 10 : 0; }
             } else { baseKB = Math.floor(baseKB / (en.weight || 1)); }
 
             en.vx += baseKB * powerFactor;
+            // v23: a boss can be rocked, never punted out of the exchange.
+            if (en.isBoss) en.vx = Math.min(en.vx, loaded ? CONSTANTS.BOSS_KB.loadedCap : CONSTANTS.BOSS_KB.cap);
             // v21 ENEMY KNOCKDOWN: a heavy enough blow floors the enemy.
             const KD = CONSTANTS.ENEMY_KD, impulse = baseKB * powerFactor;
             if (!en.isBoss && !en.tutorialType && en.hp > 0 && !(en.floored > 0) && impulse >= KD.threshold) {
@@ -270,6 +281,14 @@ export function checkHit(type) {
                     } else { canStun = false; }
                 }
 
+                // v23 LOADED CROSS STAGGER: on a boss it always rocks them (stun resist
+                // or not) — the reason to hold the charge in a title fight.
+                if (loaded && en.isBoss && canStun && !(en.controller === 'static_monk' && en.currentMove === 'recharge')) {
+                    en.stun = Math.max(en.stun, CONSTANTS.BOSS_KB.loadedStagger); en.stunResist = en.stun + 30;
+                    if (en.controller !== 'static_monk') { en.telegraphed = false; if (en.attackCooldown < CONSTANTS.BOSS_OFFENSE.telegraphLead) en.attackCooldown = CONSTANTS.BOSS_OFFENSE.telegraphLead + 6; } // (the Monk's volley clock — and its canisters — just pause)
+                    spawnFloatingText(en.x + jX(), en.y - 160 + jY(), 'STAGGER!', '#ffffff'); st.shake += 6;
+                    canStun = false;
+                }
                 if (canStun) {
                     let isResisting = en.isBoss && en.stunResist > 0;
                     if (!isResisting) {

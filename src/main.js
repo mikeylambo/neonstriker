@@ -24,11 +24,11 @@ import { commitRunRecord, loadLeaderboard, loadMeta, selectSkin, selectedStriker
 import { submitScore, fetchTopAllTime, fetchTopDaily, onlineEnabled } from './systems/online.js';
 import { initAtmosphere, updateAtmosphere } from './render/atmosphere.js';
 import { draw } from './render/draw.js';
-import { getSettings, setSetting, hitStopEnabled, applySettingsSideEffects, keyName, getBinds, keyLabel, rebind, resetBinds, BIND_LABELS, DEFAULT_BINDS } from './systems/settings.js';
+import { getSettings, setSetting, hitStopEnabled, applySettingsSideEffects, keyName, getBinds, keyLabel, rebind, resetBinds, BIND_LABELS, DEFAULT_BINDS, reducedMotion } from './systems/settings.js';
 import { rankForRun, pbDeltaText, comboMultiplier } from './systems/score.js';
 import { acceptWager, declineWager } from './systems/wagers.js';
 import { updateFinisher } from './systems/finisher.js';
-import { practiceTargets, practiceTargetUnlocked, beginPractice, updatePractice, practiceHudText } from './systems/practice.js';
+import { practiceTargets, practiceTargetUnlocked, beginPractice, updatePractice, practiceHudText, PRACTICE_TREES, earnedRank } from './systems/practice.js';
 import { loadHeat, toggleHeat, heatMultFor, heatLevel } from './systems/heat.js';
 import { captureRecap, resetRecap, startRecapPlayback, recapPlaying, stopRecap, updateRecap, tipFor, topDamage } from './systems/recap.js';
 import { arcParStart, arcParTick, loadMedals, MEDALS, ARC_PAR, fmtSecs, fmtK } from './systems/arc_par.js';
@@ -169,7 +169,7 @@ export function resetGame() {
     st.finisher = null; st.finisherZoom = 1; st.vignette = null;
     st.stageHitsTaken = 0; st.statFlawless = 0;
     st.knockdown = null; st.knockdownsThisArc = 0; st.statKnockdowns = 0; st.zoneTimer = 0; st.bossPoster = null; st.enemyEchoes = [];
-    st.afterimages = []; st.koFx = []; st.bossKo = null; st.rankOrder = []; st.orbPulse = 0;
+    st.afterimages = []; st.koFx = []; st.bossKo = null; st.retries = 0; st.canisters = []; st.rankOrder = []; st.orbPulse = 0;
     st.paletteFrom = 1; st.paletteTo = 1; st.paletteT = 1; st.lightSweep = -1;
     setMusicIntensity(0);
 
@@ -200,14 +200,14 @@ function startGame(daily = false, opts = {}) {
     seedRng(runSeed);
     resetGame(); st.screen = 'playing';
     // v20: Practice (no telemetry / score) and Heat (normal runs only, once unlocked).
-    if (opts.practice) { beginPractice(opts.practice, opts.windows); st.tutorialEnabled = false; }
+    if (opts.practice) { beginPractice(opts.practice, opts.windows, opts.build); st.tutorialEnabled = false; }
     else {
         st.heat = (!daily && heatUnlocked()) ? loadHeat() : [];
         tmStartRun({ seed: runSeed, daily: !!daily });
     }
     resetRecap();
     arcParStart();
-    ['start-screen', 'gameover-screen', 'pause-screen', 'wager-screen', 'upgrade-screen', 'practice-screen', 'heat-screen'].forEach(hideOverlay);
+    ['start-screen', 'gameover-screen', 'continue-screen', 'pause-screen', 'wager-screen', 'upgrade-screen', 'practice-screen', 'heat-screen'].forEach(hideOverlay);
     duckMusic(false); startMusic();
     // Run opening: the Striker walks into the ring under the stage card. The Arc 1
     // theme line shows here once per save, then the stage tagline takes over.
@@ -227,19 +227,27 @@ function startGame(daily = false, opts = {}) {
 // v20 PRACTICE + HEAT menus (unlockable, opened from the start screen)
 // ==========================================
 let practiceWindows = true;
+const PRACTICE_BUILD_KEY = 'neon_strike_practice_build_v1';
+let practiceBuild = (() => { try { return JSON.parse(localStorage.getItem(PRACTICE_BUILD_KEY) || '{}') || {}; } catch (e) { return {}; } })();
+window.enginePracticeRank = t => {
+    const cap = earnedRank(t); if (!cap) { playSound('bounce'); return; }
+    practiceBuild[t] = ((Math.min(practiceBuild[t] || 0, cap)) + 1) % (cap + 1);
+    try { localStorage.setItem(PRACTICE_BUILD_KEY, JSON.stringify(practiceBuild)); } catch (e) {}
+    playSound('slip'); renderPracticeMenu();
+};
 function renderStartExtras() {
     const m = loadMeta();
     const pb = document.getElementById('practice-btn'), hb = document.getElementById('heat-btn');
-    if (pb) { const ok = practiceUnlocked(m); pb.classList.toggle('locked', !ok);
-        pb.querySelector('.sub').innerText = ok ? 'Drill any enemy or boss' : 'Reach the Arc 1 title fight'; }
+    // v23: no sub-copy on the main menu; locked buttons dim, active Modifiers show their multiplier.
+    if (pb) pb.classList.toggle('locked', !practiceUnlocked(m));
     if (hb) { const ok = heatUnlocked(m); hb.classList.toggle('locked', !ok);
-        const h = loadHeat();
-        hb.querySelector('.sub').innerText = !ok ? 'Beat the Arc 1 boss' : (h.length ? `HEAT ${h.length} · SCORE ×${heatMultFor(h).toFixed(2)}` : 'Off — add modifiers'); }
+        const h = loadHeat(), t = document.getElementById('heat-btn-title');
+        if (t) t.innerText = ok && h.length ? `MODIFIERS ×${heatMultFor(h).toFixed(2)}` : 'MODIFIERS'; }
 }
 function openSubmenu(screen) {
     initAudio();
     const unlocked = screen === 'practice' ? practiceUnlocked() : heatUnlocked();
-    if (!unlocked) { showToast(screen === 'practice' ? 'REACH THE ARC 1 TITLE FIGHT TO UNLOCK' : 'BEAT THE ARC 1 BOSS TO UNLOCK', '#9ca3af'); playSound('bounce'); return; }
+    if (!unlocked) { showToast(screen === 'practice' ? 'REACH THE ARC 1 BOSS TO UNLOCK' : 'BEAT THE ARC 1 BOSS TO UNLOCK', '#9ca3af'); playSound('bounce'); return; }
     st.screen = screen; hideOverlay('start-screen');
     const el = document.getElementById(`${screen}-screen`); if (el) el.style.display = 'flex';
     if (screen === 'practice') renderPracticeMenu(); else renderHeatMenu();
@@ -257,20 +265,23 @@ function renderPracticeMenu() {
         const ok = practiceTargetUnlocked(t, best);
         return `<div class="orb-btn sm${ok ? '' : ' locked'}${t.boss ? ' boss' : ''}" onclick="window.enginePractice('${t.id}')"><div class="font-bold">${ok ? t.label : '???'}</div><div class="sub">${ok ? (t.boss ? `ARC ${t.boss} BOSS` : (t.stringLen ? '3-HIT STRINGS' : 'ENEMY')) : `REACH ROUND ${t.need}`}</div></div>`;
     }).join('') +
+    // v23 BUILD PICKER: one button per tree, cycling 0 -> your best earned rank.
+    `<div class="practice-build">${PRACTICE_TREES.map(t => { const cap = earnedRank(t), v = Math.min(practiceBuild[t] || 0, cap);
+        return `<div class="orb-btn sm${cap ? '' : ' locked'}" style="border-color:${TREE_COLOR[t]};" onclick="window.enginePracticeRank('${t}')"><div class="font-bold" style="color:${TREE_COLOR[t]};">${t.toUpperCase()} ${v}</div><div class="sub">${cap ? `UP TO RANK ${cap}` : 'EARN A RANK IN A RUN'}</div></div>`; }).join('')}</div>` +
     `<div class="orb-btn sm wide" onclick="window.enginePracticeWindows()"><div class="font-bold">SLIP WINDOWS: ${practiceWindows ? 'ON' : 'OFF'}</div><div class="sub">Show each attack's GOOD / PERFECT window</div></div>` +
     `<div class="orb-btn sm wide back" onclick="window.engineCloseSubmenu()"><div class="font-bold">BACK [ESC] / [B]</div></div>`;
 }
 window.enginePractice = id => {
     const t = practiceTargets().find(x => x.id === id);
     if (!t || !practiceTargetUnlocked(t, loadMeta().bestStage || 0)) { playSound('bounce'); return; }
-    startGame({ practice: t, windows: practiceWindows, tutorial: false });
+    startGame({ practice: t, windows: practiceWindows, tutorial: false, build: { ...practiceBuild } });
 };
 window.enginePracticeWindows = () => { practiceWindows = !practiceWindows; renderPracticeMenu(); };
 function renderHeatMenu() {
     const el = document.getElementById('heat-list'); if (!el) return;
     const on = loadHeat();
     el.innerHTML = CONSTANTS.HEAT.mods.map(h => `<div class="orb-btn sm wide heat-row${on.includes(h.id) ? ' on' : ''}" onclick="window.engineToggleHeat('${h.id}')"><div class="font-bold">${on.includes(h.id) ? '■' : '□'} ${h.name} <span class="heat-bonus">+${Math.round(h.bonus * 100)}%</span></div><div class="sub">${h.desc}</div></div>`).join('') +
-        `<div class="heat-total">HEAT ${heatLevel(on)} · SCORE ×${heatMultFor(on).toFixed(2)} <span>applies to every Gauntlet run while on</span></div>` +
+        `<div class="heat-total">${heatLevel(on)} ACTIVE · SCORE ×${heatMultFor(on).toFixed(2)} <span>applies to every Gauntlet run while on</span></div>` +
         `<div class="orb-btn sm wide back" onclick="window.engineCloseSubmenu()"><div class="font-bold">BACK [ESC] / [B]</div></div>`;
 }
 window.engineToggleHeat = id => { toggleHeat(id); playSound('slip'); renderHeatMenu(); };
@@ -280,7 +291,7 @@ window.engineToggleHeat = id => { toggleHeat(id); playSound('slip'); renderHeatM
 const ANNOUNCE_KEY = 'neon_strike_announced_v1';
 const UNLOCK_NOTES = {
     practice: { title: 'PRACTICE ROOM UNLOCKED', color: '#a78bfa', text: 'Pick any enemy you\'ve met — or a boss you\'ve reached — and drill it on a loop. You can\'t lose, nothing is scored, and the SLIP WINDOWS overlay shows exactly when to move.<br><br>Find it on the main menu.' },
-    heat: { title: 'HEAT UNLOCKED', color: '#fb923c', text: 'Stack optional modifiers — faster enemies, no healing, no ten-count… — for a bigger score multiplier on every run.<br><br>Toggle them from HEAT on the main menu.' }
+    heat: { title: 'MODIFIERS UNLOCKED', color: '#fb923c', text: 'Stack optional modifiers — faster enemies, no healing, no ten-count… — for a bigger score multiplier on every run.<br><br>Toggle them from HEAT on the main menu.' }
 };
 function loadAnnounced() { try { const a = JSON.parse(localStorage.getItem(ANNOUNCE_KEY) || '[]'); return Array.isArray(a) ? a : []; } catch (e) { return []; } }
 export function pendingUnlocks(m = loadMeta()) {
@@ -334,7 +345,7 @@ function returnToMenu() {
     st.dailyMode = false; st.dailyDateKey = null;
     resetGame(); st.screen = 'start';
     const startScreen = document.getElementById('start-screen'); if(startScreen) startScreen.style.display = 'flex';
-    ['pause-screen', 'gameover-screen', 'wager-screen', 'upgrade-screen', 'practice-screen', 'heat-screen'].forEach(hideOverlay);
+    ['pause-screen', 'gameover-screen', 'continue-screen', 'wager-screen', 'upgrade-screen', 'practice-screen', 'heat-screen'].forEach(hideOverlay);
     renderStartExtras();
     showNextUnlock();
     SequenceManager.active = false; SequenceManager.waiting = false;
@@ -556,6 +567,14 @@ function renderWagerPrompts() {
     if (d) d.innerHTML = kb ? '<span class="glyph">2</span> / <span class="glyph">ESC</span>' : glyphHTML('back');
 }
 
+function setWagerFocus(i) {
+    st.wagerFocus = i;
+    const a = document.querySelector('.wager-accept'), d = document.querySelector('.wager-decline');
+    if (a) a.classList.toggle('menu-focus', i !== 1);
+    if (d) d.classList.toggle('menu-focus', i === 1);
+    playSound('slip');
+}
+
 function showWager() {
     renderWagerPrompts();
     const offer = st.wagerOffer;
@@ -566,6 +585,8 @@ function showWager() {
     set('wager-name', offer.name);
     set('wager-desc', offer.desc);
     set('wager-mult', `×${offer.scoreMult} SCORE THIS STAGE`);
+    st.wagerFocus = 0; const wa = document.querySelector('.wager-accept'), wd = document.querySelector('.wager-decline');
+    if (wa) wa.classList.add('menu-focus'); if (wd) wd.classList.remove('menu-focus');
     const w = document.getElementById('wager-screen'); if (w) w.style.display = 'flex';
 }
 window.engineShowWager = showWager;
@@ -630,9 +651,20 @@ function pollGamepad() {
         }
         else if (st.screen === 'tutorial') { if (st.pad.instinct || st.pad.jab || st.pad.cross) dismissTutorial(); }
         else if (st.screen === 'vignette') { if (anyPress) skipVignette(); }
+        else if (st.screen === 'continue') {
+            if (jp(14) || stickLeft) setContinueFocus(0);
+            else if (jp(15) || stickRight) setContinueFocus(1);
+            else if (st.pad.up || st.pad.down) setContinueFocus(st.continueFocus ? 0 : 1);
+            else if (jp(0)) resolveContinue(st.continueFocus !== 1);
+            else if (jp(1)) resolveContinue(false);
+        }
         else if (st.screen === 'wager') {
-            if (jp(0)) resolveWager(true);        // × / A
-            else if (jp(1)) resolveWager(false);  // ○ / B
+            // v23: D-pad / left stick picks ACCEPT or DECLINE, × / A takes the highlighted one.
+            if (jp(14) || stickLeft) setWagerFocus(0);
+            else if (jp(15) || stickRight) setWagerFocus(1);
+            else if (st.pad.up || st.pad.down) setWagerFocus(st.wagerFocus ? 0 : 1);
+            else if (jp(0)) resolveWager(st.wagerFocus !== 1); // × / A
+            else if (jp(1)) resolveWager(false);               // ○ / B
         }
         else if (st.screen === 'upgrading') {
             // v18: D-pad / stick to choose, × / A to take it — identical on every pad.
@@ -704,8 +736,22 @@ window.addEventListener('keydown', e => {
     }
     if (st.screen === 'vignette') { if (!e.repeat) skipVignette(); return; }
     if (posterWaiting()) { if (!e.repeat) confirmPoster(); return; }
+    if (st.screen === 'continue') {
+        if (e.repeat) return;
+        if (e.code === 'ArrowLeft') setContinueFocus(0);
+        else if (e.code === 'ArrowRight') setContinueFocus(1);
+        else if (e.code === 'ArrowUp' || e.code === 'ArrowDown') setContinueFocus(st.continueFocus ? 0 : 1);
+        else if (e.code === 'Enter' || e.code === 'Space') resolveContinue(st.continueFocus !== 1);
+        else if (e.code === 'Digit1') resolveContinue(true);
+        else if (e.code === 'Digit2' || e.code === 'Escape') resolveContinue(false);
+        return;
+    }
     if (st.screen === 'wager') {
-        if (e.code === 'Digit1' || e.code === 'KeyA' || e.code === 'Enter') resolveWager(true);
+        if (e.code === 'ArrowLeft') setWagerFocus(0);
+        else if (e.code === 'ArrowRight') setWagerFocus(1);
+        else if (e.code === 'ArrowUp' || e.code === 'ArrowDown') setWagerFocus(st.wagerFocus ? 0 : 1);
+        else if (e.code === 'Enter' || e.code === 'Space') resolveWager(st.wagerFocus !== 1);
+        else if (e.code === 'Digit1' || e.code === 'KeyA') resolveWager(true);
         else if (e.code === 'Digit2' || e.code === 'KeyD' || e.code === 'Escape') resolveWager(false);
         return;
     }
@@ -770,7 +816,7 @@ export function update() {
         if (st.shake > 0) st.shake *= 0.9;
         updateParticlesAndTrails();
         const r = updateKnockdown();
-        if (r === 'out') { endRun(); return; }
+        if (r === 'out') { offerContinue(); return; }
         if (typeof updateHUD === 'function') updateHUD();
         return;
     }
@@ -875,7 +921,7 @@ export function update() {
     // v17: 0 HP is a KNOCKDOWN (once per arc) — the second one ends the run.
     if (st.health <= 0) {
         if (canBeKnockedDown()) { startKnockdown(); if (typeof updateHUD === 'function') updateHUD(); return; }
-        endRun(); return;
+        offerContinue(); return;
     }
 
     st.health = Math.round(st.health);
@@ -902,6 +948,61 @@ export function update() {
 // ==========================================
 // RESULTS (v16): live score, letter rank, PB delta. No "____ ROUTE" line.
 // ==========================================
+// ==========================================
+// v23 CONTINUE (playtest: "retry for half score would be nice"). Between the
+// final knockdown and the results: retry the current round with your build and
+// full health, score halved — or end the run. The results/records/online
+// commit only ever happen once, on END RUN, so a continued run is one entry.
+// ==========================================
+function offerContinue() {
+    if (st.practice) { endRun(); return; }
+    st.screen = 'continue';
+    stopMusic();
+    const sc = Math.max(0, Math.round(st.score || 0));
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.innerHTML = v; };
+    set('continue-score', `SCORE ${sc.toLocaleString()} → ${Math.floor(sc / 2).toLocaleString()}`);
+    const kb = inputDevice() === 'keyboard';
+    set('continue-retry-key', kb ? '<span class="glyph">1</span> / <span class="glyph">ENTER</span>' : glyphHTML('confirm'));
+    set('continue-end-key', kb ? '<span class="glyph">2</span> / <span class="glyph">ESC</span>' : glyphHTML('back'));
+    setContinueFocus(0, true);
+    const el = document.getElementById('continue-screen'); if (el) el.style.display = 'flex';
+}
+function setContinueFocus(i, silent) {
+    st.continueFocus = i;
+    const a = document.querySelector('.cont-retry'), d = document.querySelector('.cont-end');
+    if (a) a.classList.toggle('menu-focus', i !== 1);
+    if (d) d.classList.toggle('menu-focus', i === 1);
+    if (!silent) playSound('slip');
+}
+function resolveContinue(retry) {
+    if (st.screen !== 'continue') return;
+    hideOverlay('continue-screen');
+    if (!retry) { endRun(); return; }
+    retryStage();
+}
+window.engineResolveContinue = resolveContinue;
+
+function retryStage() {
+    st.score = Math.floor((st.score || 0) / 2);
+    st.retries = (st.retries || 0) + 1;
+    st.enemies = []; st.liveLanes = []; st.hazards = []; st.enemyEchoes = []; st.afterimages = [];
+    st.finisher = null; st.knockdown = null; st.bossKo = null; st.canisters = []; st.knockdownsThisArc = 0;
+    st.health = st.maxHealth; st.hpCeil = undefined;
+    st.stageClearing = false; st.bossActive = false; st.bossDefeatedThisStage = false; st.bossIntroTimer = 0;
+    st.stageProgress = 0; st.wavesCleared = 0; st.waveThreshold = 0; st.waveTimer = 30; st.purifyTimer = 0;
+    st.stageHitsTaken = 0; st.combo = 0; st.isInstinct = false; st.zoneTimer = 0; st.hitstop = 0;
+    const p = st.player;
+    Object.assign(p, { state: 'idle', floorTimer: 0, invuln: 60, punchTimer: 0, hitFrame: 0, recoveryTimer: 0, inputBuffer: null, movementBuffer: null, charging: false, slipBuff: 0, setUpTimer: 0 });
+    st.screen = 'playing';
+    duckMusic(false); startMusic(); setMusicIntensity(0);
+    SequenceManager.playDynamic([
+        { type: 'walkin', duration: reducedMotion() ? 24 : 40 },
+        { type: 'billing', duration: 90, card: roundCard(st.currentStage, `RETRY ×${st.retries} · SCORE HALVED`) },
+        { type: 'call', fn: refreshStageHud },
+        { type: 'resume' }
+    ]);
+}
+
 function endRun() {
     st.screen = 'gameover';
     stopMusic();
@@ -938,7 +1039,7 @@ function endRun() {
     const endedBy = liveRun() && liveRun().lastDamageSrc;
     const rec17 = tmEndRun({ stage: st.currentStage, score, grade });
     const rt = document.getElementById('run-time-ui');
-    if (rt && rec17) rt.innerText = `RUN TIME ${fmtTime(rec17.frames)} · ROUND ${st.currentStage}${endedBy ? ' · ENDED BY ' + prettySource(endedBy) : ''}`;
+    if (rt && rec17) rt.innerText = `RUN TIME ${fmtTime(rec17.frames)} · ROUND ${st.currentStage}${st.retries ? ` · RETRIED ×${st.retries}` : ''}${endedBy ? ' · ENDED BY ' + prettySource(endedBy) : ''}`;
     // v20 DEATH RECAP: replay the last moments + what hurt + one tip.
     const top = topDamage(rec17);
     const tip = tipFor(endedBy || (top && top.src) || 'unknown');
@@ -1190,7 +1291,9 @@ window.addEventListener('resize', fitViewport);
 // above the canvas, so the moment owns the frame. Toggled only on change.
 let lastCine = '', lastZone = false;
 function syncCinematicClass() {
-    const mode = st.screen === 'vignette' ? 'vignette' : (st.finisher ? 'finisher' : (st.knockdown ? 'knockdown' : ((st.bossIntroTimer > 0 && st.bossPoster && st.screen === 'playing') ? 'poster' : '')));
+    const seqStep = SequenceManager.active && SequenceManager.currentSequence && SequenceManager.currentSequence[SequenceManager.stepIndex];
+    const onCard = !!seqStep && (seqStep.type === 'text' || seqStep.type === 'billing') && st.screen === 'playing';
+    const mode = st.screen === 'vignette' ? 'vignette' : (st.finisher ? 'finisher' : (st.knockdown ? 'knockdown' : ((st.bossIntroTimer > 0 && st.bossPoster && st.screen === 'playing') ? 'poster' : (onCard ? 'card' : ''))));
     const zone = st.zoneTimer > 0 && st.screen === 'playing';
     if (zone !== lastZone) {
         lastZone = zone;
@@ -1206,6 +1309,7 @@ function syncCinematicClass() {
         b.classList.toggle('cine-finisher', mode === 'finisher');
         b.classList.toggle('cine-knockdown', mode === 'knockdown');
         b.classList.toggle('cine-poster', mode === 'poster');
+        b.classList.toggle('cine-card', mode === 'card'); // v23: Arc / round cards own the screen (playtest: text overlapped the HUD)
     } catch (e) {}
 }
 
@@ -1287,7 +1391,7 @@ function init() { st.width = 1000; st.height = 600; if(canvas) { canvas.width = 
 init();
 
 // Test hooks for the headless harness / bot sim (tests/*.mjs). Not used in play.
-export const __test = { posterWaiting, confirmPoster, watchResume, startGame, resetGame, update, triggerUpgradeDraft, resolveWager, openPause, closePause, setPauseTab, renderLoadout, renderSettings, endRun };
+export const __test = { offerContinue, resolveContinue, posterWaiting, confirmPoster, watchResume, startGame, resetGame, update, triggerUpgradeDraft, resolveWager, openPause, closePause, setPauseTab, renderLoadout, renderSettings, endRun };
 
 // Dev/playtest hook: open the game with ?debug in the URL to get window.__ns —
 // state access plus a stage jump (e.g. __ns.jump(5) = Arc 1 boss). Off otherwise.

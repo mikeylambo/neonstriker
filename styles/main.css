@@ -500,7 +500,7 @@ canvas {
 /* =====================================================================
    v16 — STAGE WAGER OFFER
    ===================================================================== */
-#wager-screen { background: rgba(0,0,0,.55); }
+#wager-screen, #continue-screen { background: rgba(0,0,0,.55); }
 .wager-card {
     width: 560px; max-width: 94%; text-align: center; padding: 22px 24px; pointer-events: auto;
     background: linear-gradient(180deg, rgba(20,16,4,.96), rgba(6,6,8,.96));
@@ -633,6 +633,7 @@ body.cine-vignette .hud-row, body.cine-finisher .hud-row, body.cine-knockdown .h
 .bind-key.waiting { background: #22d3ee; color: #000; animation: pulse .4s infinite alternate; }
 .pause-panel { max-height: 380px; }
 body.cine-poster .hud-row, body.cine-poster #instructions, body.cine-poster #audio-state { opacity: 0.05; }
+body.cine-card .hud-row, body.cine-card #instructions, body.cine-card #audio-state, body.cine-card #score-hud, body.cine-card .ui-overlay { opacity: 0.06; transition: opacity .25s; }
 body.cine-zone.cine-zone-soft #gameCanvas { filter: grayscale(.7) contrast(1.2); }
 
 /* =====================================================================
@@ -704,3 +705,6 @@ body.cine-zone.cine-zone-soft #gameCanvas { filter: grayscale(.7) contrast(1.2);
 #unlock-screen { z-index: 60; background: rgba(4,4,10,.96); }
 .unlock-kicker { font-size: .7rem; font-weight: 900; letter-spacing: 6px; color: #9ca3af; margin-bottom: 6px; }
 #unlock-banner { font-size: .75rem; font-weight: 900; letter-spacing: 2px; color: #a78bfa; margin: 2px 0 4px; text-shadow: 0 0 10px rgba(167,139,250,.6); }
+
+/* v23 practice build picker */
+.practice-build { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; grid-column: 1 / -1; width: 100%; margin: 6px 0; }

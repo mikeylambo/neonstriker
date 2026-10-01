@@ -10,6 +10,18 @@ import { CONSTANTS } from '../constants.js';
 import { makeEnemy } from './waves.js';
 import { spawnBoss } from '../entities/bosses.js';
 import { spawnFloatingText } from '../vfx_audio/effects.js';
+import { UPGRADE_POOL } from '../data/upgrades.js';
+import { hasSeenUpgrade } from './settings.js';
+import { applyBuild } from './progression/apply.js';
+
+// v23 BUILD PICKER: drill with a build. Each tree can be set up to the highest
+// rank you've actually earned in a run (seen on its evolution screen).
+export const PRACTICE_TREES = ['speed', 'power', 'technique'];
+export function earnedRank(tree) {
+    let best = 0;
+    for (const u of UPGRADE_POOL.orbs) if (u.tree === tree && u.rank > best && hasSeenUpgrade(u.id)) best = u.rank;
+    return best;
+}
 
 const BOSS_NAMES = ['NEON ENFORCER', 'PHANTOM BOXER', 'STATIC MONK', 'LIVE WIRE', 'NEGATIVE'];
 
@@ -32,8 +44,12 @@ export function practiceTargets() {
 export function practiceTargetUnlocked(t, bestStage) { return (bestStage || 0) >= (t.need || 0); }
 
 // Called by startGame after resetGame() when a practice target is chosen.
-export function beginPractice(target, showWindows) {
-    st.practice = { id: target.id, target, windows: !!showWindows, respawn: 30, resets: 0, perfect0: 0 };
+export function beginPractice(target, showWindows, build) {
+    st.practice = { id: target.id, target, windows: !!showWindows, respawn: 30, resets: 0, perfect0: 0, build: build || null };
+    if (build) {
+        const capped = {}; PRACTICE_TREES.forEach(t => { capped[t] = Math.min(build[t] || 0, earnedRank(t)); });
+        st.practice.granted = applyBuild(st, capped);
+    }
     st.currentStage = target.stage;
     st.stageClearing = false; st.bossActive = false; st.waveTimer = 9999;
     st.seenTutorials = { ...(st.seenTutorials || {}), footwork_tip: true, instinct: true, bruiser_id: true, string_id: true, assassin_id: true };

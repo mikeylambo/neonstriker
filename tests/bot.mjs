@@ -80,7 +80,7 @@ export function makeBot({ st, T, SequenceManager, fin, knock, rules, vig, settin
                 window.engineApplyUpgradeState(st.currentDraftOptions[0].id);
             }
             else if (st.screen === 'wager') { log.wagersSeen++; T.resolveWager(!!opts.acceptWagers); }
-            else if (st.screen === 'gameover') { log.ended = true; log.endStage = st.currentStage; break; }
+            else if (st.screen === 'gameover' || st.screen === 'continue') { log.ended = true; log.endStage = st.currentStage; break; }
             if (st.finisher && !log.finishers.includes(st.finisher)) log.finishers.push(st.finisher);
             if (st.knockdown && !wasDown) log.knockdowns.push(st.currentStage);
             wasDown = !!st.knockdown;

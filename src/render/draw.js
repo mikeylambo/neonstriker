@@ -6,7 +6,7 @@ import { drawBoxer } from './boxer.js';
 import { SequenceManager } from '../systems/sequences.js';
 import { shakeScale, getSettings } from '../systems/settings.js';
 import { buildColor } from '../systems/colors.js';
-import { drawBossPoster, drawLiveLanes, drawAfterimages, drawKnockdownUI, drawKoFx, drawScorePops, drawBossTells, drawBossHud, drawFinisherDim, drawFinisherUI, drawVignette, drawThreatPips, drawSlipWindows, drawKoBanner } from './overlays.js';
+import { drawBossPoster, drawLiveLanes, drawAfterimages, drawKnockdownUI, drawKoFx, drawScorePops, drawBossTells, drawBossHud, drawFinisherDim, drawFinisherUI, drawVignette, drawThreatPips, drawSlipWindows, drawKoBanner, drawCanisters } from './overlays.js';
 
 const dl = (x1, y1, x2, y2) => { ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); };
 
@@ -159,6 +159,7 @@ export function draw() {
     ctx.globalAlpha = 1.0;
 
     drawLiveLanes(ctx);
+    drawCanisters(ctx);
     drawFinisherDim(ctx);
     drawAfterimages(ctx);
 

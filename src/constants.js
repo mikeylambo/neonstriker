@@ -364,6 +364,16 @@ export const CONSTANTS = {
     // standing in it shocks you. It forces a lane change — lane boxing, not corners.
     LIVE_LANE: { warnFrames: 26, liveFrames: 80, tickEvery: 24, damage: 6 },
 
+    // v23 STATIC MONK CANISTERS: blast radius around where the canister detonates
+    // (your lane hit is still decided by lane, as before) and damage to adds.
+    CANISTER: { radius: 120, addDamage: 50 },
+    // v23 BOSS KNOCKBACK: hooks only move a boss while it's OPEN; any push is capped
+    // (vx cap -> ~35px / ~55px of slide) so nothing punts a boss out of range. A
+    // Loaded Cross staggers a boss through stun resist for `loadedStagger` frames.
+    BOSS_KB: { cap: 5, loadedCap: 8, loadedStagger: 26 },
+    // v23 SET UP (playtest: "late game jab becomes useless"): landing Jab 3 of a
+    // 1-2-3 string sets up the next Hook / Cross inside `window` frames for `mult`.
+    JAB_SETUP: { window: 40, mult: 1.5 },
     // v22 SLIP SPEED (playtest: "increase lane slip speed?"). A slip is judged
     // the instant it's pressed (lane is logical), so the glide between lanes is
     // pure feel: 0.25 -> 0.42 per frame settles in ~5 frames instead of ~9. The

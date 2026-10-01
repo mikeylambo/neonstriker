@@ -79,7 +79,7 @@ function executeMovementInput(action) {
 // instant (no windup). Slipping stops being purely defensive.
 function pivotForward() {
     const V = CONSTANTS.VERBS.pivotSlip, p = st.player;
-    const target = st.enemies.filter(e => e.lane === p.lane && e.x > p.x).sort((a, b) => a.x - b.x)[0];
+    const target = st.enemies.filter(e => e.lane === p.lane && !e.passed && e.x > p.x).sort((a, b) => a.x - b.x)[0];
     const want = target ? Math.min(target.x - 95, p.x + V.advance) : p.x;
     if (want > p.x + 4) {
         p.x = Math.min(FOOTWORK_MAX_X, want);
@@ -293,11 +293,13 @@ export function startPunch(t, charge = 0) {
     let cF = Math.max(0.35, (st.isInstinct ? 0.6 : 1) * (1 / (1 + (st.stats.speedMult - 1) * 0.4)));
 
     if (isJab1 || isJab2 || t === 'guard_jab') {
-        st.player.punchTimer = Math.max(5, st.orbCounts.speed >= 2 ? Math.floor(5 * sF) : Math.floor(8 * sF));
+        // v23: floors lowered (5 -> 3, 6 -> 4) so Speed keeps paying the Jab late,
+        // like it always did the Hook.
+        st.player.punchTimer = Math.max(3, st.orbCounts.speed >= 2 ? Math.floor(5 * sF) : Math.floor(8 * sF));
         st.player.hitFrame = Math.max(2, Math.floor(2 * sF));
     }
     else if (isJab3) {
-        st.player.punchTimer = Math.max(6, st.orbCounts.speed >= 2 ? Math.floor(7 * sF) : Math.floor(12 * sF));
+        st.player.punchTimer = Math.max(4, st.orbCounts.speed >= 2 ? Math.floor(7 * sF) : Math.floor(12 * sF));
         st.player.hitFrame = Math.max(2, Math.floor(3 * sF));
     }
     else if (t === 'cross') {
@@ -390,7 +392,7 @@ const BODY_GAP = 62;
 // already passed (behind you) is ignored.
 export function resolveBodies(p) {
     for (const e of st.enemies) {
-        if (e.hp <= 0 || e.controller === 'static_monk' || e.x > st.width || e.lane !== p.lane) continue;
+        if (e.hp <= 0 || e.passed || e.controller === 'static_monk' || e.x > st.width || e.lane !== p.lane) continue;
         if (e.x - p.x < BODY_GAP && e.x > p.x - 10) p.x = Math.max(FOOTWORK_MIN_X, e.x - BODY_GAP);
     }
 }
@@ -400,7 +402,7 @@ export function resolveBodies(p) {
 // — e.g. "someone anywhere nearby" — kept him parked too far forward.
 function isEngaged(p) {
     if (p.comboWindow > 0 || p.state === 'punching' || p.state === 'recovery') return true;
-    return st.enemies.some(e => e.hp > 0 && e.lane === p.lane && e.x > p.x - 30 && e.x - p.x < 160);
+    return st.enemies.some(e => e.hp > 0 && !e.passed && e.lane === p.lane && e.x > p.x - 30 && e.x - p.x < 160);
 }
 
 // Reads the remappable binds + pad into one input snapshot for this frame.
@@ -432,6 +434,7 @@ export function updatePlayer() {
 
     if (p.invuln > 0) p.invuln--;
     if (p.pivotTimer > 0) p.pivotTimer--;
+    if (p.setUpTimer > 0) p.setUpTimer--;
     if (p.slipCooldown > 0) p.slipCooldown--;
     if (p.ghostStepCooldown > 0) {
         p.ghostStepCooldown--;
@@ -480,7 +483,8 @@ export function updatePlayer() {
     if (st.progressionMods.loadedCross) {
         const LC = CONSTANTS.VERBS.loadedCross;
         crossAttempt = false;
-        if (input.cross) { p.charging = true; p.crossCharge = 0; }
+        if (input.cross && st.isInstinct) { crossAttempt = true; crossCharge = LC.chargeFrames; p.charging = false; } // v23: in Instinct the Cross fires on PRESS, fully loaded
+        else if (input.cross) { p.charging = true; p.crossCharge = 0; }
         if (p.charging) {
             if (input.crossHeld) {
                 p.crossCharge = Math.min(LC.maxFrames, p.crossCharge + 1);
@@ -567,11 +571,12 @@ export function updatePlayer() {
                 const circuitSafe = st.progressionMods.infiniteCircuit && p.dempseyActive;
                 if (circuitSafe) { /* combo kept */ }
                 else if (isJab && !iGP) {
-                    if (st.progressionMods.relentlessRhythm && (p.punchType === 'jab1' || p.punchType === 'jab2')) {
-                        st.combo = Math.max(0, st.combo - 1);
-                    } else if (st.orbCounts.speed < 2) {
-                        st.combo = Math.max(0, st.combo - 1);
-                    } else { st.combo = 0; }
+                    // v23 FIX: this was inverted — a whiffed Jab cost 1 Combo BEFORE
+                    // Rhythm Keeper (Speed R2) and all of it after. Now: base snaps,
+                    // Rhythm Keeper costs 1, Relentless Rhythm costs nothing.
+                    if (st.progressionMods.relentlessRhythm) { /* combo kept */ }
+                    else if (st.orbCounts.speed >= 2) st.combo = Math.max(0, st.combo - 1);
+                    else st.combo = 0;
                 } else if (!iGP) st.combo = 0;
 
                 resetJabString();
@@ -586,6 +591,7 @@ export function updatePlayer() {
                     if (p.dempseyAlternations % 4 === 0) { p.slipBuff = Math.max(p.slipBuff, 1); spawnFloatingText(p.x, p.y - 100, 'CIRCUIT CHARGED', CONSTANTS.FUSION_COLORS.evo_infinite_circuit); }
                 }
                 p.lastPunchLanded = p.punchType;
+                if (p.punchType === 'jab3') { p.setUpTimer = CONSTANTS.JAB_SETUP.window; } // v23 SET UP
             }
             p.crossLoaded = false;
         }

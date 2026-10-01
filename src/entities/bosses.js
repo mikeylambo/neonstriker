@@ -375,6 +375,16 @@ function handleStaticMonk(en) {
             en.targetLanes = [st.player.lane];
             let adjacentLane = st.player.lane === 1 ? (random() > 0.5 ? 0 : 2) : 1;
             en.targetLanes.push(adjacentLane);
+            // v23 CANISTERS (playtest: the two lit lanes were easy to miss the first
+            // time and activated too quickly): each targeted lane gets a canister that
+            // rolls from the Monk toward you and detonates the frame the volley lands —
+            // where it is on the floor IS the countdown.
+            en.canisterFrom = en.attackCooldown;
+            st.canisters = en.targetLanes.map(lane => ({ lane, x0: en.x - 30, x: en.x - 30, spin: 0 }));
+        }
+        if (st.canisters && st.canisters.length && en.canisterFrom) {
+            const k = Math.max(0, en.attackCooldown) / en.canisterFrom; // 1 -> 0
+            for (const c of st.canisters) { const tx = st.player.x + 20; c.x = tx + (c.x0 - tx) * k; c.spin += 0.25; }
         }
 
         if (en.attackCooldown > 0 && en.targetLanes.length > 0) {
@@ -401,8 +411,15 @@ function handleStaticMonk(en) {
 
             if (en.targetLanes.length > 0) {
                 en.targetLanes.forEach(laneIndex => {
-                    for (let i = 0; i < 6; i++) {
-                        createImpact(en.x - (i * 150), st.height * CONSTANTS.LANE_Y[laneIndex], '#00ff00');
+                    const can = (st.canisters || []).find(c => c.lane === laneIndex);
+                    const bx = can ? can.x : st.player.x, ly = st.height * CONSTANTS.LANE_Y[laneIndex];
+                    for (let i = 0; i < 6; i++) createImpact(bx + (i - 2) * 40, ly - 20 - (i % 2) * 30, '#00ff00');
+                    triggerShockwave(bx, ly - 30, '#00ff00');
+                    // the blast takes out anything in the lane near it — including the Monk's own adds
+                    for (const add of st.enemies) {
+                        if (add.isBoss || add.lane !== laneIndex || Math.abs(add.x - bx) > CONSTANTS.CANISTER.radius) continue;
+                        add.hp -= CONSTANTS.CANISTER.addDamage; add.stun = Math.max(add.stun, 20); add.vx += 8;
+                        spawnFloatingText(add.x, add.y - 120, 'CAUGHT IN THE BLAST', '#00ff00');
                     }
                     if (st.player.lane === laneIndex) {
                         if (st.player.state === 'ghost_step') { spawnFloatingText(st.player.x, st.player.y - 50, "EVADED", "#888888"); registerPerfectGhostStep(); }
@@ -413,6 +430,7 @@ function handleStaticMonk(en) {
 
             en.targetLanes = [];
             en.telegraphed = false;
+            st.canisters = []; en.canisterFrom = 0;
             en.bossMashCount++;
 
             // ARC MUTATION (patternChainLength, was authored, never read): volleys per

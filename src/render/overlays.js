@@ -130,12 +130,11 @@ const PROMPT_X = 0.72, PROMPT_Y = 0.48;
 
 // v18: prompts show the glyph for the device you're actually holding — a PS4
 // pad sees □ △ ○, an Xbox pad X Y B, the keyboard your bound keys.
-const MOVE_NAME = { up: 'SLIP UP', down: 'SLIP DOWN', jab: 'JAB', cross: 'CROSS', hook: 'HOOK' };
 const KEY_COLOR = { up: '#22d3ee', down: '#22d3ee', jab: '#ffffff', cross: '#ec4899', hook: '#facc15' };
 function promptGlyph(move) {
     const g = glyph(move), dev = inputDevice();
     const key = (move === 'up' || move === 'down') ? (move === 'up' ? '▲' : '▼') : g.label;
-    return { key, hint: MOVE_NAME[move] || move.toUpperCase(), color: dev === 'keyboard' ? KEY_COLOR[move] : (move === 'up' || move === 'down' ? '#22d3ee' : g.color) };
+    return { key, color: dev === 'keyboard' ? KEY_COLOR[move] : (move === 'up' || move === 'down' ? '#22d3ee' : g.color) };
 }
 
 // ---------- finisher UI (screen space) ----------
@@ -206,11 +205,7 @@ export function drawFinisherUI(ctx) {
         ctx.shadowBlur = 0;
         ctx.fillStyle = g.color; ctx.font = `900 ${g.key.length > 2 ? 24 : 40}px Orbitron`;
         ctx.textBaseline = 'middle'; ctx.fillText(g.key, cx, cy + 2); ctx.textBaseline = 'alphabetic';
-        ctx.fillStyle = '#ffffff'; ctx.font = '900 16px Orbitron';
-        ctx.fillText(g.hint, cx, cy + box + 30);
-    } else if (f.phase === 'intro') {
-        ctx.fillStyle = `rgba(255,255,255,${f.bars})`; ctx.font = 'bold 13px Orbitron';
-        ctx.fillText('HIT EACH PROMPT ON THE BEAT', cx, cy);
+        // v23: no move-name caption under the prompt (playtest: "SLIP UP" read badly) — the glyph says it.
     }
     // a locked-in input flashes where the prompt was
     if (f.phase === 'prompts' && f.lockFlash > 0) {
@@ -468,6 +463,33 @@ export function drawKnockdownUI(ctx) {
     ctx.restore();
 }
 
+// ---------- v23 STATIC MONK CANISTERS (world space) ----------
+export function drawCanisters(ctx) {
+    const cs = st.canisters;
+    if (!cs || !cs.length) return;
+    const monk = st.enemies.find(e => e.controller === 'static_monk');
+    const k = monk && monk.canisterFrom ? Math.max(0, monk.attackCooldown) / monk.canisterFrom : 1;
+    ctx.save();
+    for (const c of cs) {
+        const ly = st.height * CONSTANTS.LANE_Y[c.lane], cy = ly - 12;
+        // the path still to roll, fading out ahead of it
+        const g = ctx.createLinearGradient(st.player.x, 0, c.x, 0);
+        g.addColorStop(0, 'rgba(0,255,0,0.6)'); g.addColorStop(1, 'rgba(0,255,0,0.02)');
+        ctx.strokeStyle = g; ctx.lineWidth = 3; ctx.setLineDash([10, 8]);
+        ctx.beginPath(); ctx.moveTo(c.x, ly - 2); ctx.lineTo(st.player.x + 20, ly - 2); ctx.stroke(); ctx.setLineDash([]);
+        // the canister: a rolling drum with a light that blinks faster as it closes
+        ctx.save(); ctx.translate(c.x, cy); ctx.rotate(-c.spin);
+        ctx.fillStyle = '#0b1f0b'; ctx.strokeStyle = '#00ff00'; ctx.lineWidth = 3; ctx.shadowColor = '#00ff00'; ctx.shadowBlur = 12;
+        ctx.beginPath(); ctx.arc(0, 0, 15, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+        ctx.shadowBlur = 0; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(-15, 0); ctx.lineTo(15, 0); ctx.moveTo(0, -15); ctx.lineTo(0, 15); ctx.stroke();
+        ctx.restore();
+        const blink = Math.floor(Date.now() / (45 + k * 200)) % 2 === 0;
+        ctx.fillStyle = blink ? (k < 0.2 ? '#ffffff' : '#00ff00') : 'rgba(0,255,0,0.25)';
+        ctx.beginPath(); ctx.arc(c.x, cy - 22, 4, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+}
+
 // ---------- v22 BOSS K.O. BANNER (screen space, while the champion is down) ----------
 export function drawKoBanner(ctx) {
     const a = koBannerAlpha();
@@ -486,8 +508,6 @@ export function drawKoBanner(ctx) {
     ctx.shadowColor = k.color || '#ff0055'; ctx.shadowBlur = 30;
     ctx.fillStyle = '#ffffff'; ctx.fillText('K.O.', 0, 0);
     ctx.shadowBlur = 0;
-    ctx.font = 'bold 16px Orbitron'; ctx.fillStyle = k.color || '#ff0055';
-    ctx.fillText(`${k.body.name || 'CHAMPION'} IS DOWN`, 0, 30);
     ctx.restore();
 }
 
@@ -514,7 +534,7 @@ export function drawBossPoster(ctx) {
     ctx.strokeStyle = 'rgba(255,255,255,0.15)'; ctx.lineWidth = 1; ctx.strokeRect(px + 8, py + 8, pw - 16, ph - 16);
     ctx.textAlign = 'center';
     ctx.fillStyle = P.color; ctx.font = '900 14px Orbitron';
-    ctx.fillText(`TITLE FIGHT · ARC ${P.arc} · ROUND ${P.round}`, W / 2, py + 36);
+    ctx.fillText(`ARC ${P.arc} · ROUND ${P.round}`, W / 2, py + 36);
     ctx.fillStyle = 'rgba(255,255,255,0.6)'; ctx.font = 'bold 11px Orbitron';
     ctx.fillText(String(P.venue).toUpperCase(), W / 2, py + 54);
     // the two fighters, facing off
