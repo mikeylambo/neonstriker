@@ -14,12 +14,16 @@ import { CONSTANTS } from '../constants.js';
 const KEY = 'neon_strike_arc_medals_v1';
 
 // seconds / points, per Arc. Arc 1 is 5 rounds; Arcs 2+ are 7.
+// v23: recalibrated from 9 real runs (v21/v22 exports). The v20 bot pars put
+// score out of reach (Arc 1 70k vs ~31-46k played; Arc 4 380k vs 79k) and time
+// trivially in reach, so every Arc was SILVER. Now a strong run sits at the edge
+// of GOLD on both. Arc 5 has no data yet — provisional.
 export const ARC_PAR = {
-    1: { time: 330, score: 70000 },
-    2: { time: 540, score: 160000 },
-    3: { time: 600, score: 260000 },
-    4: { time: 660, score: 380000 },
-    5: { time: 720, score: 520000 }
+    1: { time: 210, score: 42000 },
+    2: { time: 400, score: 70000 },
+    3: { time: 430, score: 90000 },
+    4: { time: 440, score: 90000 },
+    5: { time: 480, score: 110000 }
 };
 export const MEDALS = {
     gold:   { label: 'GOLD',   color: '#facc15', bonus: 5000, rank: 3 },

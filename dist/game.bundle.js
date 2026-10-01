@@ -1513,11 +1513,11 @@
   // src/systems/arc_par.js
   var KEY2 = "neon_strike_arc_medals_v1";
   var ARC_PAR = {
-    1: { time: 330, score: 7e4 },
-    2: { time: 540, score: 16e4 },
-    3: { time: 600, score: 26e4 },
-    4: { time: 660, score: 38e4 },
-    5: { time: 720, score: 52e4 }
+    1: { time: 210, score: 42e3 },
+    2: { time: 400, score: 7e4 },
+    3: { time: 430, score: 9e4 },
+    4: { time: 440, score: 9e4 },
+    5: { time: 480, score: 11e4 }
   };
   var MEDALS = {
     gold: { label: "GOLD", color: "#facc15", bonus: 5e3, rank: 3 },
@@ -2030,7 +2030,7 @@
   // src/systems/telemetry.js
   var KEY3 = "neon_strike_telemetry_v1";
   var MAX_RUNS = 25;
-  var TELEMETRY_VERSION = "19.0.0";
+  var TELEMETRY_VERSION = "23.0.0";
   var run = null;
   var stage = null;
   function safeGet2() {

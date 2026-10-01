@@ -140,5 +140,9 @@ ok('practice: build applied, capped at earned', st.orbCounts.power === 3 && st.o
 ok('practice: rank-3 verbs come with it', st.progressionMods.loadedCross === true && st.progressionMods.pivotSlip === true);
 ok('practice: qualifying Fusion granted', st.acquiredUpgradeIds.includes('fuse_dempsey_circuit'));
 
+// ---- 9. telemetry version tracks the build ----
+const { TELEMETRY_VERSION } = await import('../src/systems/telemetry.js');
+eq('telemetry: version matches package.json', TELEMETRY_VERSION, JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version);
+
 console.log(`V23 PASSED ${passed} / ${passed + failed}`);
 if (fails.length) { fails.forEach(f => console.log('  ✗ ' + f)); process.exitCode = 1; }
