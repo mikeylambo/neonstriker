@@ -259,10 +259,10 @@ export const CONSTANTS = {
         { name: 'NONE', desc: 'System stable. No anomalies detected.', mods: {} },
         { name: 'SURGE', desc: 'Instinct gain increased by 50%.', mods: { instinctGainMult: 1.5 } },
         { name: 'FAST CROWD', desc: 'Ranks arrive denser and faster — Assassins swell the crowd.', scoreMult: 1.5, mods: { packetDelayMult: 0.7, speedMult: 1.12, gruntSub: 'assassin', gruntSubEvery: 2 } },
-        { name: 'IRON WALL', desc: 'The ranks harden. More Gold Armor — break it with a Cross.', scoreMult: 1.3, mods: { gruntSub: 'shield', gruntSubEvery: 2 } },
-        { name: 'HEAVY HANDS', desc: 'Bruisers hit harder and press in numbers. Keep your footwork.', scoreMult: 1.4, mods: { bruiserDamageMult: 1.4, gruntSub: 'bruiser', gruntSubEvery: 4 } },
+        { name: 'IRON WALL', desc: 'Every Grunt arrives in Gold Armor — only a Cross gets through.', scoreMult: 1.3, mods: { gruntSub: 'shield', gruntSubEvery: 1 } },
+        { name: 'HEAVY HANDS', desc: 'Bruisers hit 60% harder and press in numbers. Keep your footwork.', scoreMult: 1.4, mods: { bruiserDamageMult: 1.6, gruntSub: 'bruiser', gruntSubEvery: 3 } },
         { name: 'ADRENALINE', desc: 'Every Perfect Slip mends a sliver of health.', mods: { perfectSlipHeal: 4 } },
-        { name: 'GLASS PROTOCOL', desc: 'You deal 30% more — and take 30% more. No margin for a miss.', scoreMult: 1.75, mods: { playerDamageDealtMult: 1.3, playerDamageTakenMult: 1.3 } }
+        { name: 'GLASS PROTOCOL', desc: 'You deal 15% more — and take 60% more. No margin for a miss.', scoreMult: 1.75, mods: { playerDamageDealtMult: 1.15, playerDamageTakenMult: 1.6 } }
     ],
     wagerPool: () => CONSTANTS.AFFIXES.filter(a => a.scoreMult && a.scoreMult > 1),
     WAGERS: {
@@ -366,7 +366,10 @@ export const CONSTANTS = {
 
     // v23 STATIC MONK CANISTERS: blast radius around where the canister detonates
     // (your lane hit is still decided by lane, as before) and damage to adds.
-    CANISTER: { radius: 120, addDamage: 50 },
+    CANISTER: { radius: 120, addDamage: 60 }, // v23: KOs a (now 60 HP) Grunt add
+    // v23 ZONER BEAM: 25 -> 18 (run data: Zoners dealt ~60% of all damage taken
+    // across 9 runs — more than every boss combined).
+    ZONER_BEAM_DMG: 18,
     // v23 BOSS KNOCKBACK: hooks only move a boss while it's OPEN; any push is capped
     // (vx cap -> ~35px / ~55px of slide) so nothing punts a boss out of range. A
     // Loaded Cross staggers a boss through stun resist for `loadedStagger` frames.

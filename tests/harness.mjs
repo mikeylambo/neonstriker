@@ -62,9 +62,9 @@ function typeCounts() {
 // ============ 1. AFFIX DATA ============
 eq('affix count restored', CONSTANTS.AFFIXES.length, 7);
 eq('affixMod SURGE instinct', CONSTANTS.affixMod(findAffix('SURGE'), 'instinctGainMult', 1), 1.5);
-eq('affixMod GLASS dealt', CONSTANTS.affixMod(findAffix('GLASS PROTOCOL'), 'playerDamageDealtMult', 1), 1.3);
-eq('affixMod GLASS taken', CONSTANTS.affixMod(findAffix('GLASS PROTOCOL'), 'playerDamageTakenMult', 1), 1.3);
-eq('affixMod HEAVY bruiser', CONSTANTS.affixMod(findAffix('HEAVY HANDS'), 'bruiserDamageMult', 1), 1.4);
+eq('affixMod GLASS dealt', CONSTANTS.affixMod(findAffix('GLASS PROTOCOL'), 'playerDamageDealtMult', 1), 1.15); // v23
+eq('affixMod GLASS taken', CONSTANTS.affixMod(findAffix('GLASS PROTOCOL'), 'playerDamageTakenMult', 1), 1.6); // v23
+eq('affixMod HEAVY bruiser', CONSTANTS.affixMod(findAffix('HEAVY HANDS'), 'bruiserDamageMult', 1), 1.6); // v23
 eq('affixMod ADRENALINE heal', CONSTANTS.affixMod(findAffix('ADRENALINE'), 'perfectSlipHeal', 0), 4);
 eq('affixMod default when absent', CONSTANTS.affixMod(findAffix('NONE'), 'playerDamageDealtMult', 1), 1);
 
@@ -82,8 +82,8 @@ eq('NONE: stageSpeedMult 1.0', +st.stageSpeedMult.toFixed(3), 1.0);
 resetForWave(findAffix('IRON WALL'));
 spawnEnemy();
 let iron = typeCounts();
-eq('IRON WALL: 2 grunts -> shields (every 2nd)', iron.shield, 2);
-eq('IRON WALL: 1 grunt remains', iron.grunt, 1);
+eq('IRON WALL (v23): every grunt -> shield', iron.shield, 3);
+eq('IRON WALL (v23): no grunt remains', iron.grunt, undefined);
 
 resetForWave(findAffix('HEAVY HANDS'));
 spawnEnemy();

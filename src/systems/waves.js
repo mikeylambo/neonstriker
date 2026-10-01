@@ -348,11 +348,14 @@ export function spawnEnemy() {
 export function makeEnemy(type, lane, delayFrames = 0, opts = {}) {
     const rawArcIndex = CONSTANTS.getArcIndex(st.currentStage);
     const gm = (CONSTANTS.ARC_LAWS[Math.min(rawArcIndex, 5)] || CONSTANTS.ARC_LAWS[5]).globalMods;
-    let color = '#ff0055'; let hp = 45; let speed = 3.0; let cooldown = 60; let weight = 1;
+    // v23 (run data: a 50-dmg Cross one-shot Grunts, Zoners and Assassins, so
+    // nothing ever swung and the Jab had no job): Grunt 45 -> 60, Zoner 40 -> 55.
+    // Assassins stay glass (30). Flat — no per-stage scaling.
+    let color = '#ff0055'; let hp = 60; let speed = 3.0; let cooldown = 60; let weight = 1;
 
     if (type === 'bruiser') { color = '#cc0000'; hp = 150; speed = 1.8; cooldown = 80; weight = 2; }
     else if (type === 'shield') { color = '#ffaa00'; hp = 80; speed = 2.4; weight = 1.5; }
-    else if (type === 'zoner') { color = '#00ff00'; hp = 40; speed = 1.5; cooldown = 100; }
+    else if (type === 'zoner') { color = '#00ff00'; hp = 55; speed = 1.5; cooldown = 100; }
     else if (type === 'assassin') { color = '#aa00ff'; hp = 30; speed = 4.5; cooldown = 35; }
 
     hp = Math.floor(hp * CONSTANTS.enemyHpMult(st.currentStage) * gm.packetDensityMult);

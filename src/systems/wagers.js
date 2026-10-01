@@ -19,7 +19,12 @@ export function rollWagerOffer(stage) {
     if (stage < CONSTANTS.WAGERS.firstStage || CONSTANTS.isBossStage(stage)) return null;
     const pool = CONSTANTS.wagerPool();
     if (!pool.length) return null;
-    return pool[Math.floor(random() * pool.length)];
+    // v23 (playtest: "same wager often... sometimes back to back"): never offer
+    // the one you were just offered. Still exactly one rng roll.
+    const choices = pool.length > 1 ? pool.filter(a => a.name !== st.lastWagerName) : pool;
+    const pick = choices[Math.floor(random() * choices.length)];
+    st.lastWagerName = pick.name;
+    return pick;
 }
 
 // Stage start: nothing is active until the player accepts.

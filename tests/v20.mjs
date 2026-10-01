@@ -54,7 +54,7 @@ eq('hp: Arc 5 boss (+15%/Arc)', CONSTANTS.bossHp(CONSTANTS.bossStageOfArc(5)), 1
 eq('hp: boss growth caps at Arc 5', CONSTANTS.bossHp(a9), 1600);
 run(); st.currentStage = a5; st.stageSpeedMult = 1;
 const g5 = waves.makeEnemy('grunt', 1);
-ok('hp: an Arc 5 grunt is within the arc density bump of base 45', g5.hp <= 45 * 1.25, `${g5.hp}`);
+ok('hp: an Arc 5 grunt is within the arc density bump of base 60 (v23)', g5.hp <= 60 * 1.25, `${g5.hp}`);
 
 // ---- 2. punch feel ----
 const F = t => CONSTANTS.punchFeel(t, false);

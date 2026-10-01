@@ -74,7 +74,7 @@ export const BOSS_ROSTER_IDS = BOSS_ROSTER.map(b => b.controller);
 // Uses the same stat/scaling shape as a normal wave Grunt so it reads as a familiar
 // threat, and enters off the right edge so it's always slippable/beatable on arrival.
 function spawnMonkAdd() {
-    let hp = Math.floor(45 * CONSTANTS.enemyHpMult(st.currentStage));
+    let hp = Math.floor(60 * CONSTANTS.enemyHpMult(st.currentStage)); // v23: matches the wave Grunt
     let lane = Math.floor(random() * 3);
     st.enemies.push({
         x: st.width + 60, lane, y: st.height * CONSTANTS.LANE_Y[lane],

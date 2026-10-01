@@ -146,7 +146,7 @@ export function updateEnemies() {
                                 registerPerfectGhostStep();
                                 if (st.progressionMods.ghostCounter && st.player.slipBuff === 0) { st.player.slipBuff = 1; playSound('perfect_slip'); spawnFloatingText(st.player.x, st.player.y - 80, "GHOST COUNTER!", "#ffffff"); }
                             } else {
-                                let zDmg = 25; if (st.isInstinct) zDmg = Math.floor(zDmg * 0.5); takeDamage(zDmg, true, en);
+                                let zDmg = CONSTANTS.ZONER_BEAM_DMG; if (st.isInstinct) zDmg = Math.floor(zDmg * 0.5); takeDamage(zDmg, true, en);
                             }
                         }
                         en.attackCooldown = en.maxCooldown;

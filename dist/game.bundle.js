@@ -267,10 +267,10 @@
       { name: "NONE", desc: "System stable. No anomalies detected.", mods: {} },
       { name: "SURGE", desc: "Instinct gain increased by 50%.", mods: { instinctGainMult: 1.5 } },
       { name: "FAST CROWD", desc: "Ranks arrive denser and faster \u2014 Assassins swell the crowd.", scoreMult: 1.5, mods: { packetDelayMult: 0.7, speedMult: 1.12, gruntSub: "assassin", gruntSubEvery: 2 } },
-      { name: "IRON WALL", desc: "The ranks harden. More Gold Armor \u2014 break it with a Cross.", scoreMult: 1.3, mods: { gruntSub: "shield", gruntSubEvery: 2 } },
-      { name: "HEAVY HANDS", desc: "Bruisers hit harder and press in numbers. Keep your footwork.", scoreMult: 1.4, mods: { bruiserDamageMult: 1.4, gruntSub: "bruiser", gruntSubEvery: 4 } },
+      { name: "IRON WALL", desc: "Every Grunt arrives in Gold Armor \u2014 only a Cross gets through.", scoreMult: 1.3, mods: { gruntSub: "shield", gruntSubEvery: 1 } },
+      { name: "HEAVY HANDS", desc: "Bruisers hit 60% harder and press in numbers. Keep your footwork.", scoreMult: 1.4, mods: { bruiserDamageMult: 1.6, gruntSub: "bruiser", gruntSubEvery: 3 } },
       { name: "ADRENALINE", desc: "Every Perfect Slip mends a sliver of health.", mods: { perfectSlipHeal: 4 } },
-      { name: "GLASS PROTOCOL", desc: "You deal 30% more \u2014 and take 30% more. No margin for a miss.", scoreMult: 1.75, mods: { playerDamageDealtMult: 1.3, playerDamageTakenMult: 1.3 } }
+      { name: "GLASS PROTOCOL", desc: "You deal 15% more \u2014 and take 60% more. No margin for a miss.", scoreMult: 1.75, mods: { playerDamageDealtMult: 1.15, playerDamageTakenMult: 1.6 } }
     ],
     wagerPool: () => CONSTANTS.AFFIXES.filter((a) => a.scoreMult && a.scoreMult > 1),
     WAGERS: {
@@ -389,7 +389,11 @@
     LIVE_LANE: { warnFrames: 26, liveFrames: 80, tickEvery: 24, damage: 6 },
     // v23 STATIC MONK CANISTERS: blast radius around where the canister detonates
     // (your lane hit is still decided by lane, as before) and damage to adds.
-    CANISTER: { radius: 120, addDamage: 50 },
+    CANISTER: { radius: 120, addDamage: 60 },
+    // v23: KOs a (now 60 HP) Grunt add
+    // v23 ZONER BEAM: 25 -> 18 (run data: Zoners dealt ~60% of all damage taken
+    // across 9 runs — more than every boss combined).
+    ZONER_BEAM_DMG: 18,
     // v23 BOSS KNOCKBACK: hooks only move a boss while it's OPEN; any push is capped
     // (vx cap -> ~35px / ~55px of slide) so nothing punts a boss out of range. A
     // Loaded Cross staggers a boss through stun resist for `loadedStagger` frames.
@@ -1933,7 +1937,7 @@
     const rawArcIndex = CONSTANTS.getArcIndex(gameState.currentStage);
     const gm = (CONSTANTS.ARC_LAWS[Math.min(rawArcIndex, 5)] || CONSTANTS.ARC_LAWS[5]).globalMods;
     let color = "#ff0055";
-    let hp = 45;
+    let hp = 60;
     let speed = 3;
     let cooldown = 60;
     let weight = 1;
@@ -1950,7 +1954,7 @@
       weight = 1.5;
     } else if (type === "zoner") {
       color = "#00ff00";
-      hp = 40;
+      hp = 55;
       speed = 1.5;
       cooldown = 100;
     } else if (type === "assassin") {
@@ -3657,7 +3661,7 @@
   ];
   var BOSS_ROSTER_IDS = BOSS_ROSTER.map((b) => b.controller);
   function spawnMonkAdd() {
-    let hp = Math.floor(45 * CONSTANTS.enemyHpMult(gameState.currentStage));
+    let hp = Math.floor(60 * CONSTANTS.enemyHpMult(gameState.currentStage));
     let lane = Math.floor(random() * 3);
     gameState.enemies.push({
       x: gameState.width + 60,
@@ -6113,7 +6117,10 @@
     if (stage2 < CONSTANTS.WAGERS.firstStage || CONSTANTS.isBossStage(stage2)) return null;
     const pool = CONSTANTS.wagerPool();
     if (!pool.length) return null;
-    return pool[Math.floor(random() * pool.length)];
+    const choices = pool.length > 1 ? pool.filter((a) => a.name !== gameState.lastWagerName) : pool;
+    const pick = choices[Math.floor(random() * choices.length)];
+    gameState.lastWagerName = pick.name;
+    return pick;
   }
   function clearWager() {
     gameState.currentAffix = NONE;
@@ -6901,7 +6908,7 @@
                     spawnFloatingText(gameState.player.x, gameState.player.y - 80, "GHOST COUNTER!", "#ffffff");
                   }
                 } else {
-                  let zDmg = 25;
+                  let zDmg = CONSTANTS.ZONER_BEAM_DMG;
                   if (gameState.isInstinct) zDmg = Math.floor(zDmg * 0.5);
                   takeDamage(zDmg, true, en);
                 }
@@ -8187,6 +8194,7 @@
     gameState.afterimages = [];
     gameState.koFx = [];
     gameState.bossKo = null;
+    gameState.lastWagerName = null;
     gameState.retries = 0;
     gameState.canisters = [];
     gameState.rankOrder = [];

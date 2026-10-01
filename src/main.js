@@ -169,7 +169,7 @@ export function resetGame() {
     st.finisher = null; st.finisherZoom = 1; st.vignette = null;
     st.stageHitsTaken = 0; st.statFlawless = 0;
     st.knockdown = null; st.knockdownsThisArc = 0; st.statKnockdowns = 0; st.zoneTimer = 0; st.bossPoster = null; st.enemyEchoes = [];
-    st.afterimages = []; st.koFx = []; st.bossKo = null; st.retries = 0; st.canisters = []; st.rankOrder = []; st.orbPulse = 0;
+    st.afterimages = []; st.koFx = []; st.bossKo = null; st.lastWagerName = null; st.retries = 0; st.canisters = []; st.rankOrder = []; st.orbPulse = 0;
     st.paletteFrom = 1; st.paletteTo = 1; st.paletteT = 1; st.lightSweep = -1;
     setMusicIntensity(0);
 

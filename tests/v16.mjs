@@ -115,7 +115,8 @@ ok('wager pool: only risk modifiers, every one pays > 1x', pool.length === 4 && 
 ok('wager pool: pure boons (SURGE/ADRENALINE) are never offered', !pool.some(a => a.name === 'SURGE' || a.name === 'ADRENALINE'));
 eq('wager: never offered on stage 1', wagers.rollWagerOffer(1), null);
 eq('wager: never offered on a boss stage', wagers.rollWagerOffer(CONSTANTS.bossStageOfArc(1)), null);
-seedRng(99); const o1 = wagers.rollWagerOffer(3); seedRng(99); const o2 = wagers.rollWagerOffer(3);
+seedRng(99); st.lastWagerName = null; const o1 = wagers.rollWagerOffer(3); seedRng(99); st.lastWagerName = null; const o2 = wagers.rollWagerOffer(3); const o3 = wagers.rollWagerOffer(4);
+ok('wager (v23): never the same offer twice in a row', o3 && o3.name !== o2.name);
 ok('wager: offer is seeded (Daily-identical)', o1 && o2 && o1.name === o2.name);
 st.wagerOffer = pool.find(a => a.name === 'IRON WALL'); wagers.acceptWager();
 ok('wager accept: affix active + multiplier set', st.currentAffix.name === 'IRON WALL' && st.wagerMult === 1.3 && st.wagerOffer === null);
