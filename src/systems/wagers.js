@@ -19,10 +19,13 @@ export function rollWagerOffer(stage) {
     if (stage < CONSTANTS.WAGERS.firstStage || CONSTANTS.isBossStage(stage)) return null;
     const pool = CONSTANTS.wagerPool();
     if (!pool.length) return null;
-    // v23 (playtest: "same wager often... sometimes back to back"): never offer
-    // the one you were just offered. Still exactly one rng roll.
-    const choices = pool.length > 1 ? pool.filter(a => a.name !== st.lastWagerName) : pool;
-    const pick = choices[Math.floor(random() * choices.length)];
+    // v23 (playtest: "same wager often... sometimes back to back"): offers rotate
+    // — every wager comes up once before any repeats, and a new rotation never
+    // opens on the one you just saw. Still exactly one rng roll.
+    let left = pool.filter(a => !(st.wagerSeen || []).includes(a.name));
+    if (!left.length) { st.wagerSeen = []; left = pool.length > 1 ? pool.filter(a => a.name !== st.lastWagerName) : pool; }
+    const pick = left[Math.floor(random() * left.length)];
+    st.wagerSeen = [...(st.wagerSeen || []), pick.name];
     st.lastWagerName = pick.name;
     return pick;
 }

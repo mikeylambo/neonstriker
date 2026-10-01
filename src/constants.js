@@ -259,10 +259,10 @@ export const CONSTANTS = {
         { name: 'NONE', desc: 'System stable. No anomalies detected.', mods: {} },
         { name: 'SURGE', desc: 'Instinct gain increased by 50%.', mods: { instinctGainMult: 1.5 } },
         { name: 'FAST CROWD', desc: 'Ranks arrive denser and faster — Assassins swell the crowd.', scoreMult: 1.5, mods: { packetDelayMult: 0.7, speedMult: 1.12, gruntSub: 'assassin', gruntSubEvery: 2 } },
-        { name: 'IRON WALL', desc: 'Every Grunt arrives in Gold Armor — only a Cross gets through.', scoreMult: 1.3, mods: { gruntSub: 'shield', gruntSubEvery: 1 } },
-        { name: 'HEAVY HANDS', desc: 'Bruisers hit 60% harder and press in numbers. Keep your footwork.', scoreMult: 1.4, mods: { bruiserDamageMult: 1.6, gruntSub: 'bruiser', gruntSubEvery: 3 } },
+        { name: 'IRON WALL', desc: 'Every Grunt arrives in Gold Armor — only a Cross gets through.', scoreMult: 1.4, mods: { gruntSub: 'shield', gruntSubEvery: 1 } },
+        { name: 'HEAVY HANDS', desc: 'Bruisers hit 60% harder and press in numbers. Keep your footwork.', scoreMult: 1.6, mods: { bruiserDamageMult: 1.6, gruntSub: 'bruiser', gruntSubEvery: 3 } },
         { name: 'ADRENALINE', desc: 'Every Perfect Slip mends a sliver of health.', mods: { perfectSlipHeal: 4 } },
-        { name: 'GLASS PROTOCOL', desc: 'You deal 15% more — and take 60% more. No margin for a miss.', scoreMult: 1.75, mods: { playerDamageDealtMult: 1.15, playerDamageTakenMult: 1.6 } }
+        { name: 'GLASS PROTOCOL', desc: 'You deal 15% more — and take 60% more. No margin for a miss.', scoreMult: 2.0, mods: { playerDamageDealtMult: 1.15, playerDamageTakenMult: 1.6 } }
     ],
     wagerPool: () => CONSTANTS.AFFIXES.filter(a => a.scoreMult && a.scoreMult > 1),
     WAGERS: {

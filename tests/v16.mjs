@@ -115,11 +115,16 @@ ok('wager pool: only risk modifiers, every one pays > 1x', pool.length === 4 && 
 ok('wager pool: pure boons (SURGE/ADRENALINE) are never offered', !pool.some(a => a.name === 'SURGE' || a.name === 'ADRENALINE'));
 eq('wager: never offered on stage 1', wagers.rollWagerOffer(1), null);
 eq('wager: never offered on a boss stage', wagers.rollWagerOffer(CONSTANTS.bossStageOfArc(1)), null);
-seedRng(99); st.lastWagerName = null; const o1 = wagers.rollWagerOffer(3); seedRng(99); st.lastWagerName = null; const o2 = wagers.rollWagerOffer(3); const o3 = wagers.rollWagerOffer(4);
+seedRng(99); st.lastWagerName = null; st.wagerSeen = []; const o1 = wagers.rollWagerOffer(3); seedRng(99); st.lastWagerName = null; st.wagerSeen = []; const o2 = wagers.rollWagerOffer(3); const o3 = wagers.rollWagerOffer(4);
 ok('wager (v23): never the same offer twice in a row', o3 && o3.name !== o2.name);
+{ st.wagerSeen = []; st.lastWagerName = null; const n = CONSTANTS.wagerPool().length; const names = []; for (let i = 0; i < n * 3; i++) names.push(wagers.rollWagerOffer(3).name);
+  let fullCycles = true; for (let c = 0; c < 3; c++) if (new Set(names.slice(c * n, c * n + n)).size !== n) fullCycles = false;
+  ok('wager (v23): every wager is offered once per rotation', fullCycles, names.join(','));
+  let noBack = true; for (let i = 1; i < names.length; i++) if (names[i] === names[i - 1]) noBack = false;
+  ok('wager (v23): no back-to-back repeats across rotations', noBack); }
 ok('wager: offer is seeded (Daily-identical)', o1 && o2 && o1.name === o2.name);
 st.wagerOffer = pool.find(a => a.name === 'IRON WALL'); wagers.acceptWager();
-ok('wager accept: affix active + multiplier set', st.currentAffix.name === 'IRON WALL' && st.wagerMult === 1.3 && st.wagerOffer === null);
+ok('wager accept: affix active + multiplier set', st.currentAffix.name === 'IRON WALL' && st.wagerMult === 1.4 && st.wagerOffer === null);
 st.wagerOffer = pool[0]; wagers.declineWager();
 ok('wager decline: stage runs clean', st.currentAffix.name === 'NONE' && st.wagerMult === 1 && st.wagerOffer === null);
 
