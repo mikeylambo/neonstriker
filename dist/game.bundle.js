@@ -549,20 +549,25 @@
       desperationCooldownMult: 0.8
     },
     STAGE_NAMES: ["Shattered Cathedral", "Glass Reliquary", "Ashen Cloister", "Midnight Causeway", "Abyss Rail", "Throne of Static", "Boss Chamber"],
-    // --- ARENA PALETTES (keyed by LEVEL KEY; boss chamber shares Throne's) ---
-    // Stored as RGB triples so stage transitions can MORPH one arena into the next
-    // instead of hard-cutting (see render/atmosphere.js).
+    // --- ARENA PALETTES (v25: keyed by ARC — 1-5 for the fights, 11-15 for that
+    // Arc's boss chamber, a shade darker). Each Arc's set pieces, floor and
+    // particles live in render/arc_looks.js; these are the colours they sit in.
+    // Stored as RGB(A) so transitions MORPH one arena into the next.
     PALETTES: {
-      1: { top: [2, 2, 5], mid: [5, 5, 10], bot: [10, 10, 20], accent: [0, 255, 255, 0.02], shard: [0, 255, 255, 0.05] },
-      2: { top: [0, 26, 26], mid: [0, 43, 51], bot: [0, 64, 77], accent: [0, 255, 255, 0.04], shard: [0, 255, 255, 0.09] },
-      3: { top: [26, 5, 5], mid: [43, 10, 10], bot: [77, 16, 16], accent: [255, 50, 50, 0.03], shard: [255, 50, 50, 0.06] },
-      4: { top: [20, 0, 38], mid: [32, 0, 59], bot: [61, 0, 77], accent: [255, 0, 255, 0.03], shard: [255, 0, 255, 0.08] },
-      5: { top: [0, 0, 0], mid: [2, 5, 2], bot: [5, 16, 5], accent: [0, 255, 0, 0.02], shard: [0, 255, 0, 0.04] },
-      6: { top: [26, 26, 26], mid: [51, 51, 51], bot: [77, 77, 77], accent: [255, 255, 255, 0.05], shard: [255, 255, 255, 0.15] }
+      1: { top: [2, 2, 5], mid: [5, 5, 12], bot: [10, 12, 24], accent: [0, 255, 255, 0.025], shard: [0, 255, 255, 0.06] },
+      2: { top: [0, 10, 9], mid: [0, 18, 16], bot: [0, 24, 22], accent: [52, 211, 153, 0.03], shard: [52, 211, 153, 0.07] },
+      3: { top: [16, 2, 2], mid: [32, 6, 6], bot: [56, 12, 10], accent: [248, 113, 113, 0.03], shard: [248, 113, 113, 0.07] },
+      4: { top: [12, 0, 24], mid: [16, 2, 30], bot: [22, 4, 38], accent: [192, 132, 252, 0.03], shard: [192, 132, 252, 0.08] },
+      5: { top: [4, 3, 0], mid: [10, 8, 2], bot: [20, 16, 4], accent: [250, 204, 21, 0.03], shard: [250, 204, 21, 0.08] },
+      11: { top: [1, 1, 3], mid: [3, 3, 8], bot: [6, 8, 16], accent: [0, 255, 255, 0.02], shard: [0, 255, 255, 0.05] },
+      12: { top: [0, 6, 5], mid: [0, 13, 12], bot: [0, 22, 20], accent: [52, 211, 153, 0.02], shard: [52, 211, 153, 0.06] },
+      13: { top: [10, 1, 1], mid: [20, 4, 4], bot: [36, 8, 6], accent: [248, 113, 113, 0.02], shard: [248, 113, 113, 0.06] },
+      14: { top: [7, 0, 14], mid: [14, 1, 26], bot: [24, 4, 38], accent: [192, 132, 252, 0.02], shard: [192, 132, 252, 0.07] },
+      15: { top: [2, 2, 0], mid: [6, 5, 1], bot: [12, 10, 2], accent: [250, 204, 21, 0.02], shard: [250, 204, 21, 0.07] }
     },
     paletteKeyForStage: (stage2) => {
-      const k = CONSTANTS.getLevelInArc(stage2);
-      return k === CONSTANTS.BOSS_LEVEL_KEY ? 6 : k;
+      const arc = Math.min(CONSTANTS.getArcIndex(stage2), 5);
+      return CONSTANTS.isBossStage(stage2) ? arc + 10 : arc;
     },
     // --- MENACE (target-priority: consequence of ignoring) ---
     // Some enemies get WORSE the longer they live, so target selection matters — you
@@ -2040,7 +2045,7 @@
   // src/systems/telemetry.js
   var KEY3 = "neon_strike_telemetry_v1";
   var MAX_RUNS = 25;
-  var TELEMETRY_VERSION = "24.0.0";
+  var TELEMETRY_VERSION = "25.0.0";
   var run = null;
   var stage = null;
   function safeGet2() {
@@ -7623,6 +7628,437 @@
     return fetchScores(`select=name,score,grade,stage&game=eq.${GAME}&order=score.desc&limit=${limit}`);
   }
 
+  // src/render/arc_looks.js
+  var ARC_ACCENT = { 1: "#22d3ee", 2: "#34d399", 3: "#f87171", 4: "#c084fc", 5: "#facc15" };
+  var HORIZON = 0.29;
+  var rgba = (c, a) => `rgba(${c[0]}, ${c[1]}, ${c[2]}, ${a.toFixed(3)})`;
+  var hexRgb = (h) => {
+    const n = parseInt(h.slice(1), 16);
+    return [n >> 16 & 255, n >> 8 & 255, n & 255];
+  };
+  function particles(arc) {
+    gameState.arcFx = gameState.arcFx || {};
+    if (gameState.arcFx[arc]) return gameState.arcFx[arc];
+    const W = gameState.width, H = gameState.height, list = [];
+    const n = { 1: 30, 2: 40, 3: 36, 4: 28, 5: 34 }[arc];
+    for (let i = 0; i < n; i++) list.push({ x: Math.random() * W, y: Math.random() * H, s: Math.random() * 3 + 1, p: Math.random() * Math.PI * 2, v: Math.random() * 0.6 + 0.3 });
+    return gameState.arcFx[arc] = list;
+  }
+  function updateArcLooks() {
+    const arc = arcOf(gameState.currentStage), W = gameState.width, H = gameState.height, scroll = (gameState.stageSpeedMult || 1) * 0.6;
+    for (const d of particles(arc)) {
+      d.p += 0.05;
+      if (arc === 1) {
+        d.x -= 0.6 + scroll;
+        d.y += Math.sin(d.p) * 0.2;
+      } else if (arc === 2) {
+        d.x -= scroll * 2;
+        if (Math.random() < 0.02) {
+          d.x = Math.random() * W;
+          d.y = Math.random() * H;
+        }
+      } else if (arc === 3) {
+        d.y -= d.v * 1.6;
+        d.x += Math.sin(d.p) * 0.6 - scroll * 0.5;
+      } else if (arc === 4) {
+        d.x -= scroll * 0.6;
+      } else {
+        d.y += d.v * 0.7;
+        d.x += Math.sin(d.p * 0.5) * 0.4 - scroll * 0.4;
+      }
+      if (d.x < -10) d.x = W + 10;
+      if (d.x > W + 10) d.x = -10;
+      if (d.y < -10) d.y = H + 10;
+      if (d.y > H + 10) d.y = -10;
+    }
+  }
+  function arcOf(stage2) {
+    return Math.min(CONSTANTS.getArcIndex(stage2), 5);
+  }
+  function drawArcScene(arc, a, pal, boss) {
+    if (a <= 0.01) return;
+    ctx.save();
+    ctx.globalAlpha = a;
+    const acc = hexRgb(ARC_ACCENT[arc]);
+    ({ 1: foundation, 2: distortion, 3: compression, 4: mirage, 5: dominion })[arc](acc, pal);
+    drawParticles(arc, acc);
+    if (boss) bossChamber(acc);
+    ctx.restore();
+  }
+  function drawParticles(arc, acc) {
+    for (const d of particles(arc)) {
+      if (arc === 1) {
+        ctx.fillStyle = rgba(acc, 0.18 + 0.1 * Math.sin(d.p));
+        ctx.fillRect(d.x, d.y, d.s, d.s);
+      } else if (arc === 2) {
+        if (Math.sin(d.p * 7) > 0.2) {
+          ctx.fillStyle = rgba(Math.sin(d.p * 3) > 0 ? acc : [255, 60, 120], 0.35);
+          ctx.fillRect(Math.round(d.x / 4) * 4, Math.round(d.y / 4) * 4, 4, 4);
+        }
+      } else if (arc === 3) {
+        ctx.fillStyle = `rgba(255, ${120 + Math.round(60 * Math.sin(d.p))}, 40, ${(0.35 + 0.3 * Math.sin(d.p * 2)).toFixed(3)})`;
+        ctx.fillRect(d.x, d.y, d.s * 0.8, d.s * 0.8);
+      } else if (arc === 4) {
+        const k = Math.max(0, Math.sin(d.p));
+        if (k > 0.05) {
+          ctx.strokeStyle = rgba([255, 255, 255], 0.5 * k);
+          ctx.lineWidth = 1;
+          const r = d.s * 2 * k;
+          ctx.beginPath();
+          ctx.moveTo(d.x - r, d.y);
+          ctx.lineTo(d.x + r, d.y);
+          ctx.moveTo(d.x, d.y - r);
+          ctx.lineTo(d.x, d.y + r);
+          ctx.stroke();
+        }
+      } else {
+        ctx.fillStyle = rgba(acc, 0.3 + 0.2 * Math.sin(d.p));
+        ctx.save();
+        ctx.translate(d.x, d.y);
+        ctx.rotate(d.p);
+        ctx.fillRect(-d.s, -d.s * 0.4, d.s * 2, d.s * 0.8);
+        ctx.restore();
+      }
+    }
+  }
+  function bossChamber(acc) {
+    const W = gameState.width, H = gameState.height;
+    ctx.fillStyle = "rgba(0,0,0,0.35)";
+    ctx.fillRect(0, 0, W, H);
+    const b = gameState.enemies && gameState.enemies.find((e) => e.isBoss);
+    const bx = b ? b.x + 25 : W * 0.72;
+    const g = ctx.createLinearGradient(bx, 0, bx, H);
+    g.addColorStop(0, rgba(acc, 0.18));
+    g.addColorStop(1, rgba(acc, 0));
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.moveTo(bx - 40, 0);
+    ctx.lineTo(bx + 40, 0);
+    ctx.lineTo(bx + 170, H);
+    ctx.lineTo(bx - 170, H);
+    ctx.closePath();
+    ctx.fill();
+    const v = ctx.createRadialGradient(W / 2, H / 2, H * 0.35, W / 2, H / 2, H * 0.95);
+    v.addColorStop(0, "rgba(0,0,0,0)");
+    v.addColorStop(1, "rgba(0,0,0,0.6)");
+    ctx.fillStyle = v;
+    ctx.fillRect(0, 0, W, H);
+  }
+  function perspectiveFloor(color, spacing, rows, scroll) {
+    const W = gameState.width, H = gameState.height, hy = H * HORIZON;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    const off = scroll % spacing;
+    for (let x = -W; x < W * 2; x += spacing) {
+      const bx = x - off;
+      ctx.moveTo(W / 2 + (bx - W / 2) * 0.25, hy);
+      ctx.lineTo(bx, H);
+    }
+    for (let i = 1; i <= rows; i++) {
+      const k = Math.pow(i / rows, 1.8);
+      const y = hy + (H - hy) * k;
+      ctx.moveTo(0, y);
+      ctx.lineTo(W, y);
+    }
+    ctx.stroke();
+  }
+  var scrollX = () => gameState.scrollX || 0;
+  function foundation(acc, pal) {
+    const W = gameState.width, H = gameState.height, shard = rgba(pal.shard, pal.shard[3]);
+    (gameState.lightShafts || []).forEach((L) => {
+      const g = ctx.createLinearGradient(L.x, 0, L.x + 200, H);
+      g.addColorStop(0, rgba(pal.accent, pal.accent[3] * 2));
+      g.addColorStop(1, "transparent");
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.moveTo(L.x, 0);
+      ctx.lineTo(L.x + 150, 0);
+      ctx.lineTo(L.x + 300, H);
+      ctx.lineTo(L.x + 150, H);
+      ctx.fill();
+    });
+    const rw = gameState.roseWindow;
+    if (rw) {
+      ctx.save();
+      ctx.translate(rw.x, rw.y);
+      ctx.rotate(rw.rotation);
+      ctx.strokeStyle = shard;
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(0, 0, 250, 0, Math.PI * 2);
+      ctx.stroke();
+      rw.petals.forEach((an) => {
+        ctx.save();
+        ctx.rotate(an);
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(60, 220);
+        ctx.lineTo(0, 280);
+        ctx.lineTo(-60, 220);
+        ctx.closePath();
+        ctx.fillStyle = "rgba(0,0,0,0.2)";
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+      });
+      ctx.beginPath();
+      ctx.arc(0, 0, 50, 0, Math.PI * 2);
+      ctx.fillStyle = shard;
+      ctx.fill();
+      ctx.restore();
+    }
+    (gameState.cathedralPillars || []).forEach((p) => {
+      ctx.fillStyle = "#030305";
+      ctx.fillRect(p.x, 0, p.w, H);
+      ctx.fillStyle = shard;
+      ctx.fillRect(p.x + 5, 0, 5, H);
+    });
+    (gameState.cathedralShards || []).forEach((sh) => {
+      ctx.save();
+      ctx.translate(sh.x, sh.y);
+      ctx.rotate(sh.angle);
+      ctx.fillStyle = shard;
+      ctx.beginPath();
+      sh.points.forEach((q, i) => i ? ctx.lineTo(q.x * sh.size, q.y * sh.size) : ctx.moveTo(q.x * sh.size, q.y * sh.size));
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    });
+    perspectiveFloor(rgba(acc, 0.07), 90, 7, scrollX());
+  }
+  function distortion(acc, pal) {
+    const W = gameState.width, H = gameState.height, t = Date.now() * 1e-3;
+    const burst = Math.sin(t * 1.7) > 0.93 || Math.sin(t * 0.63 + 1) > 0.97;
+    const rw = gameState.roseWindow;
+    if (rw) for (const [dx, col] of [[-5, [255, 40, 120]], [5, acc], [0, [255, 255, 255]]]) {
+      ctx.save();
+      ctx.translate(rw.x + dx * (burst ? 3 : 1), rw.y);
+      ctx.rotate(rw.rotation);
+      ctx.strokeStyle = rgba(col, dx === 0 ? 0.05 : 0.07);
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(0, 0, 240, 0, Math.PI * 2);
+      ctx.stroke();
+      for (let i = 0; i < 8; i++) {
+        ctx.rotate(Math.PI / 4);
+        ctx.beginPath();
+        ctx.moveTo(0, 50);
+        ctx.lineTo(55, 210);
+        ctx.lineTo(-55, 210);
+        ctx.closePath();
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+    (gameState.cathedralPillars || []).forEach((p, pi) => {
+      for (let y = 0; y < H; y += 24) {
+        const shear = burst && y < H * HORIZON ? Math.sin(y * 0.11 + t * 40 + pi) * 8 : 0;
+        ctx.fillStyle = "#010504";
+        ctx.fillRect(p.x + shear, y, p.w, 24);
+        ctx.fillStyle = rgba(acc, 0.1);
+        ctx.fillRect(p.x + shear + 5, y, 4, 24);
+      }
+    });
+    if (burst) {
+      const by = Math.floor(t * 30) * 53 % (H * HORIZON);
+      ctx.fillStyle = rgba(acc, 0.08);
+      ctx.fillRect(0, by, W, 10 + Math.floor(t * 30) % 3 * 8);
+    }
+    ctx.fillStyle = "rgba(0,0,0,0.18)";
+    for (let y = 0; y < H * HORIZON + 40; y += 4) ctx.fillRect(0, y, W, 1);
+    const hy = H * HORIZON, run2 = Date.now() * 0.05 % 24;
+    ctx.strokeStyle = rgba(acc, 0.07);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = 0; i < 16; i++) {
+      const k = Math.pow((i * 24 + run2) % 384 / 384, 1.7);
+      const y = hy + (H - hy) * k;
+      ctx.moveTo(0, y);
+      ctx.lineTo(W, y);
+    }
+    ctx.stroke();
+    ctx.setLineDash([6, 22]);
+    ctx.lineDashOffset = -scrollX() * 2;
+    ctx.strokeStyle = rgba(acc, 0.12);
+    ctx.beginPath();
+    for (let x = 0; x < W; x += 140) {
+      ctx.moveTo(W / 2 + (x - W / 2) * 0.25, hy);
+      ctx.lineTo(x, H);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  function compression(acc, pal) {
+    const W = gameState.width, H = gameState.height, t = Date.now() * 1e-3, hy = H * HORIZON;
+    ctx.strokeStyle = rgba(acc, 0.11);
+    ctx.lineWidth = 2;
+    const ribOff = scrollX() * 0.5 % 160;
+    for (let i = 0; i < 9; i++) {
+      const k = ((i * 160 - ribOff) % 1440 + 1440) % 1440 / 1440, sc = 0.35 + k * 1.4;
+      ctx.beginPath();
+      ctx.ellipse(W / 2, hy + 20, 260 * sc, 220 * sc, 0, Math.PI, 0);
+      ctx.stroke();
+    }
+    const lean = 18 + Math.sin(t * 0.8) * 8;
+    for (const side of [-1, 1]) {
+      const x0 = side < 0 ? 0 : W, x1 = side < 0 ? 170 + lean : W - 170 - lean;
+      const g2 = ctx.createLinearGradient(x0, 0, x1, 0);
+      g2.addColorStop(0, "#070101");
+      g2.addColorStop(0.7, "rgba(7,1,1,0.6)");
+      g2.addColorStop(1, "rgba(7,1,1,0)");
+      ctx.fillStyle = g2;
+      ctx.beginPath();
+      ctx.moveTo(x0, 0);
+      ctx.lineTo(x1 + side * -40, 0);
+      ctx.lineTo(x1, H);
+      ctx.lineTo(x0, H);
+      ctx.closePath();
+      ctx.fill();
+    }
+    const press = 10 + Math.max(0, Math.sin(t * 1.3)) * 22;
+    ctx.fillStyle = "#0c0202";
+    ctx.fillRect(0, 0, W, 34 + press);
+    ctx.fillStyle = rgba(acc, 0.35);
+    ctx.fillRect(0, 34 + press, W, 2);
+    for (let x = 60; x < W; x += 180) {
+      ctx.fillStyle = "#1a0606";
+      ctx.fillRect(x, 0, 16, 34 + press);
+      ctx.fillStyle = rgba(acc, 0.25);
+      ctx.fillRect(x + 6, 0, 3, 34 + press);
+    }
+    const off = scrollX() % 40;
+    ctx.strokeStyle = "rgba(255,90,40,0.06)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let x = -H; x < W + H; x += 40) {
+      ctx.moveTo(x - off, hy);
+      ctx.lineTo(x - off - (H - hy), H);
+    }
+    ctx.stroke();
+    const heat = 0.05 + 0.03 * Math.sin(t * 3);
+    const g = ctx.createLinearGradient(0, H * 0.82, 0, H);
+    g.addColorStop(0, "rgba(255,60,20,0)");
+    g.addColorStop(1, `rgba(255,60,20,${heat.toFixed(3)})`);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, H * 0.82, W, H * 0.18);
+  }
+  function mirage(acc, pal) {
+    const W = gameState.width, H = gameState.height, t = Date.now() * 1e-3, hy = H * HORIZON;
+    (gameState.cathedralPillars || []).forEach((p, pi) => {
+      const px = p.x * 0.6 + 80;
+      for (let y = 0; y < hy; y += 12) {
+        const wob = Math.sin(y * 0.08 + t * 3 + pi) * 2.2;
+        ctx.fillStyle = "#0b0214";
+        ctx.fillRect(px + wob, y, 34, 12);
+        ctx.fillStyle = rgba(acc, 0.1);
+        ctx.fillRect(px + wob + 4, y, 3, 12);
+        const ry = hy + (hy - y) * 0.9, fade = 0.45 * (1 - y / hy);
+        ctx.fillStyle = rgba([40, 8, 60], fade);
+        ctx.fillRect(px + wob * 2.5, ry, 34, 11);
+      }
+    });
+    ctx.fillStyle = rgba(acc, 0.25);
+    ctx.fillRect(0, hy, W, 1.5);
+    for (let i = 0; i < 6; i++) {
+      const x = ((i * 190 - scrollX() * 0.15) % (W + 200) + W + 200) % (W + 200) - 100;
+      const y = 50 + i * 37 % 110 + Math.sin(t + i) * 8, s = 22 + i % 3 * 10, r = t * 0.3 + i;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(r);
+      ctx.beginPath();
+      ctx.moveTo(0, -s);
+      ctx.lineTo(s * 0.87, s * 0.5);
+      ctx.lineTo(-s * 0.87, s * 0.5);
+      ctx.closePath();
+      ctx.fillStyle = rgba(acc, 0.05);
+      ctx.fill();
+      ctx.strokeStyle = rgba([255, 255, 255], 0.12);
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(255,120,200,0.12)";
+      ctx.beginPath();
+      ctx.moveTo(-s * 0.87 + 3, s * 0.5);
+      ctx.lineTo(s * 0.87 - 3, s * 0.5);
+      ctx.stroke();
+      ctx.restore();
+    }
+    const sx = t * 120 % (W + 600) - 300;
+    const g = ctx.createLinearGradient(sx - 150, 0, sx + 150, 0);
+    g.addColorStop(0, "rgba(255,255,255,0)");
+    g.addColorStop(0.5, "rgba(255,255,255,0.035)");
+    g.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, hy, W, H - hy);
+  }
+  function dominion(acc, pal) {
+    const W = gameState.width, H = gameState.height, t = Date.now() * 1e-3, hy = H * HORIZON;
+    (gameState.cathedralPillars || []).forEach((p, i) => {
+      if (i % 2) return;
+      const w = 70;
+      ctx.fillStyle = "#050402";
+      ctx.fillRect(p.x, 0, w, H);
+      const g = ctx.createLinearGradient(p.x, 0, p.x, hy + 40);
+      g.addColorStop(0, rgba(acc, 0.5));
+      g.addColorStop(1, rgba(acc, 0));
+      ctx.fillStyle = g;
+      ctx.fillRect(p.x + w - 3, 0, 3, hy + 40);
+      ctx.fillStyle = rgba(acc, 0.12);
+      ctx.fillRect(p.x, 70, w, 2);
+      ctx.fillRect(p.x, 76, w, 1);
+    });
+    const cx = W * 0.5, cy = hy - 30;
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(t * 0.05);
+    for (let i = 0; i < 24; i++) {
+      ctx.rotate(Math.PI / 12);
+      const g = ctx.createLinearGradient(0, 0, 0, -340);
+      g.addColorStop(0, rgba(acc, 0.1));
+      g.addColorStop(1, rgba(acc, 0));
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.moveTo(-10, -100);
+      ctx.lineTo(10, -100);
+      ctx.lineTo(i % 2 ? 26 : 44, -340);
+      ctx.lineTo(i % 2 ? -26 : -44, -340);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+    ctx.beginPath();
+    ctx.arc(cx, cy, 92, 0, Math.PI * 2);
+    ctx.fillStyle = "#020200";
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = rgba(acc, 0.5 + 0.1 * Math.sin(t * 2));
+    ctx.stroke();
+    ctx.fillStyle = rgba(acc, 0.35);
+    for (let i = -2; i <= 2; i++) {
+      const a = -Math.PI / 2 + i * 0.34;
+      const x = cx + Math.cos(a) * 92, y = cy + Math.sin(a) * 92;
+      ctx.beginPath();
+      ctx.moveTo(x - 7, y);
+      ctx.lineTo(x, y - 20 - (i === 0 ? 10 : 0));
+      ctx.lineTo(x + 7, y);
+      ctx.fill();
+    }
+    const off = scrollX() % 170;
+    ctx.strokeStyle = rgba(acc, 0.05);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let x = -W; x < W * 2; x += 170) {
+      const bx = x - off;
+      ctx.moveTo(W / 2 + (bx - W / 2) * 0.25, hy);
+      ctx.lineTo(bx + 260, H);
+      ctx.moveTo(W / 2 + (bx - W / 2) * 0.25, hy);
+      ctx.lineTo(bx - 260, H);
+    }
+    ctx.stroke();
+    ctx.fillStyle = rgba(acc, 0.3);
+    ctx.fillRect(0, hy, W, 1);
+  }
+
   // src/render/atmosphere.js
   function initAtmosphere() {
     gameState.ambientDust = [];
@@ -7672,6 +8108,7 @@
       s.angle += s.rotSpeed;
       if (s.x < -200) s.x = gameState.width + 200;
     });
+    updateArcLooks();
     gameState.roseWindow.rotation += 5e-4;
     gameState.roseWindow.floatTime += 0.01;
     gameState.roseWindow.y = gameState.roseWindow.baseY + Math.sin(gameState.roseWindow.floatTime) * 15;
@@ -7680,7 +8117,6 @@
   }
   var lerp = (a, b, t) => a + (b - a) * t;
   var mixRGB = (a, b, t) => `rgb(${Math.round(lerp(a[0], b[0], t))}, ${Math.round(lerp(a[1], b[1], t))}, ${Math.round(lerp(a[2], b[2], t))})`;
-  var mixRGBA = (a, b, t) => `rgba(${Math.round(lerp(a[0], b[0], t))}, ${Math.round(lerp(a[1], b[1], t))}, ${Math.round(lerp(a[2], b[2], t))}, ${lerp(a[3], b[3], t).toFixed(3)})`;
   function currentPalette() {
     const P = CONSTANTS.PALETTES;
     const from = P[gameState.paletteFrom] || P[1];
@@ -7703,81 +8139,10 @@
     }
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, gameState.width, gameState.height);
-    const accentColor = mixRGBA(from.accent, to.accent, t);
-    const shardColor = mixRGBA(from.shard, to.shard, t);
-    gameState.lightShafts.forEach((L) => {
-      let gradLight = ctx.createLinearGradient(L.x, 0, L.x + 200, gameState.height);
-      gradLight.addColorStop(0, accentColor);
-      gradLight.addColorStop(1, "transparent");
-      ctx.fillStyle = gradLight;
-      ctx.beginPath();
-      ctx.moveTo(L.x, 0);
-      ctx.lineTo(L.x + 150, 0);
-      ctx.lineTo(L.x + 300, gameState.height);
-      ctx.lineTo(L.x + 150, gameState.height);
-      ctx.fill();
-    });
-    ctx.save();
-    ctx.translate(gameState.roseWindow.x, gameState.roseWindow.y);
-    ctx.rotate(gameState.roseWindow.rotation);
-    ctx.strokeStyle = gameState.purifyTimer > 0 ? "rgba(0, 255, 255, 0.1)" : shardColor;
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.arc(0, 0, 250, 0, Math.PI * 2);
-    ctx.stroke();
-    gameState.roseWindow.petals.forEach((angle) => {
-      ctx.save();
-      ctx.rotate(angle);
-      ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.lineTo(60, 220);
-      ctx.lineTo(0, 280);
-      ctx.lineTo(-60, 220);
-      ctx.closePath();
-      ctx.fillStyle = gameState.purifyTimer > 0 ? "rgba(0, 255, 255, 0.03)" : "rgba(0, 0, 0, 0.2)";
-      ctx.fill();
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(0, 40);
-      ctx.lineTo(30, 140);
-      ctx.lineTo(-30, 140);
-      ctx.closePath();
-      ctx.strokeStyle = gameState.purifyTimer > 0 ? "rgba(0, 255, 255, 0.15)" : shardColor;
-      ctx.stroke();
-      ctx.restore();
-    });
-    ctx.beginPath();
-    ctx.arc(0, 0, 50, 0, Math.PI * 2);
-    ctx.fillStyle = gameState.purifyTimer > 0 ? "rgba(0, 255, 255, 0.1)" : shardColor;
-    ctx.fill();
-    ctx.stroke();
-    ctx.restore();
-    ctx.fillStyle = "#030305";
-    gameState.cathedralPillars.forEach((p) => {
-      ctx.fillRect(p.x, 0, p.w, gameState.height);
-      ctx.fillStyle = shardColor;
-      ctx.fillRect(p.x + 5, 0, 5, gameState.height);
-      ctx.fillStyle = "#030305";
-    });
-    ctx.save();
-    gameState.cathedralShards.forEach((shard) => {
-      ctx.translate(shard.x, shard.y);
-      ctx.rotate(shard.angle);
-      ctx.fillStyle = shardColor;
-      ctx.strokeStyle = shardColor;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      shard.points.forEach((p, i) => {
-        if (i === 0) ctx.moveTo(p.x * shard.size, p.y * shard.size);
-        else ctx.lineTo(p.x * shard.size, p.y * shard.size);
-      });
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-      ctx.rotate(-shard.angle);
-      ctx.translate(-shard.x, -shard.y);
-    });
-    ctx.restore();
+    const fromKey = gameState.paletteFrom || 1, toKey = gameState.paletteTo || CONSTANTS.paletteKeyForStage(gameState.currentStage);
+    const toArc = toKey % 10, fromArc = fromKey % 10;
+    if (fromArc !== toArc && t < 1) drawArcScene(fromArc, 1 - t, from, fromKey > 10);
+    drawArcScene(toArc, fromArc !== toArc ? t : 1, to, toKey > 10);
   }
   function drawLightSweep() {
     if (!(gameState.lightSweep >= 0 && gameState.lightSweep <= 1)) return;
@@ -7844,15 +8209,17 @@
       ctx.stroke();
     });
     ctx.globalAlpha = 1;
-    ctx.strokeStyle = gameState.isInstinct ? "rgba(255, 0, 255, 0.2)" : "rgba(0, 255, 255, 0.06)";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (let i = 0; i < gameState.width + 100; i += 80) {
-      let xPos = i - gameState.scrollX % 80;
-      ctx.moveTo(xPos, gameState.height * 0.4);
-      ctx.lineTo(xPos, gameState.height);
+    if (gameState.isInstinct) {
+      ctx.strokeStyle = "rgba(255, 0, 255, 0.2)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let i = 0; i < gameState.width + 100; i += 80) {
+        const xPos = i - gameState.scrollX % 80;
+        ctx.moveTo(xPos, gameState.height * 0.4);
+        ctx.lineTo(xPos, gameState.height);
+      }
+      ctx.stroke();
     }
-    ctx.stroke();
     CONSTANTS.LANE_Y.forEach((yPct, index) => {
       const state = gameState.laneFlash[index];
       if (state === 2) {

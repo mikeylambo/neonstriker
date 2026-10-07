@@ -1,6 +1,7 @@
 import { gameState as st } from '../state.js';
 import { ctx } from '../engine_core.js';
 import { CONSTANTS } from '../constants.js';
+import { drawArcScene, updateArcLooks } from './arc_looks.js';
 
 export function initAtmosphere() {
     st.ambientDust = []; 
@@ -40,6 +41,7 @@ export function updateAtmosphere() {
     st.lightShafts.forEach(L => { L.x -= L.speed + (scrollSpeed * 0.005); if (L.x < -500) L.x = st.width + 200; });
     
     st.cathedralShards.forEach(s => { s.x -= s.speed + (scrollSpeed * 0.05); s.angle += s.rotSpeed; if (s.x < -200) s.x = st.width + 200; });
+    updateArcLooks();
     st.roseWindow.rotation += 0.0005; st.roseWindow.floatTime += 0.01; st.roseWindow.y = st.roseWindow.baseY + Math.sin(st.roseWindow.floatTime) * 15; st.roseWindow.x -= (scrollSpeed * 0.002); if (st.roseWindow.x < -400) st.roseWindow.x = st.width + 400;
 }
 
@@ -75,59 +77,12 @@ export function drawAtmosphere() {
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, st.width, st.height); 
     
-    const accentColor = mixRGBA(from.accent, to.accent, t);
-    const shardColor = mixRGBA(from.shard, to.shard, t);
-
-    st.lightShafts.forEach(L => { 
-        let gradLight = ctx.createLinearGradient(L.x, 0, L.x + 200, st.height);
-        gradLight.addColorStop(0, accentColor);
-        gradLight.addColorStop(1, 'transparent');
-        ctx.fillStyle = gradLight;
-        ctx.beginPath(); ctx.moveTo(L.x, 0); ctx.lineTo(L.x + 150, 0); ctx.lineTo(L.x + 300, st.height); ctx.lineTo(L.x + 150, st.height); ctx.fill(); 
-    });
-    
-    ctx.save(); 
-    ctx.translate(st.roseWindow.x, st.roseWindow.y); 
-    ctx.rotate(st.roseWindow.rotation); 
-    ctx.strokeStyle = st.purifyTimer > 0 ? 'rgba(0, 255, 255, 0.1)' : shardColor; 
-    ctx.lineWidth = 4; 
-    ctx.beginPath(); ctx.arc(0, 0, 250, 0, Math.PI * 2); ctx.stroke();
-    
-    st.roseWindow.petals.forEach(angle => { 
-        ctx.save(); ctx.rotate(angle); ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(60, 220); ctx.lineTo(0, 280); ctx.lineTo(-60, 220); ctx.closePath(); 
-        ctx.fillStyle = st.purifyTimer > 0 ? 'rgba(0, 255, 255, 0.03)' : 'rgba(0, 0, 0, 0.2)'; ctx.fill(); ctx.stroke(); 
-        ctx.beginPath(); ctx.moveTo(0, 40); ctx.lineTo(30, 140); ctx.lineTo(-30, 140); ctx.closePath();
-        ctx.strokeStyle = st.purifyTimer > 0 ? 'rgba(0, 255, 255, 0.15)' : shardColor; ctx.stroke();
-        ctx.restore(); 
-    });
-    
-    ctx.beginPath(); ctx.arc(0, 0, 50, 0, Math.PI * 2); ctx.fillStyle = st.purifyTimer > 0 ? 'rgba(0, 255, 255, 0.1)' : shardColor; ctx.fill(); ctx.stroke(); 
-    ctx.restore();
-    
-    ctx.fillStyle = '#030305'; 
-    st.cathedralPillars.forEach(p => { 
-        ctx.fillRect(p.x, 0, p.w, st.height); 
-        ctx.fillStyle = shardColor; ctx.fillRect(p.x + 5, 0, 5, st.height); ctx.fillStyle = '#030305';
-    });
-
-    ctx.save();
-    st.cathedralShards.forEach(shard => {
-        ctx.translate(shard.x, shard.y);
-        ctx.rotate(shard.angle);
-        ctx.fillStyle = shardColor;
-        ctx.strokeStyle = shardColor;
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        shard.points.forEach((p, i) => {
-            if(i === 0) ctx.moveTo(p.x * shard.size, p.y * shard.size);
-            else ctx.lineTo(p.x * shard.size, p.y * shard.size);
-        });
-        ctx.closePath();
-        ctx.fill(); ctx.stroke();
-        ctx.rotate(-shard.angle);
-        ctx.translate(-shard.x, -shard.y);
-    });
-    ctx.restore();
+    // v25 ARC IDENTITY: each Arc draws its own scene; across an Arc change the old
+    // scene fades out under the new one during the light sweep.
+    const fromKey = st.paletteFrom || 1, toKey = st.paletteTo || CONSTANTS.paletteKeyForStage(st.currentStage);
+    const toArc = toKey % 10, fromArc = fromKey % 10;
+    if (fromArc !== toArc && t < 1) drawArcScene(fromArc, 1 - t, from, fromKey > 10);
+    drawArcScene(toArc, fromArc !== toArc ? t : 1, to, toKey > 10);
 }
 
 // v16 NEON LIGHT SWEEP: a bright vertical band that crosses the arena during a

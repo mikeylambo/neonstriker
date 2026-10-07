@@ -13,7 +13,7 @@ import { CONSTANTS } from '../constants.js';
 
 const KEY = 'neon_strike_telemetry_v1';
 const MAX_RUNS = 25;
-export const TELEMETRY_VERSION = '24.0.0'; // v23: was stuck at 19.0.0 — keep in step with package.json (tests/v23 checks)
+export const TELEMETRY_VERSION = '25.0.0'; // v23: was stuck at 19.0.0 — keep in step with package.json (tests/v23 checks)
 
 let run = null;     // the live run
 let stage = null;   // the live stage record

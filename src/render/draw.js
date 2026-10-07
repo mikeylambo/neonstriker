@@ -53,15 +53,13 @@ export function draw() {
     });
     ctx.globalAlpha = 1.0;
 
-    ctx.strokeStyle = st.isInstinct ? 'rgba(255, 0, 255, 0.2)' : 'rgba(0, 255, 255, 0.06)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    for(let i=0; i < st.width + 100; i += 80) {
-        let xPos = (i - (st.scrollX % 80));
-        ctx.moveTo(xPos, st.height * 0.4);
-        ctx.lineTo(xPos, st.height);
+    // v25: the floor belongs to the Arc now (render/arc_looks.js); the scrolling
+    // grid only comes back as Instinct's magenta overlay.
+    if (st.isInstinct) {
+        ctx.strokeStyle = 'rgba(255, 0, 255, 0.2)'; ctx.lineWidth = 1; ctx.beginPath();
+        for (let i = 0; i < st.width + 100; i += 80) { const xPos = i - (st.scrollX % 80); ctx.moveTo(xPos, st.height * 0.4); ctx.lineTo(xPos, st.height); }
+        ctx.stroke();
     }
-    ctx.stroke();
 
     CONSTANTS.LANE_Y.forEach((yPct, index) => {
         const state = st.laneFlash[index];

@@ -522,20 +522,25 @@ export const CONSTANTS = {
     },
     STAGE_NAMES: ["Shattered Cathedral", "Glass Reliquary", "Ashen Cloister", "Midnight Causeway", "Abyss Rail", "Throne of Static", "Boss Chamber"],
 
-    // --- ARENA PALETTES (keyed by LEVEL KEY; boss chamber shares Throne's) ---
-    // Stored as RGB triples so stage transitions can MORPH one arena into the next
-    // instead of hard-cutting (see render/atmosphere.js).
+    // --- ARENA PALETTES (v25: keyed by ARC — 1-5 for the fights, 11-15 for that
+    // Arc's boss chamber, a shade darker). Each Arc's set pieces, floor and
+    // particles live in render/arc_looks.js; these are the colours they sit in.
+    // Stored as RGB(A) so transitions MORPH one arena into the next.
     PALETTES: {
-        1: { top: [2, 2, 5],    mid: [5, 5, 10],   bot: [10, 10, 20],  accent: [0, 255, 255, 0.02], shard: [0, 255, 255, 0.05] },
-        2: { top: [0, 26, 26],  mid: [0, 43, 51],  bot: [0, 64, 77],   accent: [0, 255, 255, 0.04], shard: [0, 255, 255, 0.09] },
-        3: { top: [26, 5, 5],   mid: [43, 10, 10], bot: [77, 16, 16],  accent: [255, 50, 50, 0.03], shard: [255, 50, 50, 0.06] },
-        4: { top: [20, 0, 38],  mid: [32, 0, 59],  bot: [61, 0, 77],   accent: [255, 0, 255, 0.03], shard: [255, 0, 255, 0.08] },
-        5: { top: [0, 0, 0],    mid: [2, 5, 2],    bot: [5, 16, 5],    accent: [0, 255, 0, 0.02],   shard: [0, 255, 0, 0.04] },
-        6: { top: [26, 26, 26], mid: [51, 51, 51], bot: [77, 77, 77],  accent: [255, 255, 255, 0.05], shard: [255, 255, 255, 0.15] }
+        1: { top: [2, 2, 5],   mid: [5, 5, 12],   bot: [10, 12, 24], accent: [0, 255, 255, 0.025],   shard: [0, 255, 255, 0.06] },
+        2: { top: [0, 10, 9],  mid: [0, 18, 16],  bot: [0, 24, 22],  accent: [52, 211, 153, 0.03],  shard: [52, 211, 153, 0.07] },
+        3: { top: [16, 2, 2],  mid: [32, 6, 6],   bot: [56, 12, 10], accent: [248, 113, 113, 0.03], shard: [248, 113, 113, 0.07] },
+        4: { top: [12, 0, 24], mid: [16, 2, 30],  bot: [22, 4, 38],  accent: [192, 132, 252, 0.03], shard: [192, 132, 252, 0.08] },
+        5: { top: [4, 3, 0],   mid: [10, 8, 2],   bot: [20, 16, 4],  accent: [250, 204, 21, 0.03],  shard: [250, 204, 21, 0.08] },
+        11: { top: [1, 1, 3],  mid: [3, 3, 8],    bot: [6, 8, 16],   accent: [0, 255, 255, 0.02],   shard: [0, 255, 255, 0.05] },
+        12: { top: [0, 6, 5],  mid: [0, 13, 12],  bot: [0, 22, 20],  accent: [52, 211, 153, 0.02],  shard: [52, 211, 153, 0.06] },
+        13: { top: [10, 1, 1], mid: [20, 4, 4],   bot: [36, 8, 6],   accent: [248, 113, 113, 0.02], shard: [248, 113, 113, 0.06] },
+        14: { top: [7, 0, 14], mid: [14, 1, 26],  bot: [24, 4, 38],  accent: [192, 132, 252, 0.02], shard: [192, 132, 252, 0.07] },
+        15: { top: [2, 2, 0],  mid: [6, 5, 1],    bot: [12, 10, 2],  accent: [250, 204, 21, 0.02],  shard: [250, 204, 21, 0.07] }
     },
     paletteKeyForStage: (stage) => {
-        const k = CONSTANTS.getLevelInArc(stage);
-        return k === CONSTANTS.BOSS_LEVEL_KEY ? 6 : k;
+        const arc = Math.min(CONSTANTS.getArcIndex(stage), 5);
+        return CONSTANTS.isBossStage(stage) ? arc + 10 : arc;
     },
 
     // --- MENACE (target-priority: consequence of ignoring) ---
