@@ -33,6 +33,18 @@ export function checkHit(type) {
     const jX = () => (Math.random() * 50 - 25);
     const jY = () => (Math.random() * 30 - 15);
 
+    // v24 PHANTOM CLONES: a clone in your lane soaks the swing and shatters.
+    if (st.phantomClones && st.phantomClones.length) {
+        const ph = st.enemies.find(e => e.controller === 'phantom_boxer');
+        const ci = st.phantomClones.findIndex(c => c.lane === st.player.lane);
+        if (ph && ci >= 0 && ph.lane !== st.player.lane && ph.x > st.player.x - 20 && ph.x < st.player.x + reach) {
+            st.phantomClones.splice(ci, 1);
+            createShatter(ph.x, st.player.y - 60, '#aa00ff'); playSound('shatter');
+            spawnFloatingText(ph.x, st.player.y - 120, 'FAKE!', '#aa00ff');
+            return false;
+        }
+    }
+
     for (let i = 0; i < st.enemies.length; i++) {
         let en = st.enemies[i];
 
@@ -57,7 +69,7 @@ export function checkHit(type) {
             let dmg = 0;
             if (type === 'jab1' || type === 'jab2') dmg = 15;
             else if (type === 'jab3') dmg = 25;
-            else if (type === 'hook') dmg = 35;
+            else if (type === 'hook') dmg = 28; // v24: was 35 (playtest + data: the Hook carried the early game)
             else if (type === 'cross') dmg = 50;
             else if (type === 'guard_jab') dmg = 10;
             else if (type === 'check_hook') dmg = 25;
@@ -101,6 +113,7 @@ export function checkHit(type) {
             // and its anti-mash defenses (armor recoil, Phantom Shift) stand down.
             // Hitting it while it's NOT open is what those defenses exist to punish.
             const bossOpen = en.isBoss && isBossOpen(en);
+            let liveWireArmor = false;
             if (bossOpen) {
                 dmg = Math.round(dmg * CONSTANTS.BOSS_OFFENSE.punishDamageMult);
                 addScore(CONSTANTS.SCORE.punishBonus, en.x + jX(), en.y - 170 + jY(), { silent: true });
@@ -178,6 +191,13 @@ export function checkHit(type) {
                     }
                 }
 
+                // v24 LIVE WIRE (playtest: "spamming hook gets the job done"): while
+                // he isn't OPEN he rides through Hooks — half damage, no stagger.
+                if (en.controller === 'live_wire' && !bossOpen && !trueReadActive && (type === 'hook' || type === 'check_hook')) {
+                    dmg = Math.round(dmg * 0.5); liveWireArmor = true;
+                    if (!en.armorShown || st.frameCount - en.armorShown > 40) { en.armorShown = st.frameCount || 1; spawnFloatingText(en.x + jX(), en.y - 110 + jY(), 'ARMORED', '#fff36b'); }
+                }
+
                 // v16: stagger thresholds (66% / 33%) and the KO blow clamp the hit
                 // here and queue an authored Finisher (systems/finisher.js). Gated
                 // BEFORE the phase checks below so they see the damage that lands.
@@ -216,7 +236,7 @@ export function checkHit(type) {
             if (trueReadActive) powerFactor *= 1.5;
 
             let baseKB = 0;
-            if (loaded) { baseKB = CONSTANTS.VERBS.loadedCross.knockback; }
+            if (loaded && !st.isInstinct) { baseKB = CONSTANTS.VERBS.loadedCross.knockback; } // v24: an Instinct Cross keeps the Loaded damage/stagger but not the launch (playtest: it blew the combo apart)
             else if (buffActive || trueReadActive) { baseKB = 45; }
             else {
                 if (type === 'jab1' || type === 'jab2') { baseKB = 1; }
@@ -249,7 +269,7 @@ export function checkHit(type) {
             }
 
             if (type === 'cross' || type === 'hook' || type === 'check_hook' || buffActive || trueReadActive || isJab) {
-                let canStun = true; let stunAmount = 0;
+                let canStun = !liveWireArmor; let stunAmount = 0;
                 // IDENTITY: Bruisers used to differ from every other grunt only in HP/speed
                 // numbers — same read as anything else, just slower. Now jabs still chip
                 // their HP (pressure still builds) but can't stagger them; only a Cross,

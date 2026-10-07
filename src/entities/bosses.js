@@ -1,15 +1,18 @@
 import { gameState as st } from '../state.js';
 import { CONSTANTS } from '../constants.js';
 import { playSound } from '../vfx_audio/audio.js';
-import { createImpact, spawnFloatingText, doFlash, triggerShockwave, createShatter } from '../vfx_audio/effects.js';
+import { createImpact, spawnFloatingText, doFlash, triggerShockwave, createShatter, showToast } from '../vfx_audio/effects.js';
 import { takeDamage, registerPerfectGhostStep } from './player.js';
 import { random } from '../systems/rng.js';
 import { setMusicIntensity } from '../vfx_audio/audio.js';
 import { telegraphLead, beginPunishWindow, clampCycle } from '../systems/boss_rules.js';
 import { checkBossThresholds, startFinisher } from '../systems/finisher.js';
-import { invertHex, ECHO_DELAY } from '../systems/negative.js';
+import { invertHex, ECHO_DELAY, primeNegativeRead } from '../systems/negative.js';
 import { getBinds } from '../systems/settings.js';
 
+// v24 BOSS TTK: playtest — Enforcer and Phantom "felt easy", Negative ran ~2.6 min
+// against everyone else's 45-80s. Enforcer 1.0 -> 1.15, Phantom 0.75 -> 0.9,
+// Negative 1.2 -> 1.0 (its phases + read telegraph carry the length now).
 const BOSS_ROSTER = [
     {
         name: 'NEON ENFORCER',
@@ -19,7 +22,7 @@ const BOSS_ROSTER = [
         weight: 2.0,
         speed: 1.2,
         cooldown: 60,
-        baseHpMult: 1.0,
+        baseHpMult: 1.15,
         startMove: 'jab'
     },
     {
@@ -30,7 +33,7 @@ const BOSS_ROSTER = [
         weight: 1.5,
         speed: 2.5,
         cooldown: 40,
-        baseHpMult: 0.75,
+        baseHpMult: 0.9,
         startMove: 'feint'
     },
     {
@@ -64,7 +67,7 @@ const BOSS_ROSTER = [
         weight: 1.3,
         speed: 2.2,
         cooldown: 44,
-        baseHpMult: 1.2,
+        baseHpMult: 1.0,
         startMove: 'jab'
     }
 ];
@@ -210,9 +213,64 @@ function meleeTelegraph(en, inRange, onTell) {
     }
 }
 
+// v24 ENFORCER SLAM (playtest: Enforcer "felt easy"). Every few attacks — or
+// whenever you hang back out of reach — he plants and slams the floor: a
+// shockwave rolls down YOUR lane toward you (a tell you can watch travel). In
+// phase 2 a second wave follows in a neighbouring lane a beat later. After the
+// slam he's planted and OPEN.
+const SLAM = { every: 3, farFrames: 75, speed: 8, dmg: 20, phase2Gap: 22 };
+function enforcerSlam(en) {
+    const p = st.player;
+    if (!st.slamWaves) st.slamWaves = [];
+    st.slamWaves.push({ lane: p.lane, x: en.x - 20, delay: 0, hit: false, color: '#ffaa00' });
+    if (en.phase === 2) {
+        const adj = p.lane === 1 ? (random() < 0.5 ? 0 : 2) : 1;
+        st.slamWaves.push({ lane: adj, x: en.x - 20, delay: SLAM.phase2Gap, hit: false, color: '#ffaa00' });
+    }
+    st.shake = Math.max(st.shake, 18); createImpact(en.x, en.y - 10, '#ffaa00'); triggerShockwave(en.x, en.y - 10, '#ffaa00');
+    playSound('hit'); spawnFloatingText(en.x, en.y - 160, 'SLAM!', '#ffaa00');
+}
+
+export function updateSlamWaves() {
+    if (!st.slamWaves || !st.slamWaves.length) return;
+    const p = st.player;
+    for (const w of st.slamWaves) {
+        if (w.delay > 0) { w.delay--; continue; }
+        w.x -= SLAM.speed;
+        const d = w.x - p.x;
+        if (d < 260 && d > -30) st.laneFlash[w.lane] = Math.max(st.laneFlash[w.lane], d < 70 ? 2 : 1);
+        if (p.lane === w.lane && d < 260 && d > 0) p.dangerLevel = Math.max(p.dangerLevel, d < 70 ? 2 : 1);
+        if (!w.hit && Math.abs(d) < 24) {
+            w.hit = true;
+            if (p.lane === w.lane) {
+                if (p.state === 'ghost_step') { spawnFloatingText(p.x, p.y - 50, 'EVADED', '#888888'); registerPerfectGhostStep(); }
+                else takeDamage(st.isInstinct ? SLAM.dmg / 2 : SLAM.dmg, true, null, { src: 'neon_enforcer' });
+            }
+        }
+    }
+    st.slamWaves = st.slamWaves.filter(w => w.x > -60);
+}
+
 function handleNeonEnforcer(en) {
     if (en.recoverTimer > 0) { en.recoverTimer--; return; } // OPEN — punish it
     en.attackCooldown--;
+    // v24: hanging back out of reach earns a slam instead of a free walk-down.
+    en.farFrames = Math.abs(en.x - st.player.x) > 160 ? (en.farFrames || 0) + 1 : 0;
+    if (en.currentMove !== 'slam' && (en.farFrames > SLAM.farFrames || (en.attacksSinceSlam || 0) >= SLAM.every)) {
+        en.currentMove = 'slam'; en.attackCooldown = Math.max(en.attackCooldown, telegraphLead(en) + 8); en.telegraphed = false; en.farFrames = 0;
+    }
+    if (en.currentMove === 'slam') {
+        const lead = telegraphLead(en);
+        if (!en.telegraphed && en.attackCooldown <= lead) { en.telegraphed = true; en.telegraphAt = en.attackCooldown; playSound('bash_tell'); createImpact(en.x, en.y - 90, '#ffaa00'); }
+        if (en.attackCooldown <= 0) {
+            en.justAttacked = 8; en.attacksSinceSlam = 0;
+            enforcerSlam(en);
+            en.currentMove = random() < 0.5 ? 'jab' : 'bash';
+            en.maxCooldown = nextCycle(en, 60); en.attackCooldown = en.maxCooldown;
+            beginPunishWindow(en, 'bash');
+        }
+        return;
+    }
 
     // Moves relentlessly forward unless executing a plant-move
     if (en.currentMove !== 'bash' && en.x > st.player.x + 100) {
@@ -229,6 +287,7 @@ function handleNeonEnforcer(en) {
         en.justAttacked = 5;
         const struck = en.currentMove;
         resolveBossStrike(en, struck === 'bash' ? 30 : 12, struck === 'bash');
+        en.attacksSinceSlam = (en.attacksSinceSlam || 0) + 1;
         if (en.enraged) {
             en.currentMove = 'bash';
             en.enraged = false;
@@ -256,7 +315,7 @@ function handleNeonEnforcer(en) {
 // of reach, with a full telegraph still owed before its next strike.
 const PHANTOM_SHIFT = { every: 3, everyOverdrive: 2, backOff: 250 };
 function phantomShift(en) {
-    en.attacksSinceShift = 0;
+    en.attacksSinceShift = 0; st.phantomClones = [];
     const oldX = en.x, oldY = en.y;
     if (en.trails) { en.trails.push({ x: oldX, y: oldY, lane: en.lane, opacity: 0.7 }); if (en.trails.length > 5) en.trails.shift(); }
     createShatter(oldX, oldY - 60, '#aa00ff');
@@ -317,7 +376,15 @@ function handlePhantomBoxer(en) {
     const inRange = Math.abs(en.x - st.player.x) < 140 && en.stun <= 0;
     meleeTelegraph(en, inRange, () => {
         playSound(en.currentMove === 'feint' ? 'feint_tell' : 'jab_tell');
+        // v24 CLONES (Phantom "felt easy"): the windup splits into afterimage
+        // clones in the other lanes, mirroring it. Only the real one casts a
+        // shadow; punching a clone shatters it and wastes the swing.
+        const n = en.phase === 2 ? 2 : (random() < 0.5 ? 1 : 0);
+        const lanes = [0, 1, 2].filter(l => l !== en.lane).sort(() => random() - 0.5).slice(0, n);
+        st.phantomClones = lanes.map(lane => ({ lane, life: 1 }));
+        if (n && !st.seenCloneHint) { st.seenCloneHint = true; showToast('ONLY THE REAL ONE CASTS A SHADOW', '#aa00ff'); }
     });
+    if (st.phantomClones && st.phantomClones.length) st.phantomClones = st.phantomClones.filter(c => c.lane !== en.lane); // the real one can't share a lane with a fake
 
     if (inRange) {
         // The feint's lane-snap now happens a readable beat before impact (was 12
@@ -333,6 +400,7 @@ function handlePhantomBoxer(en) {
             en.justAttacked = 5;
             const struck = en.currentMove;
             resolveBossStrike(en, 15, false);
+            if (st.phantomClones && st.phantomClones.length) { st.phantomClones.forEach(c => createShatter(en.x, st.height * CONSTANTS.LANE_Y[c.lane] - 60, '#aa00ff')); st.phantomClones = []; }
             en.attacksSinceShift = (en.attacksSinceShift || 0) + 1;
             en.decoyRolledThisCycle = false; en.decoyTimer = 0; en.feintSwitched = false;
             let roll = random();
@@ -367,103 +435,110 @@ function handleStaticMonk(en) {
         }
     } else {
         en.x = (st.width - 150) + Math.sin(Date.now() * 0.002) * 50;
+        // v24 VOLLEYS (playtest: "Static Monk most fun boss... evolve his battle with
+        // staggered grenade timing and mixing in his attack patterns"). Each volley
+        // is a set of items with their OWN fuse, so lanes can land at different beats:
+        //   pair    two lanes, same beat (the v23 volley)
+        //   stagger two lanes, the second lands a beat later — don't dodge early
+        //   sweep   (hurt) all three lanes in order — follow the gap behind it
+        //   quick   (hurt) one fast canister in your lane
+        //   beam    (hurt) his old straight laser down your lane: a line, not a grenade
+        if (!en.volley && en.attackCooldown <= MONK.lead) startMonkVolley(en);
+        if (en.volley) updateMonkVolley(en);
+    }
+}
 
-        if (!en.telegraphed && en.attackCooldown <= 80) {
-            en.telegraphed = true;
-            en.telegraphAt = en.attackCooldown;
-            playSound('zoner_tell');
-            en.targetLanes = [st.player.lane];
-            let adjacentLane = st.player.lane === 1 ? (random() > 0.5 ? 0 : 2) : 1;
-            en.targetLanes.push(adjacentLane);
-            // v23 CANISTERS (playtest: the two lit lanes were easy to miss the first
-            // time and activated too quickly): each targeted lane gets a canister that
-            // rolls from the Monk toward you and detonates the frame the volley lands —
-            // where it is on the floor IS the countdown.
-            en.canisterFrom = en.attackCooldown;
-            st.canisters = en.targetLanes.map(lane => ({ lane, x0: en.x - 30, x: en.x - 30, spin: 0 }));
-        }
-        if (st.canisters && st.canisters.length && en.canisterFrom) {
-            const k = Math.max(0, en.attackCooldown) / en.canisterFrom; // 1 -> 0
-            for (const c of st.canisters) { const tx = st.player.x + 20; c.x = tx + (c.x0 - tx) * k; c.spin += 0.25; }
-        }
+const MONK = { lead: 80, staggerGap: 26, sweepGap: 24, quickFuse: 55, beamFuse: 50 };
 
-        if (en.attackCooldown > 0 && en.targetLanes.length > 0) {
-            en.targetLanes.forEach(laneIndex => {
-                st.laneFlash[laneIndex] = en.attackCooldown <= 15 ? 2 : 1;
-                if (st.player.lane === laneIndex) {
-                    st.player.dangerLevel = Math.max(st.player.dangerLevel, en.attackCooldown <= 15 ? 2 : 1);
-                }
-            });
-            // ARC MUTATION (deceptiveOrder, was authored, never read): at Arc 4-5 the
-            // safe lane also throws an early, low decoy flash — but only well before
-            // the lethal window (>45 frames out), so it always clears in time and
-            // never suppresses the real tell. It punishes a panic-slip, not a read.
-            if (en.arcMods.deceptiveOrder && en.attackCooldown > 45) {
-                const safeLane = [0, 1, 2].find(l => !en.targetLanes.includes(l));
-                if (safeLane !== undefined) st.laneFlash[safeLane] = Math.max(st.laneFlash[safeLane], 1);
-            }
-        }
+function startMonkVolley(en) {
+    const p = st.player, hurt = en.hp <= en.maxHp * 0.5;
+    const adj = p.lane === 1 ? (random() > 0.5 ? 0 : 2) : 1;
+    const patterns = hurt ? ['pair', 'stagger', 'sweep', 'quick', 'beam'] : ['pair', 'stagger'];
+    let kind = patterns[Math.floor(random() * patterns.length)];
+    if (kind === en.lastVolley && patterns.length > 1) kind = patterns[(patterns.indexOf(kind) + 1) % patterns.length]; // never the same twice running
+    en.lastVolley = kind;
+    const can = (lane, fuse) => ({ kind: 'canister', lane, fuse, t: 0, x0: en.x - 30, x: en.x - 30, spin: 0 });
+    let items;
+    if (kind === 'pair') items = [can(p.lane, MONK.lead), can(adj, MONK.lead)];
+    else if (kind === 'stagger') items = [can(p.lane, MONK.lead), can(adj, MONK.lead + MONK.staggerGap)];
+    else if (kind === 'sweep') { const order = random() < 0.5 ? [0, 1, 2] : [2, 1, 0]; items = order.map((l, i) => can(l, MONK.lead + i * MONK.sweepGap)); }
+    else if (kind === 'quick') items = [can(p.lane, MONK.quickFuse)];
+    else items = [{ kind: 'beam', lane: p.lane, fuse: MONK.beamFuse, t: 0, x0: en.x - 30, x: en.x - 30 }];
+    en.volley = { kind, items };
+    st.canisters = items;
+    en.targetLanes = items.map(i => i.lane);
+    en.telegraphed = true; en.telegraphAt = Math.min(...items.map(i => i.fuse));
+    en.attackCooldown = 99999; // the volley owns the clock until it's spent
+    playSound('zoner_tell');
+    if (kind !== 'pair') spawnFloatingText(en.x - 20, en.y - 150, { stagger: 'STAGGERED', sweep: 'SWEEP', quick: 'QUICK', beam: 'BEAM' }[kind], '#00ff00');
+}
 
-        if (en.attackCooldown <= 0) {
-            playSound('laser');
-            en.justAttacked = 10;
-            st.shake = 15;
+function updateMonkVolley(en) {
+    const p = st.player, v = en.volley;
+    for (const it of v.items) {
+        it.t++;
+        const left = it.fuse - it.t;
+        if (it.kind === 'canister') { const tx = p.x + 20; it.x = tx + (it.x0 - tx) * Math.max(0, left / it.fuse); it.spin += 0.25; }
+        st.laneFlash[it.lane] = Math.max(st.laneFlash[it.lane], left <= 15 ? 2 : 1);
+        if (p.lane === it.lane) p.dangerLevel = Math.max(p.dangerLevel, left <= 15 ? 2 : 1);
+        if (left <= 0) monkDetonate(en, it);
+    }
+    v.items = v.items.filter(it => it.t < it.fuse);
+    st.canisters = v.items;
+    // ARC MUTATION (deceptiveOrder, Arc 4-5): the safe lane throws an early, low
+    // decoy flash that always clears well before anything lands.
+    if (en.arcMods.deceptiveOrder && v.items.length && v.items.every(it => it.fuse - it.t > 45)) {
+        const safe = [0, 1, 2].find(l => !v.items.some(it => it.lane === l));
+        if (safe !== undefined) st.laneFlash[safe] = Math.max(st.laneFlash[safe], 1);
+    }
+    if (!v.items.length) endMonkVolley(en);
+}
 
-            if (en.targetLanes.length > 0) {
-                en.targetLanes.forEach(laneIndex => {
-                    const can = (st.canisters || []).find(c => c.lane === laneIndex);
-                    const bx = can ? can.x : st.player.x, ly = st.height * CONSTANTS.LANE_Y[laneIndex];
-                    for (let i = 0; i < 6; i++) createImpact(bx + (i - 2) * 40, ly - 20 - (i % 2) * 30, '#00ff00');
-                    triggerShockwave(bx, ly - 30, '#00ff00');
-                    // the blast takes out anything in the lane near it — including the Monk's own adds
-                    for (const add of st.enemies) {
-                        if (add.isBoss || add.lane !== laneIndex || Math.abs(add.x - bx) > CONSTANTS.CANISTER.radius) continue;
-                        add.hp -= CONSTANTS.CANISTER.addDamage; add.stun = Math.max(add.stun, 20); add.vx += 8;
-                        spawnFloatingText(add.x, add.y - 120, 'CAUGHT IN THE BLAST', '#00ff00');
-                    }
-                    if (st.player.lane === laneIndex) {
-                        if (st.player.state === 'ghost_step') { spawnFloatingText(st.player.x, st.player.y - 50, "EVADED", "#888888"); registerPerfectGhostStep(); }
-                        else takeDamage(st.isInstinct ? 15 : 30, true, en);
-                    }
-                });
-            }
+function monkDetonate(en, it) {
+    const p = st.player, ly = st.height * CONSTANTS.LANE_Y[it.lane];
+    const bx = it.kind === 'beam' ? p.x : it.x;
+    playSound('laser'); en.justAttacked = 10; st.shake = Math.max(st.shake, 15);
+    if (it.kind === 'beam') { for (let i = 0; i < 6; i++) createImpact(en.x - i * 150, ly - 60, '#00ff00'); }
+    else { for (let i = 0; i < 6; i++) createImpact(bx + (i - 2) * 40, ly - 20 - (i % 2) * 30, '#00ff00'); triggerShockwave(bx, ly - 30, '#00ff00'); }
+    // the blast takes out anything in the lane near it — including the Monk's own adds
+    for (const add of st.enemies) {
+        if (add.isBoss || add.lane !== it.lane || (it.kind !== 'beam' && Math.abs(add.x - bx) > CONSTANTS.CANISTER.radius)) continue;
+        add.hp -= CONSTANTS.CANISTER.addDamage; add.stun = Math.max(add.stun, 20); add.vx += 8;
+        spawnFloatingText(add.x, add.y - 120, 'CAUGHT IN THE BLAST', '#00ff00');
+    }
+    if (p.lane === it.lane) {
+        if (p.state === 'ghost_step') { spawnFloatingText(p.x, p.y - 50, "EVADED", "#888888"); registerPerfectGhostStep(); }
+        else takeDamage(st.isInstinct ? 15 : 30, true, en);
+    }
+}
 
-            en.targetLanes = [];
-            en.telegraphed = false;
-            st.canisters = []; en.canisterFrom = 0;
-            en.bossMashCount++;
-
-            // ARC MUTATION (patternChainLength, was authored, never read): volleys per
-            // burst = 1 + patternChainLength, so Arc 1 keeps the original 2-volley
-            // rhythm (1+1) and Arc 5 chains up to 4 before the recharge opening.
-            const volleysPerBurst = 1 + (en.arcMods.patternChainLength || 1);
-            if (en.bossMashCount >= volleysPerBurst) {
-                en.currentMove = 'recharge';
-                en.attackCooldown = Math.floor(180 / en.arcMods.teleportRateMult);
-                en.bossMashCount = 0;
-                en.lane = st.player.lane;
-                en.y = st.height * CONSTANTS.LANE_Y[en.lane];
-                en.x = st.player.x + 100;
-                en.punishShown = false;
-                playSound('ghost_step');
-                createImpact(en.x, en.y - 60, '#00ff00');
-                spawnFloatingText(en.x, en.y - 120, "RECHARGING — OPEN!", "#00ff00");
-                // ARC MUTATION (summonSupportPressure, Arc 3+): the recharge is no
-                // longer a free breather — one Grunt add walks in so the opening has
-                // a cost. Capped at one live add so it stays pressure, not a swarm.
-                if (en.arcMods.summonSupportPressure && st.enemies.filter(e => !e.isBoss).length < 1) {
-                    spawnMonkAdd();
-                }
-            } else {
-                // ARC MUTATION (followupPattern, Arc 2+): a tighter beat between volleys
-                // (88 vs 100). Kept above 80 so the telegraph at attackCooldown<=80
-                // always gives its full warning — the rhythm hardens, the read stays honest.
-                en.attackCooldown = en.arcMods.followupPattern ? 88 : 100;
-                let otherLanes = [0, 1, 2].filter(l => l !== en.lane);
-                en.lane = otherLanes[Math.floor(random() * otherLanes.length)];
-                en.y = st.height * CONSTANTS.LANE_Y[en.lane];
-            }
-        }
+function endMonkVolley(en) {
+    en.volley = null; st.canisters = [];
+    en.targetLanes = [];
+    en.telegraphed = false;
+    en.bossMashCount++;
+    // ARC MUTATION (patternChainLength): volleys per burst = 1 + patternChainLength.
+    const volleysPerBurst = 1 + (en.arcMods.patternChainLength || 1);
+    if (en.bossMashCount >= volleysPerBurst) {
+        en.currentMove = 'recharge';
+        en.attackCooldown = Math.floor(180 / en.arcMods.teleportRateMult);
+        en.bossMashCount = 0;
+        en.lane = st.player.lane;
+        en.y = st.height * CONSTANTS.LANE_Y[en.lane];
+        en.x = st.player.x + 100;
+        en.punishShown = false;
+        playSound('ghost_step');
+        createImpact(en.x, en.y - 60, '#00ff00');
+        spawnFloatingText(en.x, en.y - 120, "RECHARGING — OPEN!", "#00ff00");
+        // ARC MUTATION (summonSupportPressure, Arc 3+): one Grunt add walks in.
+        if (en.arcMods.summonSupportPressure && st.enemies.filter(e => !e.isBoss).length < 1) spawnMonkAdd();
+    } else {
+        // ARC MUTATION (followupPattern, Arc 2+): a tighter beat between volleys.
+        // Kept above MONK.lead so every volley still gets its full warning.
+        en.attackCooldown = en.arcMods.followupPattern ? 88 : 100;
+        let otherLanes = [0, 1, 2].filter(l => l !== en.lane);
+        en.lane = otherLanes[Math.floor(random() * otherLanes.length)];
+        en.y = st.height * CONSTANTS.LANE_Y[en.lane];
     }
 }
 
@@ -529,6 +604,13 @@ function handleLiveWire(en) {
         }
         en.stringIdx = 0; en.stringsThrown = (en.stringsThrown || 0) + 1;
         electrifyLane(en.lane); // the lane he just worked goes live
+        // v24 PHASE 2 (below half): the current chases you — the lane you're
+        // standing in charges too, so holding still in front of him isn't safe.
+        if (en.hp <= en.maxHp * 0.5) {
+            if (en.phase !== 2) { en.phase = 2; spawnFloatingText(en.x, en.y - 170, 'OVERLOAD', '#fff36b'); st.shake = Math.max(st.shake, 20); }
+            if (p.lane !== en.lane) electrifyLane(p.lane);
+            else electrifyLane(p.lane === 1 ? (random() < 0.5 ? 0 : 2) : 1);
+        }
         const shoveNext = en.stringsThrown % (en.arcMods.shoveEvery || 3) === 0;
         en.currentMove = shoveNext ? 'shove' : 'string';
         en.maxCooldown = nextCycle(en, shoveNext ? 60 : 44);
@@ -571,6 +653,7 @@ function updateEnemyEchoes() {
 
 function handleNegative(en) {
     if (en.slipCooldown > 0) en.slipCooldown--;
+    primeNegativeRead(en);
     if (en.phase === 1 && en.hp < en.maxHp * 0.5) {
         en.phase = 2; st.shake = 40; doFlash(0.6); triggerShockwave(en.x, en.y - 60, en.color);
         spawnFloatingText(en.x + 20, en.y - 160, 'THE MIRROR CRACKS', en.color); playSound('hit');
@@ -595,6 +678,7 @@ function handleNegative(en) {
 export function updateBosses() {
     updateEnemyEchoes(); // Negative's echoes resolve even while it's stunned
     if (!st.finisher) updateLiveLanes(); // Live Wire's charged lanes run out even while he's stunned
+    if (!st.finisher) updateSlamWaves(); // v24 Enforcer slam waves
     for (const en of st.enemies) {
         if (!en.isBoss) continue;
         checkBossThresholds(en); // safety net for non-punch damage

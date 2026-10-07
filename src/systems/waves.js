@@ -234,7 +234,7 @@ export function spawnEnemy() {
     if (CONSTANTS.isBossStage(st.currentStage)) {
         if (!st.bossActive && !st.stageClearing) {
             st.stageClearing = true;
-            st.purifyTimer = 90;
+            st.purifyTimer = 6; // v24: was 90 — a beat of empty lane before every boss (playtest: noticed before Negative)
         }
         return;
     }

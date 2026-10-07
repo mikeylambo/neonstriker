@@ -62,8 +62,8 @@ function typeCounts() {
 // ============ 1. AFFIX DATA ============
 eq('affix count restored', CONSTANTS.AFFIXES.length, 7);
 eq('affixMod SURGE instinct', CONSTANTS.affixMod(findAffix('SURGE'), 'instinctGainMult', 1), 1.5);
-eq('affixMod GLASS dealt', CONSTANTS.affixMod(findAffix('GLASS PROTOCOL'), 'playerDamageDealtMult', 1), 1.15); // v23
-eq('affixMod GLASS taken', CONSTANTS.affixMod(findAffix('GLASS PROTOCOL'), 'playerDamageTakenMult', 1), 1.6); // v23
+eq('affixMod GLASS dealt', CONSTANTS.affixMod(findAffix('GLASS PROTOCOL'), 'playerDamageDealtMult', 1), 1.3); // v24: back to 30/30
+eq('affixMod GLASS taken', CONSTANTS.affixMod(findAffix('GLASS PROTOCOL'), 'playerDamageTakenMult', 1), 1.3); // v24
 eq('affixMod HEAVY bruiser', CONSTANTS.affixMod(findAffix('HEAVY HANDS'), 'bruiserDamageMult', 1), 1.6); // v23
 eq('affixMod ADRENALINE heal', CONSTANTS.affixMod(findAffix('ADRENALINE'), 'perfectSlipHeal', 0), 4);
 eq('affixMod default when absent', CONSTANTS.affixMod(findAffix('NONE'), 'playerDamageDealtMult', 1), 1);

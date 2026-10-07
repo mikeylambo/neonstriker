@@ -89,14 +89,14 @@ export function updateEnemies() {
 
         if (en.tutorialType && !st.seenTutorials[en.tutorialType] && en.x < st.player.x + 250) {
             if (en.tutorialType === 'slip') {
-                let slipText = 'When a lane flashes <span class="text-pink-500 font-bold">RED</span>, an attack is winding up.<br><br>Wait for it to flash <span class="text-white font-bold">WHITE</span>, then press <span class="text-cyan-400 font-bold">[UP]</span> or <span class="text-cyan-400 font-bold">[DOWN]</span> to Perfect Slip!<br><br>Slipping too early only counts as a <span class="text-gray-300 font-bold">Good Slip</span> &mdash; it resets the attack, but only a <span class="text-white font-bold">Perfect Slip</span> clears this one.<br><br>' + (st.runCount <= 1 ? '<i>Land a Perfect Slip to pass!</i>' : '<i>Slip the attack to survive!</i>');
+                let slipText = 'Lane flashes <span class="text-pink-500 font-bold">RED</span> &rarr; attack coming.<br>Flashes <span class="text-white font-bold">WHITE</span> &rarr; press <span class="text-cyan-400 font-bold">[UP]</span> / <span class="text-cyan-400 font-bold">[DOWN]</span> to <b>Perfect Slip</b>.<br><br>' + (st.runCount <= 1 ? '<i>Land a Perfect Slip.</i>' : '<i>Slip the attack.</i>');
                 triggerTutorial('slip', 'ENEMY ATTACK', slipText);
             } else if (en.tutorialType === 'counter') {
-                let counterText = 'Your Perfect Slip was successful!<br><br>Notice the <span class="text-white font-bold">White Energy Rings</span> around your fists.<br><br>You are now holding a <span class="text-white font-bold">Counter Charge</span>. Your next strike will deal massive damage, shatter their posture, and cause extra hitstop.<br><br>' + (st.runCount <= 1 ? '<i>Strike this dummy enemy to unleash it!</i>' : '<i>Strike an enemy to unleash it!</i>');
+                let counterText = 'Rings on your fists = <span class="text-white font-bold">Counter Charge</span>.<br>Your next hit lands huge.<br><br>' + (st.runCount <= 1 ? '<i>Hit the dummy.</i>' : '<i>Hit an enemy.</i>');
                 triggerTutorial('counter', 'COUNTER READY', counterText);
-            } else if (en.tutorialType === 'shield') { triggerTutorial('shield', 'GOLD ARMOR', `Enemies with Gold Armor will block your Jabs.<br><br>Use your <span class="text-cyan-400 font-bold">CROSS [${keyName('cross')}]</span> to shatter their defense!<br><br><i>Break the armor to pass!</i>`); }
-            else if (en.tutorialType === 'guard') { triggerTutorial('guard', 'GUARDING', `Guard is the stable answer when timing gets crowded, even if a clean slip is possible.<br><br>Hold <span class="text-cyan-400 font-bold">[${keyName('guard')}]</span> to Guard &mdash; it cuts incoming damage by 75% against <i>most</i> attackers.<br><br>Not all, though. A few enemies bite through Guard far more than that. You will get a specific heads-up the first time one shows up &mdash; watch for it.<br><br><i>Guard the next attack to pass!</i>`); }
-            else if (en.tutorialType === 'ghost_step') { triggerTutorial('ghost_step', 'GHOST STEP', `This one is too fast to jab, guard, or slip cleanly.<br><br>Press <span class="text-cyan-400 font-bold">[${keyName('ghost')}]</span> for a Ghost Step &mdash; a short evasive dash with a moment of invincibility.<br><br><i>Ghost Step the next attack to pass!</i>`); }
+            } else if (en.tutorialType === 'shield') { triggerTutorial('shield', 'GOLD ARMOR', `Gold Armor blocks Jabs.<br><span class="text-cyan-400 font-bold">CROSS [${keyName('cross')}]</span> breaks it.<br><br><i>Break the armor.</i>`); }
+            else if (en.tutorialType === 'guard') { triggerTutorial('guard', 'GUARD', `Hold <span class="text-cyan-400 font-bold">[${keyName('guard')}]</span> to block 75% of a hit.<br>Some enemies bite through it.<br><br><i>Guard the next attack.</i>`); }
+            else if (en.tutorialType === 'ghost_step') { triggerTutorial('ghost_step', 'GHOST STEP', `Too fast to slip?<br><span class="text-cyan-400 font-bold">[${keyName('ghost')}]</span> dashes through it, untouchable.<br><br><i>Ghost Step the next attack.</i>`); }
             return;
         }
 
@@ -107,7 +107,7 @@ export function updateEnemies() {
         // Boxer is assassin-typed) — that's a separate, later lesson.
         if (!en.tutorialType && en.isActiveThreat && en.x - st.player.x < 400) {
             if (en.type === 'bruiser' && !en.isBoss && !st.seenTutorials.bruiser_id) { // (Live Wire is bruiser-typed — bosses get their poster, not this)
-                triggerTutorial('bruiser_id', 'ARMORED BRUISER', `This one shrugs off Jabs entirely.<br><br>Jabs still chip its health, but only a <span class="text-cyan-400 font-bold">CROSS [${keyName('cross')}]</span> &mdash; or a Counter Hit &mdash; actually staggers it.`);
+                triggerTutorial('bruiser_id', 'BRUISER', `Jabs won't stagger it.<br>Use a <span class="text-cyan-400 font-bold">CROSS [${keyName('cross')}]</span> or a Counter.`);
                 return;
             }
             if ((en.stringLen || 1) > 1 && !en.isBoss && !st.seenTutorials.string_id) {
@@ -115,7 +115,7 @@ export function updateEnemies() {
                 return;
             }
             if (en.type === 'assassin' && !en.isBoss && !st.seenTutorials.assassin_id) {
-                triggerTutorial('assassin_id', 'ASSASSIN', 'This is the exception the Guard tutorial warned you about.<br><br>Guard normally blocks 75% of incoming damage. Against an Assassin, only about 40% gets blocked &mdash; the rest bites through.<br><br>You have to actually read it and <span class="text-cyan-400 font-bold">SLIP [UP/DOWN]</span>, not just Guard.');
+                triggerTutorial('assassin_id', 'ASSASSIN', 'Bites through Guard.<br><span class="text-cyan-400 font-bold">SLIP</span> it instead.');
                 return;
             }
         }

@@ -378,7 +378,7 @@ const frames = (n, fn) => { for (let i = 0; i < n; i++) fn(i); };
     let slipped = 0, read = 0, openReacts = 0;
     for (let i = 0; i < 300; i++) {
         seedRng(1000 + i);
-        ng.slipCooldown = 0; ng.recoverTimer = 0; ng.lane = st.player.lane = 1; ng.x = st.player.x + 70; ng.hp = ng.maxHp; ng.stun = 0; ng.stunResist = 0; st.enemyEchoes = [];
+        ng.slipCooldown = 0; ng.readPrimed = true; ng.recoverTimer = 0; ng.lane = st.player.lane = 1; ng.x = st.player.x + 70; ng.hp = ng.maxHp; ng.stun = 0; ng.stunResist = 0; st.enemyEchoes = [];
         st.player.slipBuff = i % 2; const hp0 = ng.hp;
         combat.checkHit('cross');
         if (ng.hp === hp0 && st.enemyEchoes.length) slipped++;
@@ -386,7 +386,7 @@ const frames = (n, fn) => { for (let i = 0; i < n; i++) fn(i); };
     }
     for (let i = 0; i < 100; i++) {
         seedRng(5000 + i);
-        ng.slipCooldown = 0; ng.recoverTimer = 20; ng.lane = st.player.lane = 1; ng.x = st.player.x + 70; ng.hp = ng.maxHp; ng.stun = 0; ng.stunResist = 0; st.enemyEchoes = [];
+        ng.slipCooldown = 0; ng.readPrimed = true; ng.recoverTimer = 20; ng.lane = st.player.lane = 1; ng.x = st.player.x + 70; ng.hp = ng.maxHp; ng.stun = 0; ng.stunResist = 0; st.enemyEchoes = [];
         st.player.slipBuff = i % 2; const hp0 = ng.hp; combat.checkHit('cross');
         if (ng.hp === hp0) openReacts++;
     }

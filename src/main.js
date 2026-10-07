@@ -169,7 +169,7 @@ export function resetGame() {
     st.finisher = null; st.finisherZoom = 1; st.vignette = null;
     st.stageHitsTaken = 0; st.statFlawless = 0;
     st.knockdown = null; st.knockdownsThisArc = 0; st.statKnockdowns = 0; st.zoneTimer = 0; st.bossPoster = null; st.enemyEchoes = [];
-    st.afterimages = []; st.koFx = []; st.bossKo = null; st.lastWagerName = null; st.wagerSeen = []; st.retries = 0; st.canisters = []; st.rankOrder = []; st.orbPulse = 0;
+    st.afterimages = []; st.koFx = []; st.bossKo = null; st.lastWagerName = null; st.wagerSeen = []; st.retries = 0; st.canisters = []; st.slamWaves = []; st.phantomClones = []; st.rankOrder = []; st.orbPulse = 0;
     st.paletteFrom = 1; st.paletteTo = 1; st.paletteT = 1; st.lightSweep = -1;
     setMusicIntensity(0);
 
@@ -290,8 +290,8 @@ window.engineToggleHeat = id => { toggleHeat(id); playSound('slip'); renderHeatM
 // be an unlock popup". Saves that unlocked it before v21 see it once too.
 const ANNOUNCE_KEY = 'neon_strike_announced_v1';
 const UNLOCK_NOTES = {
-    practice: { title: 'PRACTICE ROOM UNLOCKED', color: '#a78bfa', text: 'Pick any enemy you\'ve met — or a boss you\'ve reached — and drill it on a loop. You can\'t lose, nothing is scored, and the SLIP WINDOWS overlay shows exactly when to move.<br><br>Find it on the main menu.' },
-    heat: { title: 'MODIFIERS UNLOCKED', color: '#fb923c', text: 'Stack optional modifiers — faster enemies, no healing, no ten-count… — for a bigger score multiplier on every run.<br><br>Toggle them from HEAT on the main menu.' }
+    practice: { title: 'PRACTICE ROOM UNLOCKED', color: '#a78bfa', text: 'Drill any enemy or boss you\'ve reached. You can\'t lose.' },
+    heat: { title: 'MODIFIERS UNLOCKED', color: '#fb923c', text: 'Stack modifiers for a bigger score multiplier.' }
 };
 function loadAnnounced() { try { const a = JSON.parse(localStorage.getItem(ANNOUNCE_KEY) || '[]'); return Array.isArray(a) ? a : []; } catch (e) { return []; } }
 export function pendingUnlocks(m = loadMeta()) {
@@ -326,6 +326,13 @@ function dismissUnlock() {
 }
 window.engineDismissUnlock = dismissUnlock;
 window.engineOpenPractice = () => openSubmenu('practice');
+window.engineToggleTutorial = () => {
+    const cb = document.getElementById('tutorial-toggle-cb'), lbl = document.getElementById('tutorial-toggle-state');
+    if (!cb) return;
+    cb.checked = !cb.checked;
+    if (lbl) { lbl.innerText = cb.checked ? 'ON' : 'OFF'; lbl.style.color = cb.checked ? '#22d3ee' : '#6b7280'; }
+    playSound('slip');
+};
 window.engineOpenHeat = () => openSubmenu('heat');
 window.engineCloseSubmenu = closeSubmenu;
 
@@ -856,7 +863,7 @@ export function update() {
     let banner = document.getElementById('instinct-ready-banner');
     if(st.instinctMeter >= 100 && !st.isInstinct) {
         if(!st.seenTutorials.instinct) {
-            triggerTutorial('instinct','INSTINCT MAXED',`Your meter is full!<br><br>Press <span class="text-cyan-400 font-bold">[${keyName('instinct')}] / pad A</span> to unleash Instinct &mdash; double knockback and massive hitstop.<br><br>It stays banked until you use it &mdash; save it for a crowd.<br><br><b>Then go deeper:</b> land a <span class="text-white font-bold">Perfect Slip while Instinct is running</span> and you drop into <span class="text-white font-bold">THE ZONE</span> &mdash; the world slows down around you.`);
+            triggerTutorial('instinct','INSTINCT READY',`Press <span class="text-cyan-400 font-bold">[${keyName('instinct')}]</span> to unleash it.<br>Perfect Slip during Instinct &rarr; <span class="text-white font-bold">THE ZONE</span>.`);
             return;
         } else if (banner) banner.style.display = 'block';
     } else if (banner) banner.style.display = 'none';
@@ -931,7 +938,7 @@ export function update() {
     // lesson, guarantees it's actually seen rather than optimistically glimpsed.
     if (!st.seenTutorials.footwork_tip && st.currentStage === 1 && st.enemies.length === 0 &&
         (!st.tutorialEnabled || st.spawnTotal >= 5)) {
-        triggerTutorial('footwork_tip', 'FOOTWORK', `You are not locked to one spot.<br><br>Hold <span class="text-cyan-400 font-bold">[${keyName('right')}]</span> to press forward and meet them early; hold <span class="text-cyan-400 font-bold">[${keyName('left')}]</span> to give ground and buy a beat. While you're fighting you hold your position.<br><br>Ghost Step has its own button: <span class="text-cyan-400 font-bold">[${keyName('ghost')}]</span> &mdash; a short invincible dash straight through an attack.`);
+        triggerTutorial('footwork_tip', 'FOOTWORK', `<span class="text-cyan-400 font-bold">[${keyName('right')}]</span> press forward &nbsp;·&nbsp; <span class="text-cyan-400 font-bold">[${keyName('left')}]</span> give ground<br><span class="text-cyan-400 font-bold">[${keyName('ghost')}]</span> Ghost Step`);
         return;
     }
 
@@ -986,7 +993,7 @@ function retryStage() {
     st.score = Math.floor((st.score || 0) / 2);
     st.retries = (st.retries || 0) + 1;
     st.enemies = []; st.liveLanes = []; st.hazards = []; st.enemyEchoes = []; st.afterimages = [];
-    st.finisher = null; st.knockdown = null; st.bossKo = null; st.canisters = []; st.knockdownsThisArc = 0;
+    st.finisher = null; st.knockdown = null; st.bossKo = null; st.canisters = []; st.slamWaves = []; st.phantomClones = []; st.knockdownsThisArc = 0;
     st.health = st.maxHealth; st.hpCeil = undefined;
     st.stageClearing = false; st.bossActive = false; st.bossDefeatedThisStage = false; st.bossIntroTimer = 0;
     st.stageProgress = 0; st.wavesCleared = 0; st.waveThreshold = 0; st.waveTimer = 30; st.purifyTimer = 0;

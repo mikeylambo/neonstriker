@@ -11,10 +11,14 @@
     // boss; Arcs 2+ keep the full seven. Every system resolves stage -> {arc, level}
     // through locateStage(), so no caller does its own `% 7` math — that's exactly
     // how the old wave/palette counters drifted out of phase with the arc cycle.
+    // v24 (playtest: "lost to Negative at 32:34 — the game needs better pacing"):
+    // every Arc is now four fights + a boss. Arcs 2-5 keep their opener, the
+    // assassin skirmish, the midnight brawl and the pre-boss climax; the two
+    // longest middle rounds (3: Ashfall, 5: Abyss Rail) are cut. 25 stages, not 33.
     ARC_LEVEL_KEYS: {
       1: [1, 2, 3, 6, 7]
     },
-    DEFAULT_ARC_LEVEL_KEYS: [1, 2, 3, 4, 5, 6, 7],
+    DEFAULT_ARC_LEVEL_KEYS: [1, 2, 4, 6, 7],
     BOSS_LEVEL_KEY: 7,
     arcLevelKeys: (arc) => CONSTANTS.ARC_LEVEL_KEYS[arc] || CONSTANTS.DEFAULT_ARC_LEVEL_KEYS,
     arcLength: (arc) => CONSTANTS.arcLevelKeys(arc).length,
@@ -270,7 +274,7 @@
       { name: "IRON WALL", desc: "Every Grunt arrives in Gold Armor \u2014 only a Cross gets through.", scoreMult: 1.4, mods: { gruntSub: "shield", gruntSubEvery: 1 } },
       { name: "HEAVY HANDS", desc: "Bruisers hit 60% harder and press in numbers. Keep your footwork.", scoreMult: 1.6, mods: { bruiserDamageMult: 1.6, gruntSub: "bruiser", gruntSubEvery: 3 } },
       { name: "ADRENALINE", desc: "Every Perfect Slip mends a sliver of health.", mods: { perfectSlipHeal: 4 } },
-      { name: "GLASS PROTOCOL", desc: "You deal 15% more \u2014 and take 60% more. No margin for a miss.", scoreMult: 2, mods: { playerDamageDealtMult: 1.15, playerDamageTakenMult: 1.6 } }
+      { name: "GLASS PROTOCOL", desc: "Deal 30% more. Take 30% more.", scoreMult: 1.75, mods: { playerDamageDealtMult: 1.3, playerDamageTakenMult: 1.3 } }
     ],
     wagerPool: () => CONSTANTS.AFFIXES.filter((a) => a.scoreMult && a.scoreMult > 1),
     WAGERS: {
@@ -407,6 +411,8 @@
     // re-slip cooldown (12 -> 9) is the only balance-relevant part: it's how fast
     // you can chain top->bottom. Kept above ~6 so up/down can't be jittered.
     SLIP_MOVE: { glide: 0.42, cooldown: 9 },
+    // v24: Ghost Step recovers in 0.6s (was 1s). Weaver's Step trims it further.
+    GHOST_STEP_COOLDOWN: 36,
     // v21 ENEMY KNOCKDOWNS + IMPACT DAMAGE. A blow whose knockback impulse (after
     // weight, Power, counter and Instinct multipliers) reaches `threshold` floors
     // a non-boss enemy: slam damage, can't act for `frames`, follow-ups deal
@@ -1518,10 +1524,10 @@
   var KEY2 = "neon_strike_arc_medals_v1";
   var ARC_PAR = {
     1: { time: 210, score: 42e3 },
-    2: { time: 400, score: 7e4 },
-    3: { time: 430, score: 9e4 },
-    4: { time: 440, score: 9e4 },
-    5: { time: 480, score: 11e4 }
+    2: { time: 280, score: 5e4 },
+    3: { time: 300, score: 64e3 },
+    4: { time: 310, score: 64e3 },
+    5: { time: 340, score: 8e4 }
   };
   var MEDALS = {
     gold: { label: "GOLD", color: "#facc15", bonus: 5e3, rank: 3 },
@@ -1865,7 +1871,7 @@
     if (CONSTANTS.isBossStage(gameState.currentStage)) {
       if (!gameState.bossActive && !gameState.stageClearing) {
         gameState.stageClearing = true;
-        gameState.purifyTimer = 90;
+        gameState.purifyTimer = 6;
       }
       return;
     }
@@ -2034,7 +2040,7 @@
   // src/systems/telemetry.js
   var KEY3 = "neon_strike_telemetry_v1";
   var MAX_RUNS = 25;
-  var TELEMETRY_VERSION = "23.0.0";
+  var TELEMETRY_VERSION = "24.0.0";
   var run = null;
   var stage = null;
   function safeGet2() {
@@ -2277,6 +2283,8 @@
     gameState.hazards = [];
     gameState.liveLanes = [];
     gameState.canisters = [];
+    gameState.slamWaves = [];
+    gameState.phantomClones = [];
     gameState.hitstop = 0;
     const label = kind === "ko" ? "FINAL BLOW" : "STAGGERED!";
     spawnFloatingText(en.x + en.w / 2, en.y - 190, label, kind === "ko" ? "#ff0055" : "#ffffff");
@@ -2410,6 +2418,8 @@
         en.currentMove = "laser";
         en.attackCooldown = 110;
         en.bossMashCount = 0;
+        en.volley = null;
+        en.targetLanes = [];
       }
     }
     gameState.finisher = null;
@@ -2514,10 +2524,24 @@
     const n = parseInt(full, 16);
     return "#" + (16777215 ^ n).toString(16).padStart(6, "0");
   }
-  function negativeReact(en, buffActive) {
+  var NEG_READ = { rerollFrames: 70 };
+  function primeNegativeRead(en) {
+    if (en.slipCooldown > 0) {
+      en.readPrimed = false;
+      return;
+    }
+    if ((en.readTimer = (en.readTimer || 0) - 1) > 0) return;
+    en.readTimer = NEG_READ.rerollFrames;
     const m = en.arcMods || {};
-    if (en.slipCooldown > 0) return false;
-    if (buffActive && random() < (m.counterRead || 0.5)) {
+    const was = en.readPrimed;
+    en.readPrimed = random() < (m.echoChance || 0.35) * (en.phase === 2 ? 1.4 : 1);
+    if (en.readPrimed && !was) playSound("feint_tell");
+  }
+  function negativeReact(en, buffActive) {
+    if (en.slipCooldown > 0 || !en.readPrimed) return false;
+    en.readPrimed = false;
+    en.readTimer = NEG_READ.rerollFrames;
+    if (buffActive) {
       en.slipCooldown = 40;
       spawnFloatingText(en.x + 20, en.y - 150, "READ YOU.", en.color);
       playSound("feint_tell");
@@ -2526,19 +2550,16 @@
       en.telegraphed = false;
       return true;
     }
-    if (random() < (m.echoChance || 0.35)) {
-      en.slipCooldown = 36;
-      const oldLane = en.lane;
-      const lanes = [oldLane - 1, oldLane + 1].filter((l) => l >= 0 && l <= 2);
-      en.lane = lanes[Math.floor(random() * lanes.length)];
-      if (!gameState.enemyEchoes) gameState.enemyEchoes = [];
-      gameState.enemyEchoes.push({ lane: oldLane, x: en.x, y: gameState.height * CONSTANTS.LANE_Y[oldLane], timer: ECHO_DELAY, fade: 20, fired: false, color: en.color });
-      createShatter(en.x, en.y - 60, en.color);
-      spawnFloatingText(en.x + 20, en.y - 150, "AFTERIMAGE", en.color);
-      playSound("ghost_step");
-      return true;
-    }
-    return false;
+    en.slipCooldown = 36;
+    const oldLane = en.lane;
+    const lanes = [oldLane - 1, oldLane + 1].filter((l) => l >= 0 && l <= 2);
+    en.lane = lanes[Math.floor(random() * lanes.length)];
+    if (!gameState.enemyEchoes) gameState.enemyEchoes = [];
+    gameState.enemyEchoes.push({ lane: oldLane, x: en.x, y: gameState.height * CONSTANTS.LANE_Y[oldLane], timer: ECHO_DELAY, fade: 20, fired: false, color: en.color });
+    createShatter(en.x, en.y - 60, en.color);
+    spawnFloatingText(en.x + 20, en.y - 150, "AFTERIMAGE", en.color);
+    playSound("ghost_step");
+    return true;
   }
 
   // src/systems/combat.js
@@ -2558,6 +2579,17 @@
     if (setUpShot) gameState.player.setUpTimer = 0;
     const jX = () => Math.random() * 50 - 25;
     const jY = () => Math.random() * 30 - 15;
+    if (gameState.phantomClones && gameState.phantomClones.length) {
+      const ph = gameState.enemies.find((e) => e.controller === "phantom_boxer");
+      const ci = gameState.phantomClones.findIndex((c) => c.lane === gameState.player.lane);
+      if (ph && ci >= 0 && ph.lane !== gameState.player.lane && ph.x > gameState.player.x - 20 && ph.x < gameState.player.x + reach) {
+        gameState.phantomClones.splice(ci, 1);
+        createShatter(ph.x, gameState.player.y - 60, "#aa00ff");
+        playSound("shatter");
+        spawnFloatingText(ph.x, gameState.player.y - 120, "FAKE!", "#aa00ff");
+        return false;
+      }
+    }
     for (let i = 0; i < gameState.enemies.length; i++) {
       let en = gameState.enemies[i];
       if (en.lane === gameState.player.lane && !en.passed && en.x > gameState.player.x - 20 && en.x < gameState.player.x + reach) {
@@ -2612,7 +2644,7 @@
         let dmg = 0;
         if (type === "jab1" || type === "jab2") dmg = 15;
         else if (type === "jab3") dmg = 25;
-        else if (type === "hook") dmg = 35;
+        else if (type === "hook") dmg = 28;
         else if (type === "cross") dmg = 50;
         else if (type === "guard_jab") dmg = 10;
         else if (type === "check_hook") dmg = 25;
@@ -2646,6 +2678,7 @@
           dmg *= 1.5;
         }
         const bossOpen = en.isBoss && isBossOpen(en);
+        let liveWireArmor = false;
         if (bossOpen) {
           dmg = Math.round(dmg * CONSTANTS.BOSS_OFFENSE.punishDamageMult);
           addScore(CONSTANTS.SCORE.punishBonus, en.x + jX(), en.y - 170 + jY(), { silent: true });
@@ -2722,6 +2755,14 @@
               return false;
             }
           }
+          if (en.controller === "live_wire" && !bossOpen && !trueReadActive && (type === "hook" || type === "check_hook")) {
+            dmg = Math.round(dmg * 0.5);
+            liveWireArmor = true;
+            if (!en.armorShown || gameState.frameCount - en.armorShown > 40) {
+              en.armorShown = gameState.frameCount || 1;
+              spawnFloatingText(en.x + jX(), en.y - 110 + jY(), "ARMORED", "#fff36b");
+            }
+          }
           dmg = gateBossDamage(en, dmg);
           if (en.hp - dmg <= en.maxHp * 0.25 && !en.desperation) {
             en.desperation = true;
@@ -2769,7 +2810,7 @@
         let powerFactor = gameState.stats.powerMult * instinctKB * (buffActive ? 1.5 : 1);
         if (trueReadActive) powerFactor *= 1.5;
         let baseKB = 0;
-        if (loaded) {
+        if (loaded && !gameState.isInstinct) {
           baseKB = CONSTANTS.VERBS.loadedCross.knockback;
         } else if (buffActive || trueReadActive) {
           baseKB = 45;
@@ -2809,7 +2850,7 @@
           gameState.statEnemyKnockdowns = (gameState.statEnemyKnockdowns || 0) + 1;
         }
         if (type === "cross" || type === "hook" || type === "check_hook" || buffActive || trueReadActive || isJab) {
-          let canStun = true;
+          let canStun = !liveWireArmor;
           let stunAmount = 0;
           if (en.type === "bruiser" && isJab && !buffActive && !trueReadActive) canStun = false;
           if (isJab) stunAmount = 18;
@@ -3006,7 +3047,7 @@
     gameState.player.ghostStepTimer = 18;
     gameState.player.ghostPerfected = false;
     gameState.player.charging = false;
-    if (gameState.player.ghostStepCharges <= 0) gameState.player.ghostStepCooldown = Math.max(10, Math.floor(60 * gameState.progressionMods.ghostStepCooldownMult));
+    if (gameState.player.ghostStepCharges <= 0) gameState.player.ghostStepCooldown = Math.max(10, Math.floor(CONSTANTS.GHOST_STEP_COOLDOWN * gameState.progressionMods.ghostStepCooldownMult));
     resetJabString();
     playSound("ghost_step");
     for (let i = 0; i < 8; i++) {
@@ -3405,7 +3446,7 @@
       if (p.ghostStepCooldown <= 0) {
         const maxGhostCharges = gameState.progressionMods.blurStep ? 2 : 1;
         p.ghostStepCharges = Math.min(maxGhostCharges, (p.ghostStepCharges || 0) + 1);
-        if (p.ghostStepCharges < maxGhostCharges) p.ghostStepCooldown = Math.max(10, Math.floor(60 * gameState.progressionMods.ghostStepCooldownMult));
+        if (p.ghostStepCharges < maxGhostCharges) p.ghostStepCooldown = Math.max(10, Math.floor(CONSTANTS.GHOST_STEP_COOLDOWN * gameState.progressionMods.ghostStepCooldownMult));
       }
     }
     if (p.guardReadTimer > 0) p.guardReadTimer--;
@@ -3609,7 +3650,7 @@
       weight: 2,
       speed: 1.2,
       cooldown: 60,
-      baseHpMult: 1,
+      baseHpMult: 1.15,
       startMove: "jab"
     },
     {
@@ -3620,7 +3661,7 @@
       weight: 1.5,
       speed: 2.5,
       cooldown: 40,
-      baseHpMult: 0.75,
+      baseHpMult: 0.9,
       startMove: "feint"
     },
     {
@@ -3655,7 +3696,7 @@
       weight: 1.3,
       speed: 2.2,
       cooldown: 44,
-      baseHpMult: 1.2,
+      baseHpMult: 1,
       startMove: "jab"
     }
   ];
@@ -3810,12 +3851,77 @@
       onTell();
     }
   }
+  var SLAM = { every: 3, farFrames: 75, speed: 8, dmg: 20, phase2Gap: 22 };
+  function enforcerSlam(en) {
+    const p = gameState.player;
+    if (!gameState.slamWaves) gameState.slamWaves = [];
+    gameState.slamWaves.push({ lane: p.lane, x: en.x - 20, delay: 0, hit: false, color: "#ffaa00" });
+    if (en.phase === 2) {
+      const adj = p.lane === 1 ? random() < 0.5 ? 0 : 2 : 1;
+      gameState.slamWaves.push({ lane: adj, x: en.x - 20, delay: SLAM.phase2Gap, hit: false, color: "#ffaa00" });
+    }
+    gameState.shake = Math.max(gameState.shake, 18);
+    createImpact(en.x, en.y - 10, "#ffaa00");
+    triggerShockwave(en.x, en.y - 10, "#ffaa00");
+    playSound("hit");
+    spawnFloatingText(en.x, en.y - 160, "SLAM!", "#ffaa00");
+  }
+  function updateSlamWaves() {
+    if (!gameState.slamWaves || !gameState.slamWaves.length) return;
+    const p = gameState.player;
+    for (const w of gameState.slamWaves) {
+      if (w.delay > 0) {
+        w.delay--;
+        continue;
+      }
+      w.x -= SLAM.speed;
+      const d = w.x - p.x;
+      if (d < 260 && d > -30) gameState.laneFlash[w.lane] = Math.max(gameState.laneFlash[w.lane], d < 70 ? 2 : 1);
+      if (p.lane === w.lane && d < 260 && d > 0) p.dangerLevel = Math.max(p.dangerLevel, d < 70 ? 2 : 1);
+      if (!w.hit && Math.abs(d) < 24) {
+        w.hit = true;
+        if (p.lane === w.lane) {
+          if (p.state === "ghost_step") {
+            spawnFloatingText(p.x, p.y - 50, "EVADED", "#888888");
+            registerPerfectGhostStep();
+          } else takeDamage(gameState.isInstinct ? SLAM.dmg / 2 : SLAM.dmg, true, null, { src: "neon_enforcer" });
+        }
+      }
+    }
+    gameState.slamWaves = gameState.slamWaves.filter((w) => w.x > -60);
+  }
   function handleNeonEnforcer(en) {
     if (en.recoverTimer > 0) {
       en.recoverTimer--;
       return;
     }
     en.attackCooldown--;
+    en.farFrames = Math.abs(en.x - gameState.player.x) > 160 ? (en.farFrames || 0) + 1 : 0;
+    if (en.currentMove !== "slam" && (en.farFrames > SLAM.farFrames || (en.attacksSinceSlam || 0) >= SLAM.every)) {
+      en.currentMove = "slam";
+      en.attackCooldown = Math.max(en.attackCooldown, telegraphLead(en) + 8);
+      en.telegraphed = false;
+      en.farFrames = 0;
+    }
+    if (en.currentMove === "slam") {
+      const lead = telegraphLead(en);
+      if (!en.telegraphed && en.attackCooldown <= lead) {
+        en.telegraphed = true;
+        en.telegraphAt = en.attackCooldown;
+        playSound("bash_tell");
+        createImpact(en.x, en.y - 90, "#ffaa00");
+      }
+      if (en.attackCooldown <= 0) {
+        en.justAttacked = 8;
+        en.attacksSinceSlam = 0;
+        enforcerSlam(en);
+        en.currentMove = random() < 0.5 ? "jab" : "bash";
+        en.maxCooldown = nextCycle(en, 60);
+        en.attackCooldown = en.maxCooldown;
+        beginPunishWindow(en, "bash");
+      }
+      return;
+    }
     if (en.currentMove !== "bash" && en.x > gameState.player.x + 100) {
       en.x -= en.speed * 0.5 * en.arcMods.walkDownMult;
     }
@@ -3828,6 +3934,7 @@
       en.justAttacked = 5;
       const struck = en.currentMove;
       resolveBossStrike(en, struck === "bash" ? 30 : 12, struck === "bash");
+      en.attacksSinceSlam = (en.attacksSinceSlam || 0) + 1;
       if (en.enraged) {
         en.currentMove = "bash";
         en.enraged = false;
@@ -3849,6 +3956,7 @@
   var PHANTOM_SHIFT = { every: 3, everyOverdrive: 2, backOff: 250 };
   function phantomShift(en) {
     en.attacksSinceShift = 0;
+    gameState.phantomClones = [];
     const oldX = en.x, oldY = en.y;
     if (en.trails) {
       en.trails.push({ x: oldX, y: oldY, lane: en.lane, opacity: 0.7 });
@@ -3899,7 +4007,15 @@
     const inRange = Math.abs(en.x - gameState.player.x) < 140 && en.stun <= 0;
     meleeTelegraph(en, inRange, () => {
       playSound(en.currentMove === "feint" ? "feint_tell" : "jab_tell");
+      const n = en.phase === 2 ? 2 : random() < 0.5 ? 1 : 0;
+      const lanes = [0, 1, 2].filter((l) => l !== en.lane).sort(() => random() - 0.5).slice(0, n);
+      gameState.phantomClones = lanes.map((lane) => ({ lane, life: 1 }));
+      if (n && !gameState.seenCloneHint) {
+        gameState.seenCloneHint = true;
+        showToast("ONLY THE REAL ONE CASTS A SHADOW", "#aa00ff");
+      }
     });
+    if (gameState.phantomClones && gameState.phantomClones.length) gameState.phantomClones = gameState.phantomClones.filter((c) => c.lane !== en.lane);
     if (inRange) {
       if (en.currentMove === "feint" && !en.feintSwitched && en.attackCooldown <= Math.max(14, Math.floor(16 * en.arcMods.punishWindowMult))) {
         en.feintSwitched = true;
@@ -3911,6 +4027,10 @@
         en.justAttacked = 5;
         const struck = en.currentMove;
         resolveBossStrike(en, 15, false);
+        if (gameState.phantomClones && gameState.phantomClones.length) {
+          gameState.phantomClones.forEach((c) => createShatter(en.x, gameState.height * CONSTANTS.LANE_Y[c.lane] - 60, "#aa00ff"));
+          gameState.phantomClones = [];
+        }
         en.attacksSinceShift = (en.attacksSinceShift || 0) + 1;
         en.decoyRolledThisCycle = false;
         en.decoyTimer = 0;
@@ -3944,88 +4064,108 @@
       }
     } else {
       en.x = gameState.width - 150 + Math.sin(Date.now() * 2e-3) * 50;
-      if (!en.telegraphed && en.attackCooldown <= 80) {
-        en.telegraphed = true;
-        en.telegraphAt = en.attackCooldown;
-        playSound("zoner_tell");
-        en.targetLanes = [gameState.player.lane];
-        let adjacentLane = gameState.player.lane === 1 ? random() > 0.5 ? 0 : 2 : 1;
-        en.targetLanes.push(adjacentLane);
-        en.canisterFrom = en.attackCooldown;
-        gameState.canisters = en.targetLanes.map((lane) => ({ lane, x0: en.x - 30, x: en.x - 30, spin: 0 }));
+      if (!en.volley && en.attackCooldown <= MONK.lead) startMonkVolley(en);
+      if (en.volley) updateMonkVolley(en);
+    }
+  }
+  var MONK = { lead: 80, staggerGap: 26, sweepGap: 24, quickFuse: 55, beamFuse: 50 };
+  function startMonkVolley(en) {
+    const p = gameState.player, hurt = en.hp <= en.maxHp * 0.5;
+    const adj = p.lane === 1 ? random() > 0.5 ? 0 : 2 : 1;
+    const patterns = hurt ? ["pair", "stagger", "sweep", "quick", "beam"] : ["pair", "stagger"];
+    let kind = patterns[Math.floor(random() * patterns.length)];
+    if (kind === en.lastVolley && patterns.length > 1) kind = patterns[(patterns.indexOf(kind) + 1) % patterns.length];
+    en.lastVolley = kind;
+    const can = (lane, fuse) => ({ kind: "canister", lane, fuse, t: 0, x0: en.x - 30, x: en.x - 30, spin: 0 });
+    let items;
+    if (kind === "pair") items = [can(p.lane, MONK.lead), can(adj, MONK.lead)];
+    else if (kind === "stagger") items = [can(p.lane, MONK.lead), can(adj, MONK.lead + MONK.staggerGap)];
+    else if (kind === "sweep") {
+      const order = random() < 0.5 ? [0, 1, 2] : [2, 1, 0];
+      items = order.map((l, i) => can(l, MONK.lead + i * MONK.sweepGap));
+    } else if (kind === "quick") items = [can(p.lane, MONK.quickFuse)];
+    else items = [{ kind: "beam", lane: p.lane, fuse: MONK.beamFuse, t: 0, x0: en.x - 30, x: en.x - 30 }];
+    en.volley = { kind, items };
+    gameState.canisters = items;
+    en.targetLanes = items.map((i) => i.lane);
+    en.telegraphed = true;
+    en.telegraphAt = Math.min(...items.map((i) => i.fuse));
+    en.attackCooldown = 99999;
+    playSound("zoner_tell");
+    if (kind !== "pair") spawnFloatingText(en.x - 20, en.y - 150, { stagger: "STAGGERED", sweep: "SWEEP", quick: "QUICK", beam: "BEAM" }[kind], "#00ff00");
+  }
+  function updateMonkVolley(en) {
+    const p = gameState.player, v = en.volley;
+    for (const it of v.items) {
+      it.t++;
+      const left = it.fuse - it.t;
+      if (it.kind === "canister") {
+        const tx = p.x + 20;
+        it.x = tx + (it.x0 - tx) * Math.max(0, left / it.fuse);
+        it.spin += 0.25;
       }
-      if (gameState.canisters && gameState.canisters.length && en.canisterFrom) {
-        const k = Math.max(0, en.attackCooldown) / en.canisterFrom;
-        for (const c of gameState.canisters) {
-          const tx = gameState.player.x + 20;
-          c.x = tx + (c.x0 - tx) * k;
-          c.spin += 0.25;
-        }
-      }
-      if (en.attackCooldown > 0 && en.targetLanes.length > 0) {
-        en.targetLanes.forEach((laneIndex) => {
-          gameState.laneFlash[laneIndex] = en.attackCooldown <= 15 ? 2 : 1;
-          if (gameState.player.lane === laneIndex) {
-            gameState.player.dangerLevel = Math.max(gameState.player.dangerLevel, en.attackCooldown <= 15 ? 2 : 1);
-          }
-        });
-        if (en.arcMods.deceptiveOrder && en.attackCooldown > 45) {
-          const safeLane = [0, 1, 2].find((l) => !en.targetLanes.includes(l));
-          if (safeLane !== void 0) gameState.laneFlash[safeLane] = Math.max(gameState.laneFlash[safeLane], 1);
-        }
-      }
-      if (en.attackCooldown <= 0) {
-        playSound("laser");
-        en.justAttacked = 10;
-        gameState.shake = 15;
-        if (en.targetLanes.length > 0) {
-          en.targetLanes.forEach((laneIndex) => {
-            const can = (gameState.canisters || []).find((c) => c.lane === laneIndex);
-            const bx = can ? can.x : gameState.player.x, ly = gameState.height * CONSTANTS.LANE_Y[laneIndex];
-            for (let i = 0; i < 6; i++) createImpact(bx + (i - 2) * 40, ly - 20 - i % 2 * 30, "#00ff00");
-            triggerShockwave(bx, ly - 30, "#00ff00");
-            for (const add of gameState.enemies) {
-              if (add.isBoss || add.lane !== laneIndex || Math.abs(add.x - bx) > CONSTANTS.CANISTER.radius) continue;
-              add.hp -= CONSTANTS.CANISTER.addDamage;
-              add.stun = Math.max(add.stun, 20);
-              add.vx += 8;
-              spawnFloatingText(add.x, add.y - 120, "CAUGHT IN THE BLAST", "#00ff00");
-            }
-            if (gameState.player.lane === laneIndex) {
-              if (gameState.player.state === "ghost_step") {
-                spawnFloatingText(gameState.player.x, gameState.player.y - 50, "EVADED", "#888888");
-                registerPerfectGhostStep();
-              } else takeDamage(gameState.isInstinct ? 15 : 30, true, en);
-            }
-          });
-        }
-        en.targetLanes = [];
-        en.telegraphed = false;
-        gameState.canisters = [];
-        en.canisterFrom = 0;
-        en.bossMashCount++;
-        const volleysPerBurst = 1 + (en.arcMods.patternChainLength || 1);
-        if (en.bossMashCount >= volleysPerBurst) {
-          en.currentMove = "recharge";
-          en.attackCooldown = Math.floor(180 / en.arcMods.teleportRateMult);
-          en.bossMashCount = 0;
-          en.lane = gameState.player.lane;
-          en.y = gameState.height * CONSTANTS.LANE_Y[en.lane];
-          en.x = gameState.player.x + 100;
-          en.punishShown = false;
-          playSound("ghost_step");
-          createImpact(en.x, en.y - 60, "#00ff00");
-          spawnFloatingText(en.x, en.y - 120, "RECHARGING \u2014 OPEN!", "#00ff00");
-          if (en.arcMods.summonSupportPressure && gameState.enemies.filter((e) => !e.isBoss).length < 1) {
-            spawnMonkAdd();
-          }
-        } else {
-          en.attackCooldown = en.arcMods.followupPattern ? 88 : 100;
-          let otherLanes = [0, 1, 2].filter((l) => l !== en.lane);
-          en.lane = otherLanes[Math.floor(random() * otherLanes.length)];
-          en.y = gameState.height * CONSTANTS.LANE_Y[en.lane];
-        }
-      }
+      gameState.laneFlash[it.lane] = Math.max(gameState.laneFlash[it.lane], left <= 15 ? 2 : 1);
+      if (p.lane === it.lane) p.dangerLevel = Math.max(p.dangerLevel, left <= 15 ? 2 : 1);
+      if (left <= 0) monkDetonate(en, it);
+    }
+    v.items = v.items.filter((it) => it.t < it.fuse);
+    gameState.canisters = v.items;
+    if (en.arcMods.deceptiveOrder && v.items.length && v.items.every((it) => it.fuse - it.t > 45)) {
+      const safe = [0, 1, 2].find((l) => !v.items.some((it) => it.lane === l));
+      if (safe !== void 0) gameState.laneFlash[safe] = Math.max(gameState.laneFlash[safe], 1);
+    }
+    if (!v.items.length) endMonkVolley(en);
+  }
+  function monkDetonate(en, it) {
+    const p = gameState.player, ly = gameState.height * CONSTANTS.LANE_Y[it.lane];
+    const bx = it.kind === "beam" ? p.x : it.x;
+    playSound("laser");
+    en.justAttacked = 10;
+    gameState.shake = Math.max(gameState.shake, 15);
+    if (it.kind === "beam") {
+      for (let i = 0; i < 6; i++) createImpact(en.x - i * 150, ly - 60, "#00ff00");
+    } else {
+      for (let i = 0; i < 6; i++) createImpact(bx + (i - 2) * 40, ly - 20 - i % 2 * 30, "#00ff00");
+      triggerShockwave(bx, ly - 30, "#00ff00");
+    }
+    for (const add of gameState.enemies) {
+      if (add.isBoss || add.lane !== it.lane || it.kind !== "beam" && Math.abs(add.x - bx) > CONSTANTS.CANISTER.radius) continue;
+      add.hp -= CONSTANTS.CANISTER.addDamage;
+      add.stun = Math.max(add.stun, 20);
+      add.vx += 8;
+      spawnFloatingText(add.x, add.y - 120, "CAUGHT IN THE BLAST", "#00ff00");
+    }
+    if (p.lane === it.lane) {
+      if (p.state === "ghost_step") {
+        spawnFloatingText(p.x, p.y - 50, "EVADED", "#888888");
+        registerPerfectGhostStep();
+      } else takeDamage(gameState.isInstinct ? 15 : 30, true, en);
+    }
+  }
+  function endMonkVolley(en) {
+    en.volley = null;
+    gameState.canisters = [];
+    en.targetLanes = [];
+    en.telegraphed = false;
+    en.bossMashCount++;
+    const volleysPerBurst = 1 + (en.arcMods.patternChainLength || 1);
+    if (en.bossMashCount >= volleysPerBurst) {
+      en.currentMove = "recharge";
+      en.attackCooldown = Math.floor(180 / en.arcMods.teleportRateMult);
+      en.bossMashCount = 0;
+      en.lane = gameState.player.lane;
+      en.y = gameState.height * CONSTANTS.LANE_Y[en.lane];
+      en.x = gameState.player.x + 100;
+      en.punishShown = false;
+      playSound("ghost_step");
+      createImpact(en.x, en.y - 60, "#00ff00");
+      spawnFloatingText(en.x, en.y - 120, "RECHARGING \u2014 OPEN!", "#00ff00");
+      if (en.arcMods.summonSupportPressure && gameState.enemies.filter((e) => !e.isBoss).length < 1) spawnMonkAdd();
+    } else {
+      en.attackCooldown = en.arcMods.followupPattern ? 88 : 100;
+      let otherLanes = [0, 1, 2].filter((l) => l !== en.lane);
+      en.lane = otherLanes[Math.floor(random() * otherLanes.length)];
+      en.y = gameState.height * CONSTANTS.LANE_Y[en.lane];
     }
   }
   function updateLiveLanes() {
@@ -4091,6 +4231,15 @@
       en.stringIdx = 0;
       en.stringsThrown = (en.stringsThrown || 0) + 1;
       electrifyLane(en.lane);
+      if (en.hp <= en.maxHp * 0.5) {
+        if (en.phase !== 2) {
+          en.phase = 2;
+          spawnFloatingText(en.x, en.y - 170, "OVERLOAD", "#fff36b");
+          gameState.shake = Math.max(gameState.shake, 20);
+        }
+        if (p.lane !== en.lane) electrifyLane(p.lane);
+        else electrifyLane(p.lane === 1 ? random() < 0.5 ? 0 : 2 : 1);
+      }
       const shoveNext = en.stringsThrown % (en.arcMods.shoveEvery || 3) === 0;
       en.currentMove = shoveNext ? "shove" : "string";
       en.maxCooldown = nextCycle(en, shoveNext ? 60 : 44);
@@ -4131,6 +4280,7 @@
   }
   function handleNegative(en) {
     if (en.slipCooldown > 0) en.slipCooldown--;
+    primeNegativeRead(en);
     if (en.phase === 1 && en.hp < en.maxHp * 0.5) {
       en.phase = 2;
       gameState.shake = 40;
@@ -4161,6 +4311,7 @@
   function updateBosses() {
     updateEnemyEchoes();
     if (!gameState.finisher) updateLiveLanes();
+    if (!gameState.finisher) updateSlamWaves();
     for (const en of gameState.enemies) {
       if (!en.isBoss) continue;
       checkBossThresholds(en);
@@ -4206,7 +4357,7 @@
       { id: "apex_technique_flow_state", kind: "rank", draftRole: "apex", tree: "technique", rank: 5, memoryPolicy: "none", name: "Flow State", desc: "A streak of clean hits and Perfect Slips ramps up your Instinct and EXP gain. Getting hit resets it.", weight: 8, effects: [{ op: "incOrb", tree: "technique", amount: 1 }, { op: "grantUpgradeId", id: "apex_technique_flow_state" }, { op: "setFlag", key: "flowState", value: true }] }
     ],
     masteries: [
-      { id: "mast_weavers_step", kind: "mastery", draftRole: "evolution", tree: "speed", tier: 2, repeatable: false, memoryPolicy: "hard", name: "Weaver's Step", desc: "Ghost Step cooldown reduced by 20%.", weight: 8, reqs: { orbTreeAtLeast: { speed: 2 }, notOwned: ["mast_weavers_step"] }, effects: [{ op: "grantUpgradeId", id: "mast_weavers_step" }, { op: "mulMod", key: "ghostStepCooldownMult", amount: 0.8 }] },
+      { id: "mast_weavers_step", kind: "mastery", draftRole: "evolution", tree: "speed", tier: 2, repeatable: false, memoryPolicy: "hard", name: "Weaver's Step", desc: "Ghost Step recovers 20% faster.", weight: 8, reqs: { orbTreeAtLeast: { speed: 2 }, notOwned: ["mast_weavers_step"] }, effects: [{ op: "grantUpgradeId", id: "mast_weavers_step" }, { op: "mulMod", key: "ghostStepCooldownMult", amount: 0.8 }] },
       { id: "mast_loose_shoulders", kind: "mastery", draftRole: "evolution", tree: "speed", tier: 2, repeatable: false, memoryPolicy: "hard", name: "Loose Shoulders", desc: "A missed Hook \u2014 or Check Hook (Guard + Hook) \u2014 recovers 18% faster.", weight: 8, reqs: { orbTreeAtLeast: { speed: 2 }, notOwned: ["mast_loose_shoulders"] }, effects: [{ op: "grantUpgradeId", id: "mast_loose_shoulders" }, { op: "mulMod", key: "hookRecoveryMult", amount: 0.82 }] },
       { id: "mast_relentless_rhythm", kind: "mastery", draftRole: "evolution", tree: "speed", tier: 2, repeatable: false, memoryPolicy: "hard", name: "Relentless Rhythm", desc: "A missed Jab costs no Combo at all.", weight: 8, reqs: { orbTreeAtLeast: { speed: 2 }, notOwned: ["mast_relentless_rhythm"] }, effects: [{ op: "grantUpgradeId", id: "mast_relentless_rhythm" }, { op: "setFlag", key: "relentlessRhythm", value: true }] },
       { id: "mast_heavy_hands", kind: "mastery", draftRole: "evolution", tree: "power", tier: 2, repeatable: false, memoryPolicy: "hard", name: "Heavy Hands", desc: "Your Cross staggers armored enemies \u2014 Shields, Bruisers, the Enforcer \u2014 for longer.", weight: 8, reqs: { orbTreeAtLeast: { power: 2 }, notOwned: ["mast_heavy_hands"] }, effects: [{ op: "grantUpgradeId", id: "mast_heavy_hands" }, { op: "addMod", key: "crossArmorStunBonus", amount: 12 }] },
@@ -4230,7 +4381,6 @@
     ],
     overclocks: [
       { id: "oc_vital_surge", kind: "overclock", draftRole: "fallback", tree: "general", tier: 4, repeatable: true, memoryPolicy: "soft", name: "Vital Surge", desc: "Restore +20 health.", weight: 20, reqs: {}, effects: [{ op: "heal", amount: 20 }, { op: "incOverclock", key: "vitality", amount: 1 }] },
-      { id: "oc_quick_nerves", kind: "overclock", draftRole: "fallback", tree: "general", tier: 4, repeatable: true, memoryPolicy: "soft", name: "Quick Nerves", desc: "Ghost Step refills 5% faster.", weight: 12, reqs: {}, effects: [{ op: "mulMod", key: "ghostStepCooldownMult", amount: 0.95 }, { op: "incOverclock", key: "nerves", amount: 1 }] },
       { id: "oc_sharp_eye", kind: "overclock", draftRole: "fallback", tree: "general", tier: 4, repeatable: true, memoryPolicy: "soft", name: "Keen Read", desc: "Perfect Slips pay a little more Instinct and score.", weight: 12, reqs: {}, effects: [{ op: "addMod", key: "perfectSlipRewardBonusMult", amount: 0.08 }, { op: "incOverclock", key: "focus", amount: 1 }] },
       { id: "oc_calm_engine", kind: "overclock", draftRole: "fallback", tree: "general", tier: 4, repeatable: true, memoryPolicy: "soft", name: "Calm Engine", desc: "+6% Instinct from everything, for the rest of the run.", weight: 12, reqs: {}, effects: [{ op: "addMod", key: "instinctGainBonusMult", amount: 0.06 }, { op: "incOverclock", key: "instinct", amount: 1 }] },
       { id: "oc_clinch_breaker", kind: "overclock", draftRole: "fallback", tree: "general", tier: 4, repeatable: true, memoryPolicy: "soft", name: "Clinch Breaker", desc: "Getting hit slides you back 6% less.", weight: 10, reqs: {}, effects: [{ op: "mulMod", key: "incomingRecoilMult", amount: 0.94 }, { op: "incOverclock", key: "clinch", amount: 1 }] },
@@ -5073,6 +5223,24 @@
   }
   function drawBossTells(ctx3, en) {
     if (!en.isBoss || gameState.bossIntroTimer > 0) return;
+    if (en.controller === "negative" && en.readPrimed && !isBossOpen(en)) {
+      const c = gameState.strikerColor || "#00ffff", pulse = 0.55 + 0.45 * Math.sin(Date.now() * 0.018);
+      ctx3.save();
+      ctx3.globalAlpha = pulse;
+      ctx3.strokeStyle = c;
+      ctx3.shadowColor = c;
+      ctx3.shadowBlur = 22;
+      ctx3.lineWidth = 4;
+      ctx3.beginPath();
+      ctx3.ellipse(en.x + en.w / 2, en.y - en.h * 0.6, en.w * 0.95, en.h * 0.75, 0, 0, Math.PI * 2);
+      ctx3.stroke();
+      ctx3.shadowBlur = 0;
+      ctx3.fillStyle = c;
+      ctx3.font = "900 13px Orbitron";
+      ctx3.textAlign = "center";
+      ctx3.fillText("READING YOU", en.x + en.w / 2, en.y - en.h * 1.45);
+      ctx3.restore();
+    }
     const cx = en.x - 34, top = en.y - en.h * 0.95;
     ctx3.save();
     if (isBossOpen(en)) {
@@ -5107,7 +5275,7 @@
       ctx3.fillRect(cx - 40, top + 16, 80, 4);
       ctx3.fillStyle = "#22d3ee";
       ctx3.fillRect(cx - 40, top + 16, 80 * Math.max(0, Math.min(1, left)), 4);
-    } else if (en.telegraphed && en.stun <= 0 && en.attackCooldown > 0) {
+    } else if (en.telegraphed && en.stun <= 0 && en.attackCooldown > 0 && !en.volley) {
       const move = en.controller === "static_monk" ? "laser" : en.currentMove || "jab";
       const style = MOVE_STYLE[move] || MOVE_STYLE.jab;
       const lead = Math.max(1, en.telegraphAt || 30);
@@ -5632,11 +5800,28 @@
   function drawCanisters(ctx3) {
     const cs = gameState.canisters;
     if (!cs || !cs.length) return;
-    const monk = gameState.enemies.find((e) => e.controller === "static_monk");
-    const k = monk && monk.canisterFrom ? Math.max(0, monk.attackCooldown) / monk.canisterFrom : 1;
     ctx3.save();
     for (const c of cs) {
+      const k = c.fuse ? Math.max(0, (c.fuse - c.t) / c.fuse) : 1;
       const ly = gameState.height * CONSTANTS.LANE_Y[c.lane], cy = ly - 12;
+      if (c.kind === "beam") {
+        const a = 1 - k;
+        ctx3.strokeStyle = `rgba(0,255,0,${(0.25 + a * 0.75).toFixed(3)})`;
+        ctx3.lineWidth = 2 + a * 8;
+        ctx3.setLineDash([15, 10]);
+        ctx3.lineDashOffset = -Date.now() * 0.05;
+        ctx3.beginPath();
+        ctx3.moveTo(c.x0, ly - 60);
+        ctx3.lineTo(gameState.player.x, ly - 60);
+        ctx3.stroke();
+        ctx3.setLineDash([]);
+        ctx3.strokeStyle = "#00ff00";
+        ctx3.lineWidth = 2;
+        ctx3.beginPath();
+        ctx3.arc(gameState.player.x, ly - 60, 20 - a * 15, 0, Math.PI * 2);
+        ctx3.stroke();
+        continue;
+      }
       const g = ctx3.createLinearGradient(gameState.player.x, 0, c.x, 0);
       g.addColorStop(0, "rgba(0,255,0,0.6)");
       g.addColorStop(1, "rgba(0,255,0,0.02)");
@@ -5676,6 +5861,42 @@
       ctx3.fill();
     }
     ctx3.restore();
+  }
+  function drawShockwaves(ctx3) {
+    const ws = gameState.slamWaves;
+    if (!ws || !ws.length) return;
+    ctx3.save();
+    for (const w of ws) {
+      const ly = gameState.height * CONSTANTS.LANE_Y[w.lane];
+      if (w.delay > 0) {
+        ctx3.globalAlpha = 0.5;
+        ctx3.fillStyle = w.color;
+        ctx3.beginPath();
+        ctx3.ellipse(w.x + 20, ly, 30, 6, 0, 0, Math.PI * 2);
+        ctx3.fill();
+        continue;
+      }
+      ctx3.globalAlpha = 1;
+      ctx3.strokeStyle = w.color;
+      ctx3.shadowColor = w.color;
+      ctx3.shadowBlur = 16;
+      for (let i = 0; i < 3; i++) {
+        ctx3.lineWidth = 6 - i * 2;
+        ctx3.globalAlpha = 1 - i * 0.3;
+        ctx3.beginPath();
+        ctx3.ellipse(w.x + i * 26, ly - 4, 14 + i * 4, 26 - i * 6, 0, Math.PI * 0.5, Math.PI * 1.5);
+        ctx3.stroke();
+      }
+      ctx3.shadowBlur = 0;
+    }
+    ctx3.restore();
+  }
+  function drawPhantomClones(ctx3) {
+    const cs = gameState.phantomClones;
+    if (!cs || !cs.length) return;
+    const ph = gameState.enemies.find((e) => e.controller === "phantom_boxer");
+    if (!ph) return;
+    for (const c of cs) drawBoxer(ctx3, { ...ph, lane: c.lane, y: gameState.height * CONSTANTS.LANE_Y[c.lane], trails: [] }, false, 0.85, true);
   }
   function drawKoBanner(ctx3) {
     const a = koBannerAlpha();
@@ -6348,6 +6569,8 @@
     gameState.paletteT = 0;
     gameState.hazards = [];
     gameState.canisters = [];
+    gameState.slamWaves = [];
+    gameState.phantomClones = [];
     gameState.hazardCooldown = CONSTANTS.HAZARDS.cooldownFrames;
     gameState.hazardsThisStage = 0;
     gameState.surpriseBudget = isBoss ? 0 : (CONSTANTS.SURPRISE.budgetByArc || {})[safeArcIndex] || 0;
@@ -6858,23 +7081,23 @@
       const en = gameState.enemies[i];
       if (en.tutorialType && !gameState.seenTutorials[en.tutorialType] && en.x < gameState.player.x + 250) {
         if (en.tutorialType === "slip") {
-          let slipText = 'When a lane flashes <span class="text-pink-500 font-bold">RED</span>, an attack is winding up.<br><br>Wait for it to flash <span class="text-white font-bold">WHITE</span>, then press <span class="text-cyan-400 font-bold">[UP]</span> or <span class="text-cyan-400 font-bold">[DOWN]</span> to Perfect Slip!<br><br>Slipping too early only counts as a <span class="text-gray-300 font-bold">Good Slip</span> &mdash; it resets the attack, but only a <span class="text-white font-bold">Perfect Slip</span> clears this one.<br><br>' + (gameState.runCount <= 1 ? "<i>Land a Perfect Slip to pass!</i>" : "<i>Slip the attack to survive!</i>");
+          let slipText = 'Lane flashes <span class="text-pink-500 font-bold">RED</span> &rarr; attack coming.<br>Flashes <span class="text-white font-bold">WHITE</span> &rarr; press <span class="text-cyan-400 font-bold">[UP]</span> / <span class="text-cyan-400 font-bold">[DOWN]</span> to <b>Perfect Slip</b>.<br><br>' + (gameState.runCount <= 1 ? "<i>Land a Perfect Slip.</i>" : "<i>Slip the attack.</i>");
           triggerTutorial("slip", "ENEMY ATTACK", slipText);
         } else if (en.tutorialType === "counter") {
-          let counterText = 'Your Perfect Slip was successful!<br><br>Notice the <span class="text-white font-bold">White Energy Rings</span> around your fists.<br><br>You are now holding a <span class="text-white font-bold">Counter Charge</span>. Your next strike will deal massive damage, shatter their posture, and cause extra hitstop.<br><br>' + (gameState.runCount <= 1 ? "<i>Strike this dummy enemy to unleash it!</i>" : "<i>Strike an enemy to unleash it!</i>");
+          let counterText = 'Rings on your fists = <span class="text-white font-bold">Counter Charge</span>.<br>Your next hit lands huge.<br><br>' + (gameState.runCount <= 1 ? "<i>Hit the dummy.</i>" : "<i>Hit an enemy.</i>");
           triggerTutorial("counter", "COUNTER READY", counterText);
         } else if (en.tutorialType === "shield") {
-          triggerTutorial("shield", "GOLD ARMOR", `Enemies with Gold Armor will block your Jabs.<br><br>Use your <span class="text-cyan-400 font-bold">CROSS [${keyName("cross")}]</span> to shatter their defense!<br><br><i>Break the armor to pass!</i>`);
+          triggerTutorial("shield", "GOLD ARMOR", `Gold Armor blocks Jabs.<br><span class="text-cyan-400 font-bold">CROSS [${keyName("cross")}]</span> breaks it.<br><br><i>Break the armor.</i>`);
         } else if (en.tutorialType === "guard") {
-          triggerTutorial("guard", "GUARDING", `Guard is the stable answer when timing gets crowded, even if a clean slip is possible.<br><br>Hold <span class="text-cyan-400 font-bold">[${keyName("guard")}]</span> to Guard &mdash; it cuts incoming damage by 75% against <i>most</i> attackers.<br><br>Not all, though. A few enemies bite through Guard far more than that. You will get a specific heads-up the first time one shows up &mdash; watch for it.<br><br><i>Guard the next attack to pass!</i>`);
+          triggerTutorial("guard", "GUARD", `Hold <span class="text-cyan-400 font-bold">[${keyName("guard")}]</span> to block 75% of a hit.<br>Some enemies bite through it.<br><br><i>Guard the next attack.</i>`);
         } else if (en.tutorialType === "ghost_step") {
-          triggerTutorial("ghost_step", "GHOST STEP", `This one is too fast to jab, guard, or slip cleanly.<br><br>Press <span class="text-cyan-400 font-bold">[${keyName("ghost")}]</span> for a Ghost Step &mdash; a short evasive dash with a moment of invincibility.<br><br><i>Ghost Step the next attack to pass!</i>`);
+          triggerTutorial("ghost_step", "GHOST STEP", `Too fast to slip?<br><span class="text-cyan-400 font-bold">[${keyName("ghost")}]</span> dashes through it, untouchable.<br><br><i>Ghost Step the next attack.</i>`);
         }
         return;
       }
       if (!en.tutorialType && en.isActiveThreat && en.x - gameState.player.x < 400) {
         if (en.type === "bruiser" && !en.isBoss && !gameState.seenTutorials.bruiser_id) {
-          triggerTutorial("bruiser_id", "ARMORED BRUISER", `This one shrugs off Jabs entirely.<br><br>Jabs still chip its health, but only a <span class="text-cyan-400 font-bold">CROSS [${keyName("cross")}]</span> &mdash; or a Counter Hit &mdash; actually staggers it.`);
+          triggerTutorial("bruiser_id", "BRUISER", `Jabs won't stagger it.<br>Use a <span class="text-cyan-400 font-bold">CROSS [${keyName("cross")}]</span> or a Counter.`);
           return;
         }
         if ((en.stringLen || 1) > 1 && !en.isBoss && !gameState.seenTutorials.string_id) {
@@ -6882,7 +7105,7 @@
           return;
         }
         if (en.type === "assassin" && !en.isBoss && !gameState.seenTutorials.assassin_id) {
-          triggerTutorial("assassin_id", "ASSASSIN", 'This is the exception the Guard tutorial warned you about.<br><br>Guard normally blocks 75% of incoming damage. Against an Assassin, only about 40% gets blocked &mdash; the rest bites through.<br><br>You have to actually read it and <span class="text-cyan-400 font-bold">SLIP [UP/DOWN]</span>, not just Guard.');
+          triggerTutorial("assassin_id", "ASSASSIN", 'Bites through Guard.<br><span class="text-cyan-400 font-bold">SLIP</span> it instead.');
           return;
         }
       }
@@ -7735,6 +7958,8 @@
     ctx.globalAlpha = 1;
     drawLiveLanes(ctx);
     drawCanisters(ctx);
+    drawShockwaves(ctx);
+    drawPhantomClones(ctx);
     drawFinisherDim(ctx);
     drawAfterimages(ctx);
     gameState.player.trails.forEach((t) => {
@@ -8203,6 +8428,8 @@
     gameState.wagerSeen = [];
     gameState.retries = 0;
     gameState.canisters = [];
+    gameState.slamWaves = [];
+    gameState.phantomClones = [];
     gameState.rankOrder = [];
     gameState.orbPulse = 0;
     gameState.paletteFrom = 1;
@@ -8372,8 +8599,8 @@
   };
   var ANNOUNCE_KEY = "neon_strike_announced_v1";
   var UNLOCK_NOTES = {
-    practice: { title: "PRACTICE ROOM UNLOCKED", color: "#a78bfa", text: "Pick any enemy you've met \u2014 or a boss you've reached \u2014 and drill it on a loop. You can't lose, nothing is scored, and the SLIP WINDOWS overlay shows exactly when to move.<br><br>Find it on the main menu." },
-    heat: { title: "MODIFIERS UNLOCKED", color: "#fb923c", text: "Stack optional modifiers \u2014 faster enemies, no healing, no ten-count\u2026 \u2014 for a bigger score multiplier on every run.<br><br>Toggle them from HEAT on the main menu." }
+    practice: { title: "PRACTICE ROOM UNLOCKED", color: "#a78bfa", text: "Drill any enemy or boss you've reached. You can't lose." },
+    heat: { title: "MODIFIERS UNLOCKED", color: "#fb923c", text: "Stack modifiers for a bigger score multiplier." }
   };
   function loadAnnounced() {
     try {
@@ -8427,6 +8654,16 @@
   }
   window.engineDismissUnlock = dismissUnlock;
   window.engineOpenPractice = () => openSubmenu("practice");
+  window.engineToggleTutorial = () => {
+    const cb = document.getElementById("tutorial-toggle-cb"), lbl = document.getElementById("tutorial-toggle-state");
+    if (!cb) return;
+    cb.checked = !cb.checked;
+    if (lbl) {
+      lbl.innerText = cb.checked ? "ON" : "OFF";
+      lbl.style.color = cb.checked ? "#22d3ee" : "#6b7280";
+    }
+    playSound("slip");
+  };
   window.engineOpenHeat = () => openSubmenu("heat");
   window.engineCloseSubmenu = closeSubmenu;
   function toggleHowTo() {
@@ -9035,7 +9272,7 @@
     let banner = document.getElementById("instinct-ready-banner");
     if (gameState.instinctMeter >= 100 && !gameState.isInstinct) {
       if (!gameState.seenTutorials.instinct) {
-        triggerTutorial("instinct", "INSTINCT MAXED", `Your meter is full!<br><br>Press <span class="text-cyan-400 font-bold">[${keyName("instinct")}] / pad A</span> to unleash Instinct &mdash; double knockback and massive hitstop.<br><br>It stays banked until you use it &mdash; save it for a crowd.<br><br><b>Then go deeper:</b> land a <span class="text-white font-bold">Perfect Slip while Instinct is running</span> and you drop into <span class="text-white font-bold">THE ZONE</span> &mdash; the world slows down around you.`);
+        triggerTutorial("instinct", "INSTINCT READY", `Press <span class="text-cyan-400 font-bold">[${keyName("instinct")}]</span> to unleash it.<br>Perfect Slip during Instinct &rarr; <span class="text-white font-bold">THE ZONE</span>.`);
         return;
       } else if (banner) banner.style.display = "block";
     } else if (banner) banner.style.display = "none";
@@ -9103,7 +9340,7 @@
     gameState.health = Math.round(gameState.health);
     if (typeof updateHUD === "function") updateHUD();
     if (!gameState.seenTutorials.footwork_tip && gameState.currentStage === 1 && gameState.enemies.length === 0 && (!gameState.tutorialEnabled || gameState.spawnTotal >= 5)) {
-      triggerTutorial("footwork_tip", "FOOTWORK", `You are not locked to one spot.<br><br>Hold <span class="text-cyan-400 font-bold">[${keyName("right")}]</span> to press forward and meet them early; hold <span class="text-cyan-400 font-bold">[${keyName("left")}]</span> to give ground and buy a beat. While you're fighting you hold your position.<br><br>Ghost Step has its own button: <span class="text-cyan-400 font-bold">[${keyName("ghost")}]</span> &mdash; a short invincible dash straight through an attack.`);
+      triggerTutorial("footwork_tip", "FOOTWORK", `<span class="text-cyan-400 font-bold">[${keyName("right")}]</span> press forward &nbsp;\xB7&nbsp; <span class="text-cyan-400 font-bold">[${keyName("left")}]</span> give ground<br><span class="text-cyan-400 font-bold">[${keyName("ghost")}]</span> Ghost Step`);
       return;
     }
     if (gameState.pendingUpgrades > 0 && gameState.enemies.length === 0 && !gameState.bossActive && !gameState.stageClearing && gameState.bossIntroTimer <= 0 && !tutorialRunning()) {
@@ -9163,6 +9400,8 @@
     gameState.knockdown = null;
     gameState.bossKo = null;
     gameState.canisters = [];
+    gameState.slamWaves = [];
+    gameState.phantomClones = [];
     gameState.knockdownsThisArc = 0;
     gameState.health = gameState.maxHealth;
     gameState.hpCeil = void 0;

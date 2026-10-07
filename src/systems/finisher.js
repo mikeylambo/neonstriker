@@ -102,7 +102,7 @@ export function startFinisher(en, kind) {
     en.y = midY; p.y = midY;
     en.recoverTimer = 0; en.telegraphed = false; en.shiftWarning = 0; en.exposedTimer = 0;
     en.decoyTimer = 0; en.targetLanes = []; en.justAttacked = 0;
-    st.hazards = []; st.liveLanes = []; st.canisters = [];
+    st.hazards = []; st.liveLanes = []; st.canisters = []; st.slamWaves = []; st.phantomClones = [];
     st.hitstop = 0;
 
     const label = kind === 'ko' ? 'FINAL BLOW' : 'STAGGERED!';
@@ -238,7 +238,7 @@ function finishFinisher() {
         en.x = Math.min(st.width - 150, en.x + 150);
         en.stun = 0; en.stunResist = 60; en.recoverTimer = 0; en.telegraphed = false;
         en.attackCooldown = (en.maxCooldown || 60) + 40;
-        if (en.controller === 'static_monk') { en.currentMove = 'laser'; en.attackCooldown = 110; en.bossMashCount = 0; }
+        if (en.controller === 'static_monk') { en.currentMove = 'laser'; en.attackCooldown = 110; en.bossMashCount = 0; en.volley = null; en.targetLanes = []; }
     }
     st.finisher = null;
     st.finisherZoom = 1;

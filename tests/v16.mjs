@@ -55,7 +55,7 @@ const { SequenceManager } = await import('../src/systems/sequences.js');
 eq('arc1: 5 stages (4 fights + boss)', CONSTANTS.arcLength(1), 5);
 eq('arc1: boss is stage 5', CONSTANTS.bossStageOfArc(1), 5);
 eq('arc2 starts at stage 6', CONSTANTS.firstStageOfArc(2), 6);
-eq('arc2 boss at stage 12 (7 stages)', CONSTANTS.bossStageOfArc(2), 12);
+eq('arc2 boss at stage 10 (v24: 5 stages)', CONSTANTS.bossStageOfArc(2), 10);
 {
     // Walk 80 stages: arc/level/palette/wave-table/name must agree at every stage,
     // and the boss flag must land exactly on the last stage of every arc.
@@ -72,7 +72,7 @@ eq('arc2 boss at stage 12 (7 stages)', CONSTANTS.bossStageOfArc(2), 12);
         if (!CONSTANTS.PALETTES[CONSTANTS.paletteKeyForStage(s)]) desync = `no palette for stage ${s}`;
         if (!CONSTANTS.STAGE_TAGLINES[levelKey]) desync = `no tagline for stage ${s}`;
         // difficulty scaling for Arc 2+ is exactly the old uniform layout
-        if (arc >= 2 && CONSTANTS.difficultyStage(s) !== (arc - 1) * 7 + ordinal) desync = `difficulty drift at ${s}`;
+        if (arc >= 2 && CONSTANTS.difficultyStage(s) !== (arc - 1) * 7 + levelKey) desync = `difficulty drift at ${s}`;
         if (s > 1 && CONSTANTS.locateStage(s - 1).arc !== arc && ordinal !== 1) desync = `arc boundary wrong at ${s}`;
     }
     ok('arc structure: arc/level/boss/wave/palette/name stay aligned for 80 stages', !desync, desync || '');

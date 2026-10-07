@@ -25,11 +25,27 @@ export function invertHex(hex) {
     return '#' + (0xffffff ^ n).toString(16).padStart(6, '0');
 }
 
+// v24 READ TELL (playtest: Negative "feels hard to read... the gap to hit/block
+// him is weird"). Whether it will slip your next punch used to be a hidden roll
+// on every hit. Now it's decided AHEAD of time — once its slip cooldown clears
+// it either PRIMES (glows in YOUR colour: don't swing, make it attack and punish
+// the opening) or doesn't (hit it freely). It re-decides every `rerollFrames`.
+export const NEG_READ = { rerollFrames: 70 };
+export function primeNegativeRead(en) {
+    if (en.slipCooldown > 0) { en.readPrimed = false; return; }
+    if ((en.readTimer = (en.readTimer || 0) - 1) > 0) return;
+    en.readTimer = NEG_READ.rerollFrames;
+    const m = en.arcMods || {};
+    const was = en.readPrimed;
+    en.readPrimed = random() < (m.echoChance || 0.35) * (en.phase === 2 ? 1.4 : 1);
+    if (en.readPrimed && !was) playSound('feint_tell');
+}
+
 // Returns true if Negative NEGATES this hit (the caller treats it as a whiff).
 export function negativeReact(en, buffActive) {
-    const m = en.arcMods || {};
-    if (en.slipCooldown > 0) return false;
-    if (buffActive && random() < (m.counterRead || 0.5)) {
+    if (en.slipCooldown > 0 || !en.readPrimed) return false; // v24: only ever when primed (and visibly so)
+    en.readPrimed = false; en.readTimer = NEG_READ.rerollFrames;
+    if (buffActive) {
         en.slipCooldown = 40;
         spawnFloatingText(en.x + 20, en.y - 150, 'READ YOU.', en.color);
         playSound('feint_tell');
@@ -39,17 +55,14 @@ export function negativeReact(en, buffActive) {
         en.telegraphed = false;
         return true;
     }
-    if (random() < (m.echoChance || 0.35)) {
-        en.slipCooldown = 36;
-        const oldLane = en.lane;
-        const lanes = [oldLane - 1, oldLane + 1].filter(l => l >= 0 && l <= 2);
-        en.lane = lanes[Math.floor(random() * lanes.length)];
-        if (!st.enemyEchoes) st.enemyEchoes = [];
-        st.enemyEchoes.push({ lane: oldLane, x: en.x, y: st.height * CONSTANTS.LANE_Y[oldLane], timer: ECHO_DELAY, fade: 20, fired: false, color: en.color });
-        createShatter(en.x, en.y - 60, en.color);
-        spawnFloatingText(en.x + 20, en.y - 150, 'AFTERIMAGE', en.color);
-        playSound('ghost_step');
-        return true;
-    }
-    return false;
+    en.slipCooldown = 36;
+    const oldLane = en.lane;
+    const lanes = [oldLane - 1, oldLane + 1].filter(l => l >= 0 && l <= 2);
+    en.lane = lanes[Math.floor(random() * lanes.length)];
+    if (!st.enemyEchoes) st.enemyEchoes = [];
+    st.enemyEchoes.push({ lane: oldLane, x: en.x, y: st.height * CONSTANTS.LANE_Y[oldLane], timer: ECHO_DELAY, fade: 20, fired: false, color: en.color });
+    createShatter(en.x, en.y - 60, en.color);
+    spawnFloatingText(en.x + 20, en.y - 150, 'AFTERIMAGE', en.color);
+    playSound('ghost_step');
+    return true;
 }

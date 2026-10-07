@@ -50,7 +50,7 @@ function ghostStep() {
     st.player.ghostStepTimer = 18;
     st.player.ghostPerfected = false;
     st.player.charging = false;
-    if (st.player.ghostStepCharges <= 0) st.player.ghostStepCooldown = Math.max(10, Math.floor(60 * st.progressionMods.ghostStepCooldownMult));
+    if (st.player.ghostStepCharges <= 0) st.player.ghostStepCooldown = Math.max(10, Math.floor(CONSTANTS.GHOST_STEP_COOLDOWN * st.progressionMods.ghostStepCooldownMult));
     // v16: Ghost Step never touches the combo — only the jab STRING restarts.
     resetJabString(); playSound('ghost_step');
     for(let i=0; i<8; i++) { st.particles.push({ x: st.player.x + Math.random() * 30, y: st.player.y - 30 - Math.random() * 60, vx: -10 - Math.random() * 15, vy: 0, life: 0.6, color: '#666666', type: 'dash_line' }); }
@@ -441,7 +441,7 @@ export function updatePlayer() {
         if (p.ghostStepCooldown <= 0) {
             const maxGhostCharges = st.progressionMods.blurStep ? 2 : 1;
             p.ghostStepCharges = Math.min(maxGhostCharges, (p.ghostStepCharges || 0) + 1);
-            if (p.ghostStepCharges < maxGhostCharges) p.ghostStepCooldown = Math.max(10, Math.floor(60 * st.progressionMods.ghostStepCooldownMult));
+            if (p.ghostStepCharges < maxGhostCharges) p.ghostStepCooldown = Math.max(10, Math.floor(CONSTANTS.GHOST_STEP_COOLDOWN * st.progressionMods.ghostStepCooldownMult));
         }
     }
     if (p.guardReadTimer > 0) p.guardReadTimer--;

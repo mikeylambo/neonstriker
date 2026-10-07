@@ -9,10 +9,14 @@ export const CONSTANTS = {
     // boss; Arcs 2+ keep the full seven. Every system resolves stage -> {arc, level}
     // through locateStage(), so no caller does its own `% 7` math — that's exactly
     // how the old wave/palette counters drifted out of phase with the arc cycle.
+    // v24 (playtest: "lost to Negative at 32:34 — the game needs better pacing"):
+    // every Arc is now four fights + a boss. Arcs 2-5 keep their opener, the
+    // assassin skirmish, the midnight brawl and the pre-boss climax; the two
+    // longest middle rounds (3: Ashfall, 5: Abyss Rail) are cut. 25 stages, not 33.
     ARC_LEVEL_KEYS: {
         1: [1, 2, 3, 6, 7]
     },
-    DEFAULT_ARC_LEVEL_KEYS: [1, 2, 3, 4, 5, 6, 7],
+    DEFAULT_ARC_LEVEL_KEYS: [1, 2, 4, 6, 7],
     BOSS_LEVEL_KEY: 7,
 
     arcLevelKeys: (arc) => CONSTANTS.ARC_LEVEL_KEYS[arc] || CONSTANTS.DEFAULT_ARC_LEVEL_KEYS,
@@ -262,7 +266,7 @@ export const CONSTANTS = {
         { name: 'IRON WALL', desc: 'Every Grunt arrives in Gold Armor — only a Cross gets through.', scoreMult: 1.4, mods: { gruntSub: 'shield', gruntSubEvery: 1 } },
         { name: 'HEAVY HANDS', desc: 'Bruisers hit 60% harder and press in numbers. Keep your footwork.', scoreMult: 1.6, mods: { bruiserDamageMult: 1.6, gruntSub: 'bruiser', gruntSubEvery: 3 } },
         { name: 'ADRENALINE', desc: 'Every Perfect Slip mends a sliver of health.', mods: { perfectSlipHeal: 4 } },
-        { name: 'GLASS PROTOCOL', desc: 'You deal 15% more — and take 60% more. No margin for a miss.', scoreMult: 2.0, mods: { playerDamageDealtMult: 1.15, playerDamageTakenMult: 1.6 } }
+        { name: 'GLASS PROTOCOL', desc: 'Deal 30% more. Take 30% more.', scoreMult: 1.75, mods: { playerDamageDealtMult: 1.3, playerDamageTakenMult: 1.3 } }
     ],
     wagerPool: () => CONSTANTS.AFFIXES.filter(a => a.scoreMult && a.scoreMult > 1),
     WAGERS: {
@@ -383,6 +387,8 @@ export const CONSTANTS = {
     // re-slip cooldown (12 -> 9) is the only balance-relevant part: it's how fast
     // you can chain top->bottom. Kept above ~6 so up/down can't be jittered.
     SLIP_MOVE: { glide: 0.42, cooldown: 9 },
+    // v24: Ghost Step recovers in 0.6s (was 1s). Weaver's Step trims it further.
+    GHOST_STEP_COOLDOWN: 36,
     // v21 ENEMY KNOCKDOWNS + IMPACT DAMAGE. A blow whose knockback impulse (after
     // weight, Power, counter and Instinct multipliers) reaches `threshold` floors
     // a non-boss enemy: slam damage, can't act for `frames`, follow-ups deal

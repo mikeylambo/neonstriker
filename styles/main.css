@@ -708,3 +708,6 @@ body.cine-zone.cine-zone-soft #gameCanvas { filter: grayscale(.7) contrast(1.2);
 
 /* v23 practice build picker */
 .practice-build { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; grid-column: 1 / -1; width: 100%; margin: 6px 0; }
+
+/* v24 tutorial toggle as a menu button */
+.orb-btn.tut-toggle { display: inline-flex; align-items: center; gap: 10px; padding: 6px 18px; margin: 4px 0 12px; letter-spacing: 2px; font-size: .8rem; }

@@ -242,7 +242,7 @@ export function advanceStage() {
     // telegraph untouched). Signature of Arc 3; never on a boss stage. Seeded -> a
     // Daily plays the same hot lane for everyone, free-play varies run to run.
     // Clear any lane hazards from the previous stage; give a grace window before new ones.
-    st.hazards = []; st.canisters = [];
+    st.hazards = []; st.canisters = []; st.slamWaves = []; st.phantomClones = [];
     st.hazardCooldown = CONSTANTS.HAZARDS.cooldownFrames;
     st.hazardsThisStage = 0;
     // SURPRISE BUDGET: one shared per-stage pool for every acute surprise system.

@@ -41,6 +41,14 @@ export function drawScorePops(ctx) {
 // ---------- boss windup meter + OPEN tag (world space, per boss) ----------
 export function drawBossTells(ctx, en) {
     if (!en.isBoss || st.bossIntroTimer > 0) return;
+    // v24 NEGATIVE READ TELL: primed to slip your next punch -> it glows in YOUR colour.
+    if (en.controller === 'negative' && en.readPrimed && !isBossOpen(en)) {
+        const c = st.strikerColor || '#00ffff', pulse = 0.55 + 0.45 * Math.sin(Date.now() * 0.018);
+        ctx.save(); ctx.globalAlpha = pulse; ctx.strokeStyle = c; ctx.shadowColor = c; ctx.shadowBlur = 22; ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.ellipse(en.x + en.w / 2, en.y - en.h * 0.6, en.w * 0.95, en.h * 0.75, 0, 0, Math.PI * 2); ctx.stroke();
+        ctx.shadowBlur = 0; ctx.fillStyle = c; ctx.font = '900 13px Orbitron'; ctx.textAlign = 'center';
+        ctx.fillText('READING YOU', en.x + en.w / 2, en.y - en.h * 1.45); ctx.restore();
+    }
     // Anchored at chest height on the side facing the player — readable in every
     // lane (above the head clipped off-screen in the top lane and fought the HP bar).
     const cx = en.x - 34, top = en.y - en.h * 0.95;
@@ -64,7 +72,7 @@ export function drawBossTells(ctx, en) {
         ctx.shadowBlur = 0;
         ctx.fillStyle = 'rgba(34, 211, 238, 0.25)'; ctx.fillRect(cx - 40, top + 16, 80, 4);
         ctx.fillStyle = '#22d3ee'; ctx.fillRect(cx - 40, top + 16, 80 * Math.max(0, Math.min(1, left)), 4);
-    } else if (en.telegraphed && en.stun <= 0 && en.attackCooldown > 0) {
+    } else if (en.telegraphed && en.stun <= 0 && en.attackCooldown > 0 && !en.volley) {
         const move = en.controller === 'static_monk' ? 'laser' : (en.currentMove || 'jab');
         const style = MOVE_STYLE[move] || MOVE_STYLE.jab;
         const lead = Math.max(1, en.telegraphAt || 30);
@@ -467,17 +475,24 @@ export function drawKnockdownUI(ctx) {
 export function drawCanisters(ctx) {
     const cs = st.canisters;
     if (!cs || !cs.length) return;
-    const monk = st.enemies.find(e => e.controller === 'static_monk');
-    const k = monk && monk.canisterFrom ? Math.max(0, monk.attackCooldown) / monk.canisterFrom : 1;
     ctx.save();
     for (const c of cs) {
+        const k = c.fuse ? Math.max(0, (c.fuse - c.t) / c.fuse) : 1; // 1 -> 0 as it closes
         const ly = st.height * CONSTANTS.LANE_Y[c.lane], cy = ly - 12;
-        // the path still to roll, fading out ahead of it
+        if (c.kind === 'beam') {
+            // v24 BEAM: the old straight laser — a charging line down your lane
+            const a = 1 - k;
+            ctx.strokeStyle = `rgba(0,255,0,${(0.25 + a * 0.75).toFixed(3)})`; ctx.lineWidth = 2 + a * 8;
+            ctx.setLineDash([15, 10]); ctx.lineDashOffset = -Date.now() * 0.05;
+            ctx.beginPath(); ctx.moveTo(c.x0, ly - 60); ctx.lineTo(st.player.x, ly - 60); ctx.stroke(); ctx.setLineDash([]);
+            ctx.strokeStyle = '#00ff00'; ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.arc(st.player.x, ly - 60, 20 - a * 15, 0, Math.PI * 2); ctx.stroke();
+            continue;
+        }
         const g = ctx.createLinearGradient(st.player.x, 0, c.x, 0);
         g.addColorStop(0, 'rgba(0,255,0,0.6)'); g.addColorStop(1, 'rgba(0,255,0,0.02)');
         ctx.strokeStyle = g; ctx.lineWidth = 3; ctx.setLineDash([10, 8]);
         ctx.beginPath(); ctx.moveTo(c.x, ly - 2); ctx.lineTo(st.player.x + 20, ly - 2); ctx.stroke(); ctx.setLineDash([]);
-        // the canister: a rolling drum with a light that blinks faster as it closes
         ctx.save(); ctx.translate(c.x, cy); ctx.rotate(-c.spin);
         ctx.fillStyle = '#0b1f0b'; ctx.strokeStyle = '#00ff00'; ctx.lineWidth = 3; ctx.shadowColor = '#00ff00'; ctx.shadowBlur = 12;
         ctx.beginPath(); ctx.arc(0, 0, 15, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
@@ -488,6 +503,36 @@ export function drawCanisters(ctx) {
         ctx.beginPath(); ctx.arc(c.x, cy - 22, 4, 0, Math.PI * 2); ctx.fill();
     }
     ctx.restore();
+}
+
+// ---------- v24 ENFORCER SHOCKWAVES (world space) ----------
+export function drawShockwaves(ctx) {
+    const ws = st.slamWaves;
+    if (!ws || !ws.length) return;
+    ctx.save();
+    for (const w of ws) {
+        const ly = st.height * CONSTANTS.LANE_Y[w.lane];
+        if (w.delay > 0) { // charging: a glow at the Enforcer's feet
+            ctx.globalAlpha = 0.5; ctx.fillStyle = w.color;
+            ctx.beginPath(); ctx.ellipse(w.x + 20, ly, 30, 6, 0, 0, Math.PI * 2); ctx.fill(); continue;
+        }
+        ctx.globalAlpha = 1; ctx.strokeStyle = w.color; ctx.shadowColor = w.color; ctx.shadowBlur = 16;
+        for (let i = 0; i < 3; i++) { // a rolling crest with two trailing ripples
+            ctx.lineWidth = 6 - i * 2; ctx.globalAlpha = 1 - i * 0.3;
+            ctx.beginPath(); ctx.ellipse(w.x + i * 26, ly - 4, 14 + i * 4, 26 - i * 6, 0, Math.PI * 0.5, Math.PI * 1.5); ctx.stroke();
+        }
+        ctx.shadowBlur = 0;
+    }
+    ctx.restore();
+}
+
+// ---------- v24 PHANTOM CLONES (world space): no shadow — that's the tell ----------
+export function drawPhantomClones(ctx) {
+    const cs = st.phantomClones;
+    if (!cs || !cs.length) return;
+    const ph = st.enemies.find(e => e.controller === 'phantom_boxer');
+    if (!ph) return;
+    for (const c of cs) drawBoxer(ctx, { ...ph, lane: c.lane, y: st.height * CONSTANTS.LANE_Y[c.lane], trails: [] }, false, 0.85, true);
 }
 
 // ---------- v22 BOSS K.O. BANNER (screen space, while the champion is down) ----------
