@@ -2,6 +2,7 @@ import { gameState as st } from '../state.js';
 import { ctx } from '../engine_core.js';
 import { CONSTANTS } from '../constants.js';
 import { drawCathedral, drawCathedralForeground } from './cathedral.js';
+import { drawDistortionPremium, drawCompressionPremium, drawMiragePremium, drawDominionPremium, drawPremiumForeground } from './arcs_premium.js';
 
 // ==========================================
 // v25 ARC IDENTITY (roadmap: "a distinct look per Arc — I have entered a
@@ -122,6 +123,7 @@ function foundation(acc, pal) {
 
 // ================= ARC 2 · DISTORTION — the cathedral, glitching =================
 function distortion(acc, pal) {
+    if (drawDistortionPremium(sceneBoss)) return; // v25.2 premium scene (falls back below if canvases are unavailable)
     const W = st.width, H = st.height, t = Date.now() * 0.001;
     const burst = (Math.sin(t * 1.7) > 0.93) || (Math.sin(t * 0.63 + 1) > 0.97); // short glitch bursts
     // rose window, RGB-split
@@ -156,6 +158,7 @@ function distortion(acc, pal) {
 
 // ================= ARC 3 · COMPRESSION — the nave closes in =================
 function compression(acc, pal) {
+    if (drawCompressionPremium(sceneBoss)) return; // v25.2 premium scene (falls back below if canvases are unavailable)
     const W = st.width, H = st.height, t = Date.now() * 0.001, hy = H * HORIZON;
     // converging ribs: a tunnel narrowing toward the centre
     ctx.strokeStyle = rgba(acc, 0.11); ctx.lineWidth = 2;
@@ -188,6 +191,7 @@ function compression(acc, pal) {
 
 // ================= ARC 4 · MIRAGE — a mirrored horizon =================
 function mirage(acc, pal) {
+    if (drawMiragePremium(sceneBoss)) return; // v25.2 premium scene (falls back below if canvases are unavailable)
     const W = st.width, H = st.height, t = Date.now() * 0.001, hy = H * HORIZON;
     // distant pillars with heat shimmer, and their reflection in the glossy floor
     (st.cathedralPillars || []).forEach((p, pi) => {
@@ -222,6 +226,7 @@ function mirage(acc, pal) {
 
 // ================= ARC 5 · DOMINION — the throne room =================
 function dominion(acc, pal) {
+    if (drawDominionPremium(sceneBoss)) return; // v25.2 premium scene (falls back below if canvases are unavailable)
     const W = st.width, H = st.height, t = Date.now() * 0.001, hy = H * HORIZON;
     // monoliths (every other pillar) with gold edge-light that fades out above the lanes
     (st.cathedralPillars || []).forEach((p, i) => {
@@ -259,5 +264,6 @@ function dominion(acc, pal) {
 
 // v25.1: an Arc's foreground framing layer, drawn over the fighters by draw.js.
 export function drawArcForeground() {
-    if (arcOf(st.currentStage) === 1) drawCathedralForeground();
+    const arc = arcOf(st.currentStage);
+    if (arc === 1) drawCathedralForeground(); else drawPremiumForeground(arc);
 }

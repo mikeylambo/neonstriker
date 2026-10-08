@@ -19,15 +19,15 @@ import { ctx } from '../engine_core.js';
 // Uses its OWN tiny RNG — never the game's seeded stream.
 // ==========================================
 
-const HORIZON = 0.29;
-const GLASS = [[0, 229, 255], [255, 43, 214], [138, 92, 255], [255, 176, 32], [40, 120, 255], [0, 255, 170]];
-const LEAD = '#05040a';
+export const HORIZON = 0.29;
+export const GLASS = [[0, 229, 255], [255, 43, 214], [138, 92, 255], [255, 176, 32], [40, 120, 255], [0, 255, 170]];
+export const LEAD = '#05040a';
 
-function mulberry(seed) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
-const rgb = (c, a = 1) => `rgba(${c[0] | 0}, ${c[1] | 0}, ${c[2] | 0}, ${a})`;
-const shade = (c, k) => c.map(v => Math.max(0, Math.min(255, v * k)));
+export function mulberry(seed) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+export const rgb = (c, a = 1) => `rgba(${c[0] | 0}, ${c[1] | 0}, ${c[2] | 0}, ${a})`;
+export const shade = (c, k) => c.map(v => Math.max(0, Math.min(255, v * k)));
 
-function makeCanvas(w, h) {
+export function makeCanvas(w, h) {
     if (typeof document === 'undefined' || !document.createElement) return null;
     const c = document.createElement('canvas');
     if (!c || typeof c.getContext !== 'function') return null;
@@ -37,7 +37,7 @@ function makeCanvas(w, h) {
 }
 
 // One pane of glass: a gradient fill (bright core, dark edge) + a lead line.
-function pane(x, path, col, rand, leadW) {
+export function pane(x, path, col, rand, leadW) {
     const k = 0.75 + rand() * 0.5, base = shade(col, k);
     x.save(); path(); x.clip();
     const b = x.__bounds || [0, 0, 100, 100];
@@ -52,19 +52,20 @@ function pane(x, path, col, rand, leadW) {
 }
 
 // ---------- ROSE WINDOW: rings of sectors, petal tracery, medallion ----------
-function buildRose(R) {
+export function buildRose(R, opt = {}) {
+    const PAL = opt.palette || GLASS, MED = opt.medallion || [255, 230, 160], RIM = opt.rim || 'rgba(0,229,255,0.35)', LW = opt.lead || 4;
     const pad = 60, S = R * 2 + pad * 2, cv = makeCanvas(S, S);
     if (!cv) return null;
-    const { x } = cv, cx = S / 2, cy = S / 2, rand = mulberry(7);
+    const { x } = cv, cx = S / 2, cy = S / 2, rand = mulberry(opt.seed || 7);
     x.translate(cx, cy);
     const rings = [[R * 0.22, R * 0.45, 8], [R * 0.45, R * 0.72, 16], [R * 0.72, R * 0.94, 24]];
     rings.forEach(([r0, r1, n], ri) => {
         for (let i = 0; i < n; i++) {
             const a0 = (i / n) * Math.PI * 2 + ri * 0.13, a1 = ((i + 1) / n) * Math.PI * 2 + ri * 0.13;
-            const col = GLASS[(i + ri * 2) % (ri === 1 ? 3 : GLASS.length)];
+            const col = PAL[(i + ri * 2) % (ri === 1 ? Math.min(3, PAL.length) : PAL.length)];
             const path = () => { x.beginPath(); x.arc(0, 0, r1, a0, a1); x.arc(0, 0, r0, a1, a0, true); x.closePath(); };
             x.__bounds = [-r1, -r1, r1 * 2, r1 * 2];
-            pane(x, path, col, rand, 4);
+            pane(x, path, col, rand, LW);
         }
     });
     // petal tracery over ring 2
@@ -73,25 +74,25 @@ function buildRose(R) {
         x.save(); x.rotate(a);
         const path = () => { x.beginPath(); x.moveTo(0, -R * 0.24); x.quadraticCurveTo(R * 0.2, -R * 0.55, 0, -R * 0.86); x.quadraticCurveTo(-R * 0.2, -R * 0.55, 0, -R * 0.24); x.closePath(); };
         x.__bounds = [-R * 0.2, -R * 0.86, R * 0.4, R * 0.62];
-        pane(x, path, GLASS[i % 2 ? 1 : 0], rand, 6);
+        pane(x, path, PAL[i % 2 ? 1 : 0], rand, LW + 2);
         x.restore();
     }
     // medallion
     x.__bounds = [-R * 0.22, -R * 0.22, R * 0.44, R * 0.44];
-    pane(x, () => { x.beginPath(); x.arc(0, 0, R * 0.22, 0, Math.PI * 2); }, [255, 230, 160], rand, 6);
+    pane(x, () => { x.beginPath(); x.arc(0, 0, R * 0.22, 0, Math.PI * 2); }, MED, rand, LW + 2);
     x.beginPath(); x.arc(0, 0, R * 0.08, 0, Math.PI * 2); x.fillStyle = '#fff6d8'; x.fill();
     // stone frame: heavy outer rings
     x.lineWidth = 14; x.strokeStyle = '#0b0a12'; x.beginPath(); x.arc(0, 0, R * 0.97, 0, Math.PI * 2); x.stroke();
-    x.lineWidth = 4; x.strokeStyle = 'rgba(0,229,255,0.35)'; x.beginPath(); x.arc(0, 0, R + 4, 0, Math.PI * 2); x.stroke();
+    x.lineWidth = 4; x.strokeStyle = RIM; x.beginPath(); x.arc(0, 0, R + 4, 0, Math.PI * 2); x.stroke();
     return withGlow(cv, 26);
 }
 
 // ---------- LANCET: a tall pointed arch of jittered panes + an oculus ----------
-function archPath(x, w, h) {
+export function archPath(x, w, h) {
     x.beginPath(); x.moveTo(0, h); x.lineTo(0, w * 0.6);
     x.quadraticCurveTo(0, 0, w / 2, 0); x.quadraticCurveTo(w, 0, w, w * 0.6); x.lineTo(w, h); x.closePath();
 }
-function buildLancet(w, h, seed, hue) {
+export function buildLancet(w, h, seed, hue, palette = GLASS, oculus = [255, 214, 120]) {
     const pad = 40, cv = makeCanvas(w + pad * 2, h + pad * 2);
     if (!cv) return null;
     const { x } = cv, rand = mulberry(seed);
@@ -105,19 +106,19 @@ function buildLancet(w, h, seed, hue) {
         const path = () => { x.beginPath(); x.moveTo(...q[0]); q.slice(1).forEach(p => x.lineTo(...p)); x.closePath(); };
         x.__bounds = [Math.min(...q.map(p => p[0])), Math.min(...q.map(p => p[1])), w / cols * 1.4, h / rows * 1.4];
         const pick = rand();
-        pane(x, path, pick < 0.55 ? hue : GLASS[Math.floor(rand() * GLASS.length)], rand, 3.5);
+        pane(x, path, pick < 0.55 ? hue : palette[Math.floor(rand() * palette.length)], rand, 3.5);
     }
     // oculus near the top
     const oy = w * 0.55, orr = w * 0.26;
     x.__bounds = [w / 2 - orr, oy - orr, orr * 2, orr * 2];
-    pane(x, () => { x.beginPath(); x.arc(w / 2, oy, orr, 0, Math.PI * 2); }, [255, 214, 120], rand, 5);
+    pane(x, () => { x.beginPath(); x.arc(w / 2, oy, orr, 0, Math.PI * 2); }, oculus, rand, 5);
     x.restore();
     x.lineWidth = 9; x.strokeStyle = '#0b0a12'; archPath(x, w, h); x.stroke();
     return withGlow(cv, 18);
 }
 
 // Bake a soft halo behind the glass (blurred copy, additive) — fallback: none.
-function withGlow(cv, r) {
+export function withGlow(cv, r) {
     const out = makeCanvas(cv.c.width, cv.c.height);
     if (!out) return cv.c;
     const { x } = out;
@@ -127,11 +128,11 @@ function withGlow(cv, r) {
 }
 
 // ---------- far arcade: repeating blurred arches (one tile) ----------
-function buildArcade(W, H) {
+export function buildArcade(W, H, color = '#16233a') {
     const cv = makeCanvas(W, H);
     if (!cv) return null;
     const { x } = cv, hy = H * HORIZON;
-    x.fillStyle = '#16233a';
+    x.fillStyle = color;
     for (let i = 0; i < 6; i++) {
         const ax = i * (W / 6), aw = W / 6 - 26;
         x.beginPath(); x.rect(ax, 0, W / 6, hy + 40); x.fill();
@@ -173,7 +174,7 @@ function buildForeground(W, H) {
 }
 
 // Soft light beam (pre-blurred trapezoid), one sprite per colour.
-function buildBeam(col, topW, botW, h) {
+export function buildBeam(col, topW, botW, h) {
     const pad = 40, w = botW + pad * 2, cv = makeCanvas(w, h + pad);
     if (!cv) return null;
     const { x } = cv, cx = w / 2;
