@@ -1,6 +1,7 @@
 import { gameState as st } from '../state.js';
 import { ctx } from '../engine_core.js';
 import { CONSTANTS } from '../constants.js';
+import { drawCathedral, drawCathedralForeground } from './cathedral.js';
 
 // ==========================================
 // v25 ARC IDENTITY (roadmap: "a distinct look per Arc — I have entered a
@@ -46,8 +47,10 @@ export function updateArcLooks() {
 export function arcOf(stage) { return Math.min(CONSTANTS.getArcIndex(stage), 5); }
 
 // ---------- entry: draw the scene for `arc` at opacity `a` ----------
+let sceneBoss = false;
 export function drawArcScene(arc, a, pal, boss) {
     if (a <= 0.01) return;
+    sceneBoss = !!boss;
     ctx.save(); ctx.globalAlpha = a;
     const acc = hexRgb(ARC_ACCENT[arc]);
     ({ 1: foundation, 2: distortion, 3: compression, 4: mirage, 5: dominion })[arc](acc, pal);
@@ -94,6 +97,7 @@ const scrollX = () => (st.scrollX || 0);
 
 // ================= ARC 1 · FOUNDATION — the shattered cathedral =================
 function foundation(acc, pal) {
+    if (drawCathedral(acc, pal, sceneBoss)) return; // v25.1 stained-glass cathedral (falls back below if canvases are unavailable)
     const W = st.width, H = st.height, shard = rgba(pal.shard, pal.shard[3]);
     (st.lightShafts || []).forEach(L => {
         const g = ctx.createLinearGradient(L.x, 0, L.x + 200, H); g.addColorStop(0, rgba(pal.accent, pal.accent[3] * 2)); g.addColorStop(1, 'transparent');
@@ -251,4 +255,9 @@ function dominion(acc, pal) {
     }
     ctx.stroke();
     ctx.fillStyle = rgba(acc, 0.3); ctx.fillRect(0, hy, W, 1);
+}
+
+// v25.1: an Arc's foreground framing layer, drawn over the fighters by draw.js.
+export function drawArcForeground() {
+    if (arcOf(st.currentStage) === 1) drawCathedralForeground();
 }

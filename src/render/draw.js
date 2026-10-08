@@ -2,6 +2,7 @@ import { gameState as st } from '../state.js';
 import { CONSTANTS } from '../constants.js';
 import { ctx } from '../engine_core.js';
 import { drawAtmosphere, drawLightSweep } from './atmosphere.js';
+import { drawArcForeground } from './arc_looks.js';
 import { drawBoxer } from './boxer.js';
 import { SequenceManager } from '../systems/sequences.js';
 import { shakeScale, getSettings } from '../systems/settings.js';
@@ -284,6 +285,8 @@ export function draw() {
         const inv = (st.player.invuln || 0) > 0 && Math.floor(Date.now() / 80) % 2 === 0;
         drawBoxer(ctx, st.player, true, inv ? 0.45 : 1);
     }
+
+    drawArcForeground(); // v25.1 framing layer (top edge / below the bottom lane only)
 
     st.floatingTexts.forEach(ft => {
         ctx.globalAlpha = Math.max(0, ft.life);
